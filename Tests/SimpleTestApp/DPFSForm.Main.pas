@@ -4,7 +4,7 @@ interface
 
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
-  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls;
+  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, DPFSUnit.Parallel.FileScanner;
 
 type
   TDPFSMainForm = class(TForm)
@@ -14,9 +14,8 @@ type
     procedure ButtonParallelScanClick(Sender: TObject);
     procedure ButtonParallelScanSpringClick(Sender: TObject);
   private
-    { Private declarations }
+    function GetExcludes: TFileScanExcludes;
   public
-    { Public declarations }
   end;
 
 var
@@ -25,7 +24,7 @@ var
 implementation
 
 uses
-  DPFSUnit.Parallel.FileScanner, DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections;
+  DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections;
 
 {$R *.dfm}
 
@@ -40,7 +39,8 @@ begin
   LFilesList := TStringList.Create;
   LParallelScanner := TParallelFileScanner.Create(['*.pas', '*.inc', '*.dfm']);
   try
-    // LExludes.
+    LExludes := GetExcludes;
+
     if LParallelScanner.GetFileList(['..\..\..\..\Source\', '..\..\..\..\Tests\'], LExludes, LFilesList) then
     begin
       MemoLog.Lines.AddStrings(LFilesList);
@@ -69,7 +69,8 @@ begin
   LFilesList := TCollections.CreateList<string>;
   LParallelScanner := TParallelFileScannerSpring.Create(['*.pas', '*.inc', '*.dfm']);
   try
-    // LExludes.
+    LExludes := GetExcludes;
+
     if LParallelScanner.GetFileList(['..\..\..\..\Source\', '..\..\..\..\Tests\'], LExludes, LFilesList) then
     begin
       MemoLog.Lines.AddStrings(LFilesList.ToArray);
@@ -83,6 +84,16 @@ begin
     MemoLog.Lines.Add('  Elapsed time: ' + LParallelScanner.DiskScanTimeForFiles.ToString + ' ms.');
   finally
     LParallelScanner.Free;
+  end;
+end;
+
+function TDPFSMainForm.GetExcludes: TFileScanExcludes;
+begin
+  Result.BeginUpdate;
+  try
+    Result.PathPrefixes := ['..\..\..\..\Source\3rdPartyLibraries\OmniThreadLibrary\'];
+  finally
+    Result.EndUpdate;
   end;
 end;
 

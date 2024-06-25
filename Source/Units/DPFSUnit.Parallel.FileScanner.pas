@@ -8,20 +8,26 @@ interface
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
 
 uses
-  System.Classes, System.IOUtils, System.SyncObjs, System.SysUtils, System.Generics.Collections;
+  System.Classes, System.IOUtils, System.Math, System.SyncObjs, System.SysUtils, System.Generics.Collections;
 
 type
   TDirectoryWalkProc = reference to function (const APath: string; const AFileInfo: TSearchRec): Boolean;
 
   TFileScanExcludes = record
   strict private
+    FUpdateCount: Integer;
     FPathPrefixes: TArray<string>;
     FPathSuffixes: TArray<string>;
+    FUpperPathPrefixes: TArray<string>;
+    FUpperPathSuffixes: TArray<string>;
     function GetPathPrefixesString: string;
     function GetPathSuffixesString: string;
     function GetUpperPathPrefixes: TArray<string>;
     function GetUpperPathSuffixes: TArray<string>;
+    procedure CacheUpperPrefixes;
   public
+    procedure BeginUpdate;
+    procedure EndUpdate;
     property PathPrefixes: TArray<string> read FPathPrefixes write FPathPrefixes;
     property PathPrefixesString: string read GetPathPrefixesString;
     property PathSuffixes: TArray<string> read FPathSuffixes write FPathSuffixes;
@@ -41,9 +47,11 @@ type
     FExtensions: TStringList;
     FLock: TCriticalSection;
     FSkippedFilesCount: Integer;
+    FExclusions: TFileScanExcludes;
     procedure InternalCheckDirPathParam(const APath: string; const AExistsCheck: Boolean);
     procedure CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: TStringList); virtual;
+    function  ExludedPathByPrefix(const APath: string): Boolean;
     procedure WalkThroughDirectory(const APath, APattern: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
     procedure FilterFileNames(const AFileNames: TStringList; const AExcludes: TFileScanExcludes; const AFilteredList: TObjectList<TStringList>); virtual;
     procedure MergeResultLists(const AResultList: TObjectList<TStringList>; const AResult: TStringList); virtual;
@@ -106,6 +114,23 @@ begin
   FLock.Free;
 
   inherited Destroy;;
+end;
+
+function TParallelFileScannerCustom.ExludedPathByPrefix(const APath: string): Boolean;
+var
+  LPath: string;
+begin
+  Result := False;
+
+  LPath := ExcludeTrailingPathDelimiter(APath.ToUpper);
+
+  for var LIndex := Low(FExclusions.UpperPathPrefixes) to High(FExclusions.UpperPathPrefixes) do
+  begin
+    var LUpperPrefix := FExclusions.UpperPathPrefixes[LIndex];
+
+    if LPath.StartsWith(LUpperPrefix) then
+      Exit(True);
+  end;
 end;
 
 procedure TParallelFileScannerCustom.FilterFileNames(const AFileNames: TStringList; const AExcludes: TFileScanExcludes;
@@ -174,6 +199,7 @@ var
   LFileScanStopWatch: TStopwatch;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
+  FExclusions := AExcludes;
 
   FSkippedFilesCount := 0;
 
@@ -315,7 +341,14 @@ begin
         // go recursive in subdirectories
         if ARecursive and (LSearchRec.Attr and System.SysUtils.faDirectory <> 0)
           and (LSearchRec.Name <> CURRENT_DIR) and (LSearchRec.Name <> PARENT_DIR) then
-          WalkThroughDirectory(TPath.Combine(APath, LSearchRec.Name, False), APattern, APreCallback, ARecursive);
+        begin
+          var LNewPath := TPath.Combine(APath, LSearchRec.Name, False);
+
+          if not ExludedPathByPrefix(LNewPath) then
+            WalkThroughDirectory(LNewPath, APattern, APreCallback, ARecursive)
+          else
+            Inc(FSkippedFilesCount); // TODO: These paths should be added to list, and count those files if SkippedFilesCount is queried
+        end;
       end;
     until LStop or (FindNext(LSearchRec) <> 0);
   finally
@@ -330,6 +363,31 @@ end;
 
 { TFileScanExcludes }
 
+procedure TFileScanExcludes.BeginUpdate;
+begin
+  Inc(FUpdateCount);
+end;
+
+procedure TFileScanExcludes.CacheUpperPrefixes;
+begin
+  SetLength(FUpperPathPrefixes, Length(FPathPrefixes));
+  for var LIndex := Low(FPathPrefixes) to High(FPathPrefixes) do
+    FUpperPathPrefixes[LIndex] := ExcludeTrailingPathDelimiter(FPathPrefixes[LIndex].ToUpper);
+
+
+  SetLength(FUpperPathSuffixes, Length(FPathSuffixes));
+  for var LIndex := Low(FPathSuffixes) to High(FPathSuffixes) do
+    FUpperPathSuffixes[LIndex] := ExcludeTrailingPathDelimiter(FPathSuffixes[LIndex].ToUpper);
+end;
+
+procedure TFileScanExcludes.EndUpdate;
+begin
+  FUpdateCount := Max(0, FUpdateCount - 1);
+
+  if FUpdateCount = 0 then
+    CacheUpperPrefixes;
+end;
+
 function TFileScanExcludes.GetPathPrefixesString: string;
 begin
   Result := Result.Join(';', FPathPrefixes);
@@ -341,29 +399,13 @@ begin
 end;
 
 function TFileScanExcludes.GetUpperPathPrefixes: TArray<string>;
-var
-  LLength: Integer;
-  LIndex: Integer;
 begin
-  LLength := Length(FPathPrefixes);
-
-  SetLength(Result, LLength);
-
-  for LIndex := 0 to LLength - 1 do
-    Result[LIndex] := FPathPrefixes[LIndex].ToUpper;
+  Result := FUpperPathPrefixes;
 end;
 
 function TFileScanExcludes.GetUpperPathSuffixes: TArray<string>;
-var
-  LLength: Integer;
-  LIndex: Integer;
 begin
-  LLength := Length(FPathSuffixes);
-
-  SetLength(Result, LLength);
-
-  for LIndex := 0 to LLength - 1 do
-    Result[LIndex] := FPathSuffixes[LIndex].ToUpper;
+  Result := FUpperPathSuffixes;
 end;
 
 
