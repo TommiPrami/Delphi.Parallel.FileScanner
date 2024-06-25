@@ -51,9 +51,9 @@ type
     procedure InternalCheckDirPathParam(const APath: string; const AExistsCheck: Boolean);
     procedure CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: TStringList); virtual;
-    function  ExludedPathByPrefix(const APath: string): Boolean;
+    function ExcludedPathByPrefix(const APath: string): Boolean;
+    function ExcludedFilenameByuSuffix(const AFileName: string): Boolean;
     procedure WalkThroughDirectory(const APath, APattern: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
-    procedure FilterFileNames(const AFileNames: TStringList; const AExcludes: TFileScanExcludes; const AFilteredList: TObjectList<TStringList>); virtual;
     procedure MergeResultLists(const AResultList: TObjectList<TStringList>; const AResult: TStringList); virtual;
   public
     constructor Create(const AExtensions: TStringList); overload;
@@ -116,7 +116,7 @@ begin
   inherited Destroy;;
 end;
 
-function TParallelFileScannerCustom.ExludedPathByPrefix(const APath: string): Boolean;
+function TParallelFileScannerCustom.ExcludedPathByPrefix(const APath: string): Boolean;
 var
   LPath: string;
 begin
@@ -133,61 +133,21 @@ begin
   end;
 end;
 
-procedure TParallelFileScannerCustom.FilterFileNames(const AFileNames: TStringList; const AExcludes: TFileScanExcludes;
-  const AFilteredList: TObjectList<TStringList>);
+function TParallelFileScannerCustom.ExcludedFilenameByuSuffix(const AFileName: string): Boolean;
 var
-  LIndex: Integer;
   LCurrentFilename: string;
-  LCurrentExcludedDirectory: string;
   LCurrentExcludedFilename: string;
 begin
-  if (Length(AExcludes.PathPrefixes) > 0) or (Length(AExcludes.PathSuffixes) > 0) then
+  Result := False;
+
+  LCurrentFilename := AFileName.ToUpper;
+
+  for var LIndex := Low(FExclusions.UpperPathSuffixes) to High(FExclusions.UpperPathSuffixes) do
   begin
-      for LIndex := AFileNames.Count - 1 downto 0 do
-      begin
-        LCurrentFilename := AFileNames[LIndex].ToUpper;
+    LCurrentExcludedFilename := FExclusions.UpperPathSuffixes[LIndex];
 
-        var LExluded := False;
-
-        for LCurrentExcludedDirectory in AExcludes.UpperPathPrefixes do
-        begin
-          if LCurrentExcludedDirectory = '' then
-            Continue;
-
-          if LCurrentFilename.StartsWith(LCurrentExcludedDirectory) then
-          begin
-            LExluded := True;
-            Inc(FSkippedFilesCount);
-            Break;
-          end;
-        end;
-
-        if not LExluded then
-        begin
-          for LCurrentExcludedFilename in AExcludes.UpperPathSuffixes do
-          begin
-            if LCurrentExcludedFilename = '' then
-              Continue;
-
-            if LCurrentFilename.EndsWith(LCurrentExcludedFilename) then
-            begin
-              LExluded := True;
-              Inc(FSkippedFilesCount);
-              Break;
-            end;
-          end;
-        end;
-
-        if LExluded then
-          AFileNames.Delete(LIndex);
-      end;
-  end;
-
-  FLock.Acquire;
-  try
-    AFilteredList.Add(AFileNames);
-  finally
-    FLock.Release;
+    if LCurrentFilename.EndsWith(LCurrentExcludedFilename) then
+      Exit(True)
   end;
 end;
 
@@ -232,7 +192,15 @@ begin
           // This is now about 650ms so maybe no use to optimize much
           GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
 
-          FilterFileNames(LTempFileNames, AExcludes, LListsOfFilelists);
+          if LTempFileNames.Count > 0 then
+          begin
+            FLock.Acquire;
+            try
+              LListsOfFilelists.Add(LTempFileNames);
+            finally
+              FLock.Release;
+            end;
+          end;
         end
       );
     end;
@@ -330,21 +298,27 @@ begin
     LStop := False;
 
     repeat
+      if (LSearchRec.Name = CURRENT_DIR) or (LSearchRec.Name = PARENT_DIR) then
+        Continue;
+
       LMatch := TPath.MatchesPattern(LSearchRec.Name, APattern, False);
 
       // call the pre-order callback method
-      if LMatch and Assigned(APreCallback) then
+      if LMatch and not ExcludedFilenameByuSuffix(TPath.Combine(APath, LSearchRec.Name, False)) then
+      begin
+        Inc(FSkippedFilesCount);
+
         LStop := not APreCallback(APath, LSearchRec);
+      end;
 
       if not LStop then
       begin
         // go recursive in subdirectories
-        if ARecursive and (LSearchRec.Attr and System.SysUtils.faDirectory <> 0)
-          and (LSearchRec.Name <> CURRENT_DIR) and (LSearchRec.Name <> PARENT_DIR) then
+        if ARecursive and (LSearchRec.Attr and System.SysUtils.faDirectory <> 0) then
         begin
           var LNewPath := TPath.Combine(APath, LSearchRec.Name, False);
 
-          if not ExludedPathByPrefix(LNewPath) then
+          if not ExcludedPathByPrefix(LNewPath) then
             WalkThroughDirectory(LNewPath, APattern, APreCallback, ARecursive)
           else
             Inc(FSkippedFilesCount); // TODO: These paths should be added to list, and count those files if SkippedFilesCount is queried

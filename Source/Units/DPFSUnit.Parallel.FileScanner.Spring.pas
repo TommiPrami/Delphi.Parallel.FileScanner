@@ -11,7 +11,6 @@ type
   TParallelFileScannerSpring = class(TParallelFileScannerCustom)
   strict private
   strict protected
-    procedure FilterFileNames(const AFileNames: IList<string>; const AExcludes: TFileScanExcludes; const AFilteredList: IList<IList<string>>); reintroduce;
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: IList<string>); reintroduce;
     procedure MergeResultLists(const AResultList: IList<IList<string>>; const AResult: IList<string>); reintroduce;
   public
@@ -30,62 +29,6 @@ uses
 {$ENDIF};
 
 { TParallelFileScannerSpring }
-
-procedure TParallelFileScannerSpring.FilterFileNames(const AFileNames: IList<string>;
-  const AExcludes: TFileScanExcludes; const AFilteredList: IList<IList<string>>);
-var
-  LIndex: Integer;
-  LCurrentFilename: string;
-  LCurrentExcludedDirectory: string;
-  LCurrentExcludedFilename: string;
-begin
-  if (Length(AExcludes.PathPrefixes) > 0) or (Length(AExcludes.PathSuffixes) > 0) then
-  begin
-      for LIndex := AFileNames.Count - 1 downto 0 do
-      begin
-        LCurrentFilename := AFileNames[LIndex].ToUpper;
-
-        var LExluded := False;
-
-        for LCurrentExcludedDirectory in AExcludes.UpperPathPrefixes do
-        begin
-          if LCurrentExcludedDirectory = '' then
-            Continue;
-
-          if LCurrentFilename.StartsWith(LCurrentExcludedDirectory) then
-          begin
-            LExluded := True;
-            Break;
-          end;
-        end;
-
-        if not LExluded then
-        begin
-          for LCurrentExcludedFilename in AExcludes.UpperPathSuffixes do
-          begin
-            if LCurrentExcludedFilename = '' then
-              Continue;
-
-            if LCurrentFilename.EndsWith(LCurrentExcludedFilename) then
-            begin
-              LExluded := True;
-              Break;
-            end;
-          end;
-        end;
-
-        if LExluded then
-          AFileNames.Delete(LIndex);
-      end;
-  end;
-
-  FLock.Acquire;
-  try
-    AFilteredList.Add(AFileNames);
-  finally
-    FLock.Release;
-  end;
-end;
 
 function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes;
   var AFileNamesList: IList<string>): Boolean;
@@ -129,7 +72,15 @@ begin
           // This is now about 450ms so maybe no use to optimize much
           GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
 
-          FilterFileNames(LTempFileNames, AExcludes, LListsOfFilelists);
+          if LTempFileNames.Count > 0 then
+          begin
+            FLock.Acquire;
+            try
+              LListsOfFilelists.Add(LTempFileNames);
+            finally
+              FLock.Release;
+            end;
+          end;
 
           LTempFileNames := nil;
         end
