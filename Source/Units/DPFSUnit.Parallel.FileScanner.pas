@@ -33,13 +33,14 @@ type
 
   TParallelFileScannerCustom = class(TObject)
   strict protected
+    const
+      CURRENT_DIR: string = '.';
+      PARENT_DIR: string = '..';
+  strict protected
     FDiskScanTimeForFiles: Double;
     FExtensions: TStringList;
     FLock: TCriticalSection;
     FSkippedFilesCount: Integer;
-    const
-      CURRENT_DIR: string = '.';
-      PARENT_DIR: string = '..';
     procedure InternalCheckDirPathParam(const APath: string; const AExistsCheck: Boolean);
     procedure CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: TStringList); virtual;
