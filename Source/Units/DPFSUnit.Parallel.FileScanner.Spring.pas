@@ -147,8 +147,10 @@ begin
   end;
 
   Result := AFileNamesList.Count > 0;
+
   LFileScanStopWatch.Stop;
-  FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;end;
+  FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
+end;
 
 function TParallelFileScannerSpring.GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes;
   var AFileNamesList: IList<string>): Boolean;
