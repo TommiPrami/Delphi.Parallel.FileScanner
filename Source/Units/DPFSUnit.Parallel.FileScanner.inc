@@ -1,3 +1,3 @@
-// DPFSUnit.Parallel.FileScanner.inc
+﻿// DPFSUnit.Parallel.FileScanner.inc
 
 {.$DEFINE USE_OMNI_THREAD_LIBRARY}
