@@ -185,12 +185,12 @@ begin
 
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
       Parallel
-        .For(0, FExtensions.Count - 1)
+        .&for(0, FExtensions.Count - 1)
         .NumTasks(TThread.ProcessorCount)
         .Execute(
 {$ELSE}
       TParallel
-        .For(0, FExtensions.Count - 1,
+        .&for(0, FExtensions.Count - 1,
 {$ENDIF}
         procedure(AIndex: Integer)
         var
