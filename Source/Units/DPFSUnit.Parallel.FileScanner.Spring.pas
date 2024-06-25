@@ -9,7 +9,6 @@ uses
 
 type
   TParallelFileScannerSpring = class(TParallelFileScannerCustom)
-  strict private
   strict protected
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: IList<string>); reintroduce;
     procedure MergeResultLists(const AResultList: IList<IList<string>>; const AResult: IList<string>); reintroduce;
@@ -39,6 +38,7 @@ var
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
 
+  FExclusions := AExcludes;
   FSkippedFilesCount := 0;
   AFileNamesList := TCollections.CreateList<string>;
 
