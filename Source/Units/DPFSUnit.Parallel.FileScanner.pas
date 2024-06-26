@@ -3,7 +3,7 @@
 interface
 
 {TODO: Could we move more code to the to the TParallelFileScannerCustom? Have to think about it.
-       Still way too much duplicate code between "reguar" and spring version }
+       Still way too much duplicate code between "reguar" and Spring4D version }
 
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
 
@@ -28,6 +28,7 @@ type
     procedure SetPathPrefixes(const Value: TArray<string>);
     procedure SetPathSuffixes(const Value: TArray<string>);
   public
+    class operator Initialize(out Dest: TFileScanExcludes);
     procedure BeginUpdate;
     procedure EndUpdate;
     property PathPrefixes: TArray<string> read FPathPrefixes write SetPathPrefixes;
@@ -135,6 +136,11 @@ end;
 function TFileScanExcludes.GetUpperPathSuffixes: TArray<string>;
 begin
   Result := FUpperPathSuffixes;
+end;
+
+class operator TFileScanExcludes.Initialize(out Dest: TFileScanExcludes);
+begin
+  Dest.FUpdateCount := 0;
 end;
 
 procedure TFileScanExcludes.SetPathPrefixes(const Value: TArray<string>);
@@ -257,8 +263,8 @@ begin
           LTempFileNames: TStringList;
         begin
           LExtension := FExtensions[AIndex];
-
           LTempFileNames := TStringList.Create;
+
           // Seems that this GetFiles ripped from the RTL, ported to use Spring container. MAYBE it is not faster after all.
           // Should make two version, one using standard RTL and one using this. Time them, which is faster.
           // This is now about 650ms so maybe no use to optimize much
@@ -272,7 +278,9 @@ begin
             finally
               FLock.Release;
             end;
-          end;
+          end
+          else
+            LTempFileNames.Free;
         end
       );
     end;
