@@ -15,6 +15,8 @@ type
     procedure ButtonParallelScanSpringClick(Sender: TObject);
   private
     function GetExcludes: TFileScanExcludes;
+    function GetExtensions: TArray<string>;
+    function GetSearchDirectories: TArray<string>;
   public
   end;
 
@@ -37,11 +39,11 @@ begin
   MemoLog.Clear;
 
   LFilesList := TStringList.Create;
-  LParallelScanner := TParallelFileScanner.Create(['*.pas', '*.inc', '*.dfm']);
+  LParallelScanner := TParallelFileScanner.Create(GetExtensions);
   try
     LExludes := GetExcludes;
 
-    if LParallelScanner.GetFileList(['..\..\..\..\Source\', '..\..\..\..\Tests\'], LExludes, LFilesList) then
+    if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList) then
     begin
       MemoLog.Lines.AddStrings(LFilesList);
       MemoLog.Lines.Add('');
@@ -67,11 +69,11 @@ begin
   MemoLog.Clear;
 
   LFilesList := TCollections.CreateList<string>;
-  LParallelScanner := TParallelFileScannerSpring.Create(['*.pas', '*.inc', '*.dfm']);
+  LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions);
   try
     LExludes := GetExcludes;
 
-    if LParallelScanner.GetFileList(['..\..\..\..\Source\', '..\..\..\..\Tests\'], LExludes, LFilesList) then
+    if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList) then
     begin
       MemoLog.Lines.AddStrings(LFilesList.ToArray);
       MemoLog.Lines.Add('');
@@ -95,6 +97,16 @@ begin
   finally
     Result.EndUpdate;
   end;
+end;
+
+function TDPFSMainForm.GetExtensions: TArray<string>;
+begin
+  Result := ['*.pas', '*.inc', '*.dfm', '*.dpr', '*.dproj'];
+end;
+
+function TDPFSMainForm.GetSearchDirectories: TArray<string>;
+begin
+  Result := ['..\..\..\..\Source\', '..\..\..\..\Tests\'];
 end;
 
 end.
