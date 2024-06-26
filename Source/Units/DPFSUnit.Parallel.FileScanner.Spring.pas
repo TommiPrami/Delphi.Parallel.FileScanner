@@ -90,6 +90,9 @@ begin
     FLock.Acquire;
     try
       MergeResultLists(LListsOfFilelists, AFileNamesList);
+
+      if SortResultList then
+        AFileNamesList.Sort;
     finally
       FLock.Release;
     end;
