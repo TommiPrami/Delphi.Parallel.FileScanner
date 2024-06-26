@@ -25,13 +25,16 @@ type
     function GetUpperPathPrefixes: TArray<string>;
     function GetUpperPathSuffixes: TArray<string>;
     procedure CacheUpperPrefixes;
+    procedure SetPathPrefixes(const Value: TArray<string>);
+    procedure SetPathSuffixes(const Value: TArray<string>);
   public
     procedure BeginUpdate;
     procedure EndUpdate;
-    property PathPrefixes: TArray<string> read FPathPrefixes write FPathPrefixes;
+    property PathPrefixes: TArray<string> read FPathPrefixes write SetPathPrefixes;
     property PathPrefixesString: string read GetPathPrefixesString;
-    property PathSuffixes: TArray<string> read FPathSuffixes write FPathSuffixes;
+    property PathSuffixes: TArray<string> read FPathSuffixes write SetPathSuffixes;
     property PathSuffixesString: string read GetPathSuffixesString;
+  private
   public
     property UpperPathPrefixes: TArray<string> read GetUpperPathPrefixes;
     property UpperPathSuffixes: TArray<string> read GetUpperPathSuffixes;
@@ -44,10 +47,11 @@ type
       PARENT_DIR: string = '..';
   strict protected
     FDiskScanTimeForFiles: Double;
+    FExclusions: TFileScanExcludes;
     FExtensions: TStringList;
     FLock: TCriticalSection;
     FSkippedFilesCount: Integer;
-    FExclusions: TFileScanExcludes;
+    FSortResultList: Boolean;
     procedure InternalCheckDirPathParam(const APath: string; const AExistsCheck: Boolean);
     procedure CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: TStringList); virtual;
@@ -55,21 +59,24 @@ type
     function ExcludedFilenameByuSuffix(const AFileName: string): Boolean;
     procedure WalkThroughDirectory(const APath, APattern: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
     procedure MergeResultLists(const AResultList: TObjectList<TStringList>; const AResult: TStringList); virtual;
+    //
+    function GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes; var AFileNamesList: TStringList): Boolean; overload; virtual;
+    function GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes; var AFileNamesList: TStringList): Boolean; overload; virtual;
   public
-    constructor Create(const AExtensions: TStringList); overload;
-    constructor Create(const AExtensions: TArray<string>); overload;
+    constructor Create(const AExtensions: TStringList; const ASortResultList: Boolean = True); overload;
+    constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload;
     destructor Destroy; override;
 
-    function GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes; var AFileNamesArray: TStringList): Boolean; overload; virtual;
-    function GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes; var AFileNamesList: TStringList): Boolean; overload; virtual;
-
-    property SkippedFilesCount: Integer read FSkippedFilesCount write FSkippedFilesCount;
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
+    property SkippedFilesCount: Integer read FSkippedFilesCount write FSkippedFilesCount;
+    property SortResultList: Boolean read FSortResultList write FSortResultList;
   end;
 
   TParallelFileScanner = class(TParallelFileScannerCustom)
   strict private
   public
+    function GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes; var AFileNamesList: TStringList): Boolean; overload; override;
+    function GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes; var AFileNamesList: TStringList): Boolean; overload; override;
   end;
 
 implementation
@@ -81,6 +88,70 @@ uses
 {$ELSE}
   , System.Threading
 {$ENDIF};
+
+{ TFileScanExcludes }
+
+procedure TFileScanExcludes.BeginUpdate;
+begin
+  Inc(FUpdateCount);
+end;
+
+procedure TFileScanExcludes.CacheUpperPrefixes;
+begin
+  SetLength(FUpperPathPrefixes, Length(FPathPrefixes));
+
+  for var LIndex := Low(FPathPrefixes) to High(FPathPrefixes) do
+    FUpperPathPrefixes[LIndex] := ExcludeTrailingPathDelimiter(FPathPrefixes[LIndex].ToUpper);
+
+  SetLength(FUpperPathSuffixes, Length(FPathSuffixes));
+
+  for var LIndex := Low(FPathSuffixes) to High(FPathSuffixes) do
+    FUpperPathSuffixes[LIndex] := ExcludeTrailingPathDelimiter(FPathSuffixes[LIndex].ToUpper);
+end;
+
+procedure TFileScanExcludes.EndUpdate;
+begin
+  FUpdateCount := Max(0, FUpdateCount - 1);
+
+  if FUpdateCount = 0 then
+    CacheUpperPrefixes;
+end;
+
+function TFileScanExcludes.GetPathPrefixesString: string;
+begin
+  Result := Result.Join(';', FPathPrefixes);
+end;
+
+function TFileScanExcludes.GetPathSuffixesString: string;
+begin
+  Result := Result.Join(';', FPathSuffixes);
+end;
+
+function TFileScanExcludes.GetUpperPathPrefixes: TArray<string>;
+begin
+  Result := FUpperPathPrefixes;
+end;
+
+function TFileScanExcludes.GetUpperPathSuffixes: TArray<string>;
+begin
+  Result := FUpperPathSuffixes;
+end;
+
+procedure TFileScanExcludes.SetPathPrefixes(const Value: TArray<string>);
+begin
+  FPathPrefixes := Value;
+
+  if FUpdateCount = 0 then
+    CacheUpperPrefixes;
+end;
+
+procedure TFileScanExcludes.SetPathSuffixes(const Value: TArray<string>);
+begin
+  FPathSuffixes := Value;
+
+  if FUpdateCount = 0 then
+    CacheUpperPrefixes;
+end;
 
 { TParallelFileScannerCustom }
 
@@ -98,10 +169,11 @@ begin
   InternalCheckDirPathParam(LPath, True);
 end;
 
-constructor TParallelFileScannerCustom.Create(const AExtensions: TArray<string>);
+constructor TParallelFileScannerCustom.Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True);
 begin
   inherited Create;
 
+  FSortResultList := ASortResultList;
   FLock := TCriticalSection.Create;
   FExtensions := TStringList.Create;
 
@@ -208,6 +280,9 @@ begin
     FLock.Acquire;
     try
       MergeResultLists(LListsOfFilelists, AFileNamesList);
+
+      if FSortResultList then
+        AFileNamesList.Sort;
     finally
       FLock.Release;
     end;
@@ -221,9 +296,9 @@ begin
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes;
-  var AFileNamesArray: TStringList): Boolean;
+  var AFileNamesList: TStringList): Boolean;
 begin
-  Result := GetFileList(ADirectories.ToStringArray, AExcludes, AFileNamesArray);
+  Result := GetFileList(ADirectories.ToStringArray, AExcludes, AFileNamesList);
 end;
 
 procedure TParallelFileScannerCustom.GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption;
@@ -330,58 +405,23 @@ begin
   end;
 end;
 
-constructor TParallelFileScannerCustom.Create(const AExtensions: TStringList);
+constructor TParallelFileScannerCustom.Create(const AExtensions: TStringList; const ASortResultList: Boolean = True);
 begin
-  Create(AExtensions.ToStringArray);
+  Create(AExtensions.ToStringArray, ASortResultList);
 end;
 
-{ TFileScanExcludes }
+{ TParallelFileScanner }
 
-procedure TFileScanExcludes.BeginUpdate;
+function TParallelFileScanner.GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes;
+  var AFileNamesList: TStringList): Boolean;
 begin
-  Inc(FUpdateCount);
+  Result := inherited GetFileList(ADirectories, AExcludes, AFileNamesList);
 end;
 
-procedure TFileScanExcludes.CacheUpperPrefixes;
+function TParallelFileScanner.GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes;
+  var AFileNamesList: TStringList): Boolean;
 begin
-  SetLength(FUpperPathPrefixes, Length(FPathPrefixes));
-  for var LIndex := Low(FPathPrefixes) to High(FPathPrefixes) do
-    FUpperPathPrefixes[LIndex] := ExcludeTrailingPathDelimiter(FPathPrefixes[LIndex].ToUpper);
-
-
-  SetLength(FUpperPathSuffixes, Length(FPathSuffixes));
-  for var LIndex := Low(FPathSuffixes) to High(FPathSuffixes) do
-    FUpperPathSuffixes[LIndex] := ExcludeTrailingPathDelimiter(FPathSuffixes[LIndex].ToUpper);
+  Result := inherited GetFileList(ADirectories, AExcludes, AFileNamesList);
 end;
-
-procedure TFileScanExcludes.EndUpdate;
-begin
-  FUpdateCount := Max(0, FUpdateCount - 1);
-
-  if FUpdateCount = 0 then
-    CacheUpperPrefixes;
-end;
-
-function TFileScanExcludes.GetPathPrefixesString: string;
-begin
-  Result := Result.Join(';', FPathPrefixes);
-end;
-
-function TFileScanExcludes.GetPathSuffixesString: string;
-begin
-  Result := Result.Join(';', FPathSuffixes);
-end;
-
-function TFileScanExcludes.GetUpperPathPrefixes: TArray<string>;
-begin
-  Result := FUpperPathPrefixes;
-end;
-
-function TFileScanExcludes.GetUpperPathSuffixes: TArray<string>;
-begin
-  Result := FUpperPathSuffixes;
-end;
-
-
 
 end.
