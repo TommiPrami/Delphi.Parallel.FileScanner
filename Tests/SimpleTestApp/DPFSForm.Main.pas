@@ -14,6 +14,8 @@ type
     procedure ButtonParallelScanClick(Sender: TObject);
     procedure ButtonParallelScanSpringClick(Sender: TObject);
   private
+    procedure UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
+    procedure LogCommon(const AParallelScanner: TParallelFileScannerCustom);
     function GetExcludes: TFileScanExcludes;
     function GetExtensions: TArray<string>;
     function GetSearchDirectories: TArray<string>;
@@ -36,27 +38,29 @@ var
   LFilesList: TStringList;
   LExludes: TFileScanExcludes;
 begin
-  MemoLog.Clear;
-
-  LFilesList := TStringList.Create;
-  LParallelScanner := TParallelFileScanner.Create(GetExtensions);
+  UpdateGUIState(Sender as TControl, False);
   try
-    LExludes := GetExcludes;
+    LFilesList := TStringList.Create;
+    LParallelScanner := TParallelFileScanner.Create(GetExtensions);
+    try
+      LExludes := GetExcludes;
 
-    if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList) then
-    begin
-      MemoLog.Lines.AddStrings(LFilesList);
-      MemoLog.Lines.Add('');
-      MemoLog.Lines.Add('OK ' + LFilesList.Count.ToString + ' files.');
-    end
-    else
-      MemoLog.Lines.Add('No files found.');
+      if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList) then
+      begin
+        MemoLog.Lines.AddStrings(LFilesList);
+        MemoLog.Lines.Add('');
+        MemoLog.Lines.Add('OK ' + LFilesList.Count.ToString + ' files.');
+      end
+      else
+        MemoLog.Lines.Add('No files found.');
 
-    MemoLog.Lines.Add('');
-    MemoLog.Lines.Add('  Elapsed time: ' + LParallelScanner.DiskScanTimeForFiles.ToString + ' ms.');
+      LogCommon(LParallelScanner);
+    finally
+      LParallelScanner.Free;
+      LFilesList.Free;
+    end;
   finally
-    LParallelScanner.Free;
-    LFilesList.Free;
+    UpdateGUIState(Sender as TControl, True);
   end;
 end;
 
@@ -66,26 +70,29 @@ var
   LFilesList: IList<string>;
   LExludes: TFileScanExcludes;
 begin
-  MemoLog.Clear;
-
-  LFilesList := TCollections.CreateList<string>;
-  LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions);
+  UpdateGUIState(Sender as TControl, False);
   try
-    LExludes := GetExcludes;
 
-    if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList) then
-    begin
-      MemoLog.Lines.AddStrings(LFilesList.ToArray);
-      MemoLog.Lines.Add('');
-      MemoLog.Lines.Add('OK ' + LFilesList.Count.ToString + ' files.');
-    end
-    else
-      MemoLog.Lines.Add('No files found.');
+    LFilesList := TCollections.CreateList<string>;
+    LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions);
+    try
+      LExludes := GetExcludes;
 
-    MemoLog.Lines.Add('');
-    MemoLog.Lines.Add('  Elapsed time: ' + LParallelScanner.DiskScanTimeForFiles.ToString + ' ms.');
+      if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList) then
+      begin
+        MemoLog.Lines.AddStrings(LFilesList.ToArray);
+        MemoLog.Lines.Add('');
+        MemoLog.Lines.Add('OK ' + LFilesList.Count.ToString + ' files.');
+      end
+      else
+        MemoLog.Lines.Add('No files found.');
+
+      LogCommon(LParallelScanner);
+    finally
+      LParallelScanner.Free;
+    end;
   finally
-    LParallelScanner.Free;
+    UpdateGUIState(Sender as TControl, True);
   end;
 end;
 
@@ -107,6 +114,26 @@ end;
 function TDPFSMainForm.GetSearchDirectories: TArray<string>;
 begin
   Result := ['..\..\..\..\Source\', '..\..\..\..\Tests\'];
+end;
+
+procedure TDPFSMainForm.LogCommon(const AParallelScanner: TParallelFileScannerCustom);
+begin
+  MemoLog.Lines.Add('');
+  MemoLog.Lines.Add('  Elapsed time: ' + AParallelScanner.DiskScanTimeForFiles.ToString + ' ms.');
+  MemoLog.Lines.Add('  ' + AParallelScanner.SkippedFilesCount.ToString + ' files skipped');
+end;
+
+procedure TDPFSMainForm.UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
+begin
+  ASender.Enabled := AEnabled;
+
+  if not AEnabled then
+  begin
+    Screen.Cursor := crHourGlass;
+    MemoLog.Clear;
+  end
+  else
+    Screen.Cursor := crDefault;
 end;
 
 end.

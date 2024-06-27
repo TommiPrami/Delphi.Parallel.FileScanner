@@ -11,7 +11,7 @@ uses
   System.Classes, System.IOUtils, System.Math, System.SyncObjs, System.SysUtils, System.Generics.Collections;
 
 type
-  TDirectoryWalkProc = reference to function (const APath: string; const AFileInfo: TSearchRec): Boolean;
+  TDirectoryWalkProc = reference to procedure(const AFileNamePath: string);
 
   TFileScanExcludes = record
   strict private
@@ -42,6 +42,12 @@ type
   end;
 
   TParallelFileScannerCustom = class(TObject)
+  strict private
+    FSkippedDirectories: TStringList;
+    FCachedSkippedDirectoriesFileCount: Integer;
+    function GetSkippedFilesCount: Integer;
+    function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
+    procedure AddSkippedDirectories(const APath: string);
   strict protected
     const
       CURRENT_DIR: string = '.';
@@ -64,12 +70,12 @@ type
     function GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes; var AFileNamesList: TStringList): Boolean; overload; virtual;
     function GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes; var AFileNamesList: TStringList): Boolean; overload; virtual;
   public
-    constructor Create(const AExtensions: TStringList; const ASortResultList: Boolean = True); overload;
     constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload;
+    constructor Create(const AExtensions: TStringList; const ASortResultList: Boolean = True); overload;
     destructor Destroy; override;
 
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
-    property SkippedFilesCount: Integer read FSkippedFilesCount write FSkippedFilesCount;
+    property SkippedFilesCount: Integer read GetSkippedFilesCount write FSkippedFilesCount;
     property SortResultList: Boolean read FSortResultList write FSortResultList;
   end;
 
@@ -161,6 +167,18 @@ end;
 
 { TParallelFileScannerCustom }
 
+procedure TParallelFileScannerCustom.AddSkippedDirectories(const APath: string);
+begin
+  for var LIndex := 0 to FSkippedDirectories.Count - 1 do
+  begin
+    if APath.StartsWith(FSkippedDirectories[LIndex]) then
+      Exit;
+  end;
+
+  if FSkippedDirectories.IndexOf(APath) = -1 then
+    FSkippedDirectories.Add(APath);
+end;
+
 procedure TParallelFileScannerCustom.CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
 var
   LPath: string;
@@ -179,19 +197,22 @@ constructor TParallelFileScannerCustom.Create(const AExtensions: TArray<string>;
 begin
   inherited Create;
 
+  FCachedSkippedDirectoriesFileCount := 0;
+  FSkippedDirectories := TStringList.Create;
+  FSkippedDirectories.Sorted := True;
   FSortResultList := ASortResultList;
   FLock := TCriticalSection.Create;
   FExtensions := TStringList.Create;
-
   FExtensions.AddStrings(AExtensions);
 end;
 
 destructor TParallelFileScannerCustom.Destroy;
 begin
+  FSkippedDirectories.Free;
   FExtensions.Free;
   FLock.Free;
 
-  inherited Destroy;;
+  inherited Destroy;
 end;
 
 function TParallelFileScannerCustom.ExcludedPathByPrefix(const APath: string): Boolean;
@@ -226,6 +247,22 @@ begin
 
     if LCurrentFilename.EndsWith(LCurrentExcludedFilename) then
       Exit(True)
+  end;
+end;
+
+function TParallelFileScannerCustom.GetFileCounts(const ASkippedDirectories: TStringList): Integer;
+var
+  LCurrentDir: string;
+begin
+  Result := 0;
+
+  for var LDirectoryIndex := 0 to ASkippedDirectories.Count - 1 do
+  begin
+    LCurrentDir := ASkippedDirectories[LDirectoryIndex];
+
+    if not LCurrentDir.Trim.IsEmpty then
+      for var LExtensionIndex := 0 to FExtensions.Count - 1 do
+        Inc(Result, Length(TDirectory.GetFiles(LCurrentDir, FExtensions[LExtensionIndex], TSearchOption.soAllDirectories)));
   end;
 end;
 
@@ -319,15 +356,20 @@ begin
   AFiles.Capacity := 1024 * 16;
 
   LPreCallback :=
-    function (const APath: string; const AFileInfo: TSearchRec): Boolean
+    procedure (const AFilename: string)
     begin
-      Result := True;
-
-      if AFileInfo.Attr and System.SysUtils.faDirectory = 0 then
-        AFiles.Add(TPath.Combine(APath, AFileInfo.Name, False));
+      AFiles.Add(AFilename);
     end;
 
   WalkThroughDirectory(APath, ASearchPattern, LPreCallback, ASearchOption = TSearchOption.soAllDirectories);
+end;
+
+function TParallelFileScannerCustom.GetSkippedFilesCount: Integer;
+begin
+  if (FSkippedDirectories.Count > 0) and (FCachedSkippedDirectoriesFileCount = 0) then
+    FCachedSkippedDirectoriesFileCount := GetFileCounts(FSkippedDirectories);
+
+  Result := FSkippedFilesCount + FCachedSkippedDirectoriesFileCount;
 end;
 
 procedure TParallelFileScannerCustom.InternalCheckDirPathParam(const APath: string; const AExistsCheck: Boolean);
@@ -373,41 +415,46 @@ procedure TParallelFileScannerCustom.WalkThroughDirectory(const APath, APattern:
   const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
 var
   LSearchRec: TSearchRec;
-  LMatch: Boolean;
-  LStop: Boolean;
+  LIsDirectory: Boolean;
 begin
   if FindFirst(TPath.Combine(APath, '*', False), faAnyFile, LSearchRec) = 0 then
   try
-    LStop := False;
-
     repeat
-      if (LSearchRec.Name = CURRENT_DIR) or (LSearchRec.Name = PARENT_DIR) then
+      if LSearchRec.Name = CURRENT_DIR then
         Continue;
 
-      LMatch := TPath.MatchesPattern(LSearchRec.Name, APattern, False);
+      if LSearchRec.Name = PARENT_DIR then
+        Continue;
 
-      // call the pre-order callback method
-      if LMatch and not ExcludedFilenameByuSuffix(TPath.Combine(APath, LSearchRec.Name, False)) then
+      LIsDirectory := LSearchRec.Attr and System.SysUtils.faDirectory <> 0;
+
+      if not LIsDirectory then
       begin
-        Inc(FSkippedFilesCount);
-
-        LStop := not APreCallback(APath, LSearchRec);
-      end;
-
-      if not LStop then
-      begin
-        // go recursive in subdirectories
-        if ARecursive and (LSearchRec.Attr and System.SysUtils.faDirectory <> 0) then
+        if TPath.MatchesPattern(LSearchRec.Name, APattern, False) then
         begin
-          var LNewPath := TPath.Combine(APath, LSearchRec.Name, False);
+          // call the pre-order callback method
+          var LFilename := TPath.Combine(APath, LSearchRec.Name, False); // Weirdly "APath + PathDelim..." is slower than TPath.Combine
 
-          if not ExcludedPathByPrefix(LNewPath) then
-            WalkThroughDirectory(LNewPath, APattern, APreCallback, ARecursive)
-          else
-            Inc(FSkippedFilesCount); // TODO: These paths should be added to list, and count those files if SkippedFilesCount is queried
+          if not ExcludedFilenameByuSuffix(LFilename) then
+          begin
+            Inc(FSkippedFilesCount);
+
+            APreCallback(LFilename);
+          end;
         end;
       end;
-    until LStop or (FindNext(LSearchRec) <> 0);
+
+      // go recursive in subdirectories
+      if ARecursive and LIsDirectory then
+      begin
+        var LNewPath :=  TPath.Combine(APath, LSearchRec.Name, False);
+
+        if not ExcludedPathByPrefix(LNewPath) then
+          WalkThroughDirectory(LNewPath, APattern, APreCallback, ARecursive)
+        else
+          AddSkippedDirectories(LNewPath);
+      end;
+    until FindNext(LSearchRec) <> 0;
   finally
     FindClose(LSearchRec);
   end;

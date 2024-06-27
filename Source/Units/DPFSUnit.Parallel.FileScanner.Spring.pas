@@ -122,12 +122,9 @@ begin
   AFiles.Capacity := 1024 * 16;
 
   LPreCallback :=
-    function (const APath: string; const AFileInfo: TSearchRec): Boolean
+    procedure (const AFileName: string)
     begin
-      Result := True;
-
-      if AFileInfo.Attr and System.SysUtils.faDirectory = 0 then
-        AFiles.Add(TPath.Combine(APath, AFileInfo.Name, False));
+      AFiles.Add(AFileName);
     end;
 
   WalkThroughDirectory(APath, ASearchPattern, LPreCallback, ASearchOption = TSearchOption.soAllDirectories);
