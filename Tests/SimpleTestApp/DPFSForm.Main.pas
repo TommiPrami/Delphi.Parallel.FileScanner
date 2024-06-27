@@ -13,13 +13,12 @@ type
     MemoLog: TMemo;
     procedure ButtonParallelScanClick(Sender: TObject);
     procedure ButtonParallelScanSpringClick(Sender: TObject);
-  private
+  strict private
     procedure UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
     procedure LogCommon(const AParallelScanner: TParallelFileScannerCustom);
     function GetExcludes: TFileScanExcludes;
     function GetExtensions: TArray<string>;
     function GetSearchDirectories: TArray<string>;
-  public
   end;
 
 var
@@ -119,7 +118,8 @@ end;
 procedure TDPFSMainForm.LogCommon(const AParallelScanner: TParallelFileScannerCustom);
 begin
   MemoLog.Lines.Add('');
-  MemoLog.Lines.Add('  Elapsed time: ' + AParallelScanner.DiskScanTimeForFiles.ToString + ' ms.');
+  MemoLog.Lines.Add('  Elapsed time: ' + AParallelScanner.DiskScanTimeForFiles.ToString
+    + ' ms. (excluding fetching skipped files count)');
   MemoLog.Lines.Add('  ' + AParallelScanner.SkippedFilesCount.ToString + ' files skipped');
 end;
 
