@@ -16,7 +16,7 @@ type
   strict private
     procedure UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
     procedure LogCommon(const AParallelScanner: TParallelFileScannerCustom);
-    function GetExcludes: TFileScanExcludes;
+    function GetExcludes: TFileScanExclusions;
     function GetExtensions: TArray<string>;
     function GetSearchDirectories: TArray<string>;
   end;
@@ -35,7 +35,7 @@ procedure TDPFSMainForm.ButtonParallelScanClick(Sender: TObject);
 var
   LParallelScanner: TParallelFileScanner;
   LFilesList: TStringList;
-  LExludes: TFileScanExcludes;
+  LExludes: TFileScanExclusions;
 begin
   UpdateGUIState(Sender as TControl, False);
   try
@@ -67,7 +67,7 @@ procedure TDPFSMainForm.ButtonParallelScanSpringClick(Sender: TObject);
 var
   LParallelScanner: TParallelFileScannerSpring;
   LFilesList: IList<string>;
-  LExludes: TFileScanExcludes;
+  LExludes: TFileScanExclusions;
 begin
   UpdateGUIState(Sender as TControl, False);
   try
@@ -95,7 +95,7 @@ begin
   end;
 end;
 
-function TDPFSMainForm.GetExcludes: TFileScanExcludes;
+function TDPFSMainForm.GetExcludes: TFileScanExclusions;
 begin
   Result.BeginUpdate;
   try
@@ -125,6 +125,7 @@ end;
 
 procedure TDPFSMainForm.UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
 begin
+  Enabled := AEnabled;
   ASender.Enabled := AEnabled;
 
   if not AEnabled then

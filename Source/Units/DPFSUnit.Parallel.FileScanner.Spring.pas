@@ -13,8 +13,8 @@ type
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: IList<string>); reintroduce;
     procedure MergeResultLists(const AResultList: IList<IList<string>>; const AResult: IList<string>); reintroduce;
   public
-    function GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes; var AFileNamesList: IList<string>): Boolean; reintroduce; overload;
-    function GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes; var AFileNamesList: IList<string>): Boolean; reintroduce; overload;
+    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; var AFileNamesList: IList<string>): Boolean; reintroduce; overload;
+    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; var AFileNamesList: IList<string>): Boolean; reintroduce; overload;
   end;
 
 implementation
@@ -29,7 +29,7 @@ uses
 
 { TParallelFileScannerSpring }
 
-function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<string>; const AExcludes: TFileScanExcludes;
+function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
   var AFileNamesList: IList<string>): Boolean;
 var
   LCurrentRootPath: string;
@@ -38,7 +38,7 @@ var
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
 
-  FExclusions := AExcludes;
+  FExclusions := AExclusions;
   FSkippedFilesCount := 0;
   AFileNamesList := TCollections.CreateList<string>;
 
@@ -106,10 +106,10 @@ begin
   FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
 end;
 
-function TParallelFileScannerSpring.GetFileList(const ADirectories: TStringList; const AExcludes: TFileScanExcludes;
+function TParallelFileScannerSpring.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
   var AFileNamesList: IList<string>): Boolean;
 begin
-  Result := GetFileList(ADirectories.ToStringArray, AExcludes, AFileNamesList);
+  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList);
 end;
 
 procedure TParallelFileScannerSpring.GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption;
