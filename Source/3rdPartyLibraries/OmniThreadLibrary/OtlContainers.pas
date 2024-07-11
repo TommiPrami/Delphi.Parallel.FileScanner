@@ -1777,7 +1777,7 @@ begin
     Proc;
     PickUp := FNotifiableEvents;
     FNotifiableEvents := []
-  finally EnterCriticalSection; end;
+  finally LeaveCriticalSection; end;
   PropagateNotifications(PickUp);
 end; { TOmniValueQueue.DoWithCritSec }
 

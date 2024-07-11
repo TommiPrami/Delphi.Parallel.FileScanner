@@ -8,7 +8,11 @@ interface
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
 
 uses
-  System.Classes, System.IOUtils, System.Math, System.SyncObjs, System.SysUtils, System.Generics.Collections;
+  System.Classes, System.IOUtils, System.Math, System.SyncObjs, System.SysUtils, System.Generics.Collections
+  {$IFDEF USE_OMNI_THREAD_LIBRARY}
+  , OtlTaskControl, OtlContainers
+  {$ENDIF}
+  ;
 
 type
   TDirectoryWalkProc = reference to procedure(const AFileName: string);
@@ -66,8 +70,18 @@ type
     procedure MergeResultLists(const AResultList: TObjectList<TStringList>; const AResult: TStringList); virtual;
     procedure WalkThroughDirectory(const APath, APattern: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
     //
-    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; var AFileNamesList: TStringList): Boolean; overload; virtual;
-    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; var AFileNamesList: TStringList): Boolean; overload; virtual;
+    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): Boolean; overload; virtual;
+    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): Boolean; overload; virtual;
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; overload; virtual;
+    {$ENDIF}
   public
     constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload;
     constructor Create(const AExtensions: TStringList; const ASortResultList: Boolean = True); overload;
@@ -80,8 +94,18 @@ type
 
   TParallelFileScanner = class(TParallelFileScannerCustom)
   public
-    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; var AFileNamesList: TStringList): Boolean; overload; override;
-    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; var AFileNamesList: TStringList): Boolean; overload; override;
+    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+    ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): Boolean; overload; override;
+    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+    ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): Boolean; overload; override;
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; override;
+    {$ENDIF}
   end;
 
 implementation
@@ -89,7 +113,7 @@ implementation
 uses
   System.Diagnostics
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , OtlCollections, OtlComm, OtlCommon, OtlParallel, OtlTask, OtlTaskControl
+  , OtlCollections, OtlComm, OtlCommon, OtlParallel, OtlTask, GpStuff
 {$ELSE}
   , System.Threading
 {$ENDIF};
@@ -265,8 +289,14 @@ begin
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  var AFileNamesList: TStringList): Boolean;
+  const AFileNamesList: TStringList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF}): Boolean;
 var
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  LTaskConfig: IOmniTaskConfig;
+{$ENDIF}
   LCurrentRootPath: string;
   LListsOfFilelists: TObjectList<TStringList>;
   LFileScanStopWatch: TStopwatch;
@@ -284,8 +314,12 @@ begin
         Continue;
 
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      LTaskConfig := Parallel.TaskConfig;
+      LTaskConfig.SetPriority(APriority);
+
       Parallel
         .&for(0, FExtensions.Count - 1)
+        .TaskConfig(LTaskConfig)
         .NumTasks(TThread.ProcessorCount)
         .Execute(
 {$ELSE}
@@ -339,10 +373,80 @@ begin
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-  var AFileNamesList: TStringList): Boolean;
+  const AFileNamesList: TStringList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF}): Boolean;
 begin
-  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList);
+  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  , APriority
+{$ENDIF});
 end;
+
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+  const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
+var
+  LTaskConfig: IOmniTaskConfig;
+  LCurrentRootPath: string;
+  LFileScanStopWatch: TStopwatch;
+  LOmniValue: TOmniValue;
+  LFileCount: TGp4AlignedInt;
+begin
+  LFileScanStopWatch := TStopwatch.StartNew;
+  FExclusions := AExclusions;
+
+  FSkippedFilesCount := 0;
+  AFileCount := 0;
+  LFileCount.Value := 0;
+
+  for LCurrentRootPath in ADirectories do
+  begin
+    if not DirectoryExists(LCurrentRootPath) then
+      Continue;
+
+    LTaskConfig := Parallel.TaskConfig;
+    LTaskConfig.SetPriority(APriority);
+
+    Parallel
+      .&for(0, FExtensions.Count - 1)
+      .TaskConfig(LTaskConfig)
+      .NumTasks(TThread.ProcessorCount)
+      .Execute(
+      procedure(AIndex: Integer)
+      var
+        LExtension: string;
+        LTempFileNames: TStringList;
+        LIndex: Integer;
+      begin
+        LExtension := FExtensions[AIndex];
+        LTempFileNames := TStringList.Create;
+        try
+          GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
+
+          for LIndex := 0 to LTempFileNames.Count - 1 do
+          begin
+            LOmniValue := LTempFileNames[LIndex];
+
+            AFileNamesList.Enqueue(LOmniValue);
+            LFileCount.Increment;
+          end;
+        finally
+          LTempFileNames.Free;
+        end;
+      end
+    );
+  end;
+
+  AFileCount := LFileCount.Value;
+  Result := AFileCount > 0;
+
+  LFileScanStopWatch.Stop;
+  FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
+end;
+{$ENDIF}
+
 
 procedure TParallelFileScannerCustom.GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption;
   const AFiles: TStringList);
@@ -466,15 +570,36 @@ end;
 { TParallelFileScanner }
 
 function TParallelFileScanner.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  var AFileNamesList: TStringList): Boolean;
+  const AFileNamesList: TStringList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF}): Boolean;
 begin
-  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList);
+  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  , APriority
+{$ENDIF});
 end;
 
 function TParallelFileScanner.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-  var AFileNamesList: TStringList): Boolean;
+  const AFileNamesList: TStringList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF}): Boolean;
 begin
-  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList);
+  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  , APriority
+{$ENDIF});
 end;
+
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+function TParallelFileScanner.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+  const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
+begin
+  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList, AFileCount, APriority);
+end;
+{$ENDIF}
+
 
 end.

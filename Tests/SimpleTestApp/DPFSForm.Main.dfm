@@ -10,6 +10,7 @@ object DPFSMainForm: TDPFSMainForm
   Font.Height = -12
   Font.Name = 'Segoe UI'
   Font.Style = []
+  OnCreate = FormCreate
   DesignSize = (
     624
     441)
@@ -21,7 +22,7 @@ object DPFSMainForm: TDPFSMainForm
     Width = 618
     Height = 25
     Align = alTop
-    Caption = 'ButtonParallelScan'
+    Caption = 'Default Parallel Scan'
     TabOrder = 0
     OnClick = ButtonParallelScanClick
   end
@@ -34,16 +35,16 @@ object DPFSMainForm: TDPFSMainForm
     Margins.Left = 8
     Margins.Right = 8
     Align = alTop
-    Caption = 'ButtonParallelScanSpring'
+    Caption = 'Spring container parallel scan'
     TabOrder = 1
     OnClick = ButtonParallelScanSpringClick
   end
   object MemoLog: TMemo
     AlignWithMargins = True
     Left = 3
-    Top = 80
+    Top = 101
     Width = 608
-    Height = 353
+    Height = 332
     Margins.Left = 8
     Margins.Top = 8
     Margins.Right = 8
@@ -52,5 +53,18 @@ object DPFSMainForm: TDPFSMainForm
       'MemoLog')
     ScrollBars = ssVertical
     TabOrder = 2
+  end
+  object ButtonOtlQueue: TButton
+    AlignWithMargins = True
+    Left = 8
+    Top = 65
+    Width = 608
+    Height = 25
+    Margins.Left = 8
+    Margins.Right = 8
+    Align = alTop
+    Caption = 'OTL Queue parallel scan'
+    TabOrder = 3
+    OnClick = ButtonOtlQueueClick
   end
 end
