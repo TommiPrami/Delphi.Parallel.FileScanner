@@ -15,6 +15,7 @@ type
   strict protected
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: IList<string>); reintroduce;
     procedure MergeResultLists(const AResultList: IList<IList<string>>; const AResult: IList<string>); reintroduce;
+    procedure DoConvertRelativePathsToAbsolute(const AFileNames: IList<string>); reintroduce;
   public
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
       {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -90,6 +91,9 @@ begin
           // This is now about 450ms so maybe no use to optimize much
           GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
 
+          if ConvertRelativePathsToAbsolute then
+            DoConvertRelativePathsToAbsolute(LTempFileNames);
+
           if LTempFileNames.Count > 0 then
           begin
             FLock.Acquire;
@@ -122,6 +126,17 @@ begin
 
   LFileScanStopWatch.Stop;
   FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
+end;
+
+procedure TParallelFileScannerSpring.DoConvertRelativePathsToAbsolute(const AFileNames: IList<string>);
+begin
+  for var LIndex := 0 to AFileNames.Count - 1 do
+  begin
+    var LCurrentFileName := AFileNames[LIndex];
+
+    if TPath.IsRelativePath(LCurrentFileName) then
+      AFileNames[LIndex] := TPath.GetFullPath(LCurrentFileName);
+  end;
 end;
 
 function TParallelFileScannerSpring.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;

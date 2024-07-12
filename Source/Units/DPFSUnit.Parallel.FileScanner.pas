@@ -48,6 +48,7 @@ type
   strict private
     FSkippedDirectories: TStringList;
     FCachedSkippedDirectoriesFileCount: Integer;
+    FConvertRelativePathsToAbsolute: Boolean;
     function GetSkippedFilesCount: Integer;
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     procedure AddSkippedDirectories(const APath: string);
@@ -65,11 +66,12 @@ type
     function ExcludedFilenameByuSuffix(const AFileName: string): Boolean;
     function ExcludedPathByPrefix(const APath: string): Boolean;
     procedure CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
+    procedure DoConvertRelativePathsToAbsolute(const AFileNames: TStringList); virtual;
     procedure GetFiles(const APath, ASearchPattern: string; const ASearchOption: TSearchOption; const AFiles: TStringList); virtual;
     procedure InternalCheckDirPathParam(const APath: string; const AExistsCheck: Boolean);
     procedure MergeResultLists(const AResultList: TObjectList<TStringList>; const AResult: TStringList); virtual;
     procedure WalkThroughDirectory(const APath, APattern: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
-    //
+    // GetFileList overloads
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
       ; const APriority: TOTLThreadPriority = tpNormal
@@ -90,6 +92,7 @@ type
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
     property SkippedFilesCount: Integer read GetSkippedFilesCount write FSkippedFilesCount;
     property SortResultList: Boolean read FSortResultList write FSortResultList;
+    property ConvertRelativePathsToAbsolute: Boolean read FConvertRelativePathsToAbsolute write FConvertRelativePathsToAbsolute;
   end;
 
   TParallelFileScanner = class(TParallelFileScannerCustom)
@@ -213,6 +216,17 @@ begin
     raise EInOutArgumentException.Create('Search pattern Has invalid characters');
 
   InternalCheckDirPathParam(LPath, True);
+end;
+
+procedure TParallelFileScannerCustom.DoConvertRelativePathsToAbsolute(const AFileNames: TStringList);
+begin
+  for var LIndex := 0 to AFileNames.Count - 1 do
+  begin
+    var LCurrentFileName := AFileNames[LIndex];
+
+    if TPath.IsRelativePath(LCurrentFileName) then
+      AFileNames[LIndex] := TPath.GetFullPath(LCurrentFileName);
+  end;
 end;
 
 constructor TParallelFileScannerCustom.Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True);
@@ -339,6 +353,9 @@ begin
           // This is now about 650ms so maybe no use to optimize much
           GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
 
+          if ConvertRelativePathsToAbsolute then
+            DoConvertRelativePathsToAbsolute(LTempFileNames);
+
           if LTempFileNames.Count > 0 then
           begin
             FLock.Acquire;
@@ -424,6 +441,9 @@ begin
         LTempFileNames := TStringList.Create;
         try
           GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
+
+          if ConvertRelativePathsToAbsolute then
+            DoConvertRelativePathsToAbsolute(LTempFileNames);
 
           for LIndex := 0 to LTempFileNames.Count - 1 do
           begin

@@ -42,9 +42,9 @@ object DPFSMainForm: TDPFSMainForm
   object MemoLog: TMemo
     AlignWithMargins = True
     Left = 3
-    Top = 101
+    Top = 120
     Width = 608
-    Height = 332
+    Height = 321
     Margins.Left = 8
     Margins.Top = 8
     Margins.Right = 8
@@ -66,5 +66,17 @@ object DPFSMainForm: TDPFSMainForm
     Caption = 'OTL Queue parallel scan'
     TabOrder = 3
     OnClick = ButtonOtlQueueClick
+  end
+  object CheckBoxConvertRelativePathsToAbsolute: TCheckBox
+    AlignWithMargins = True
+    Left = 8
+    Top = 96
+    Width = 608
+    Height = 17
+    Margins.Left = 8
+    Margins.Right = 8
+    Align = alTop
+    Caption = 'Convert Relative Paths To Absolute'
+    TabOrder = 4
   end
 end

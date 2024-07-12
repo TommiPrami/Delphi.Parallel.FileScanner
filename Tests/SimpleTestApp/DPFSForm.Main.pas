@@ -14,10 +14,11 @@ type
     ButtonParallelScanSpring: TButton;
     MemoLog: TMemo;
     ButtonOtlQueue: TButton;
+    CheckBoxConvertRelativePathsToAbsolute: TCheckBox;
+    procedure ButtonOtlQueueClick(Sender: TObject);
     procedure ButtonParallelScanClick(Sender: TObject);
     procedure ButtonParallelScanSpringClick(Sender: TObject);
     procedure FormCreate(Sender: TObject);
-    procedure ButtonOtlQueueClick(Sender: TObject);
   strict private
     procedure UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
     procedure LogCommon(const AParallelScanner: TParallelFileScannerCustom);
@@ -56,6 +57,7 @@ begin
     LOTLValueQueue := CreateOmniValueQueue(False);
     LParallelScanner := TParallelFileScanner.Create(GetExtensions);
     try
+      LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
       LExludes := GetExcludes;
 
       if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LOTLValueQueue, LFileCount, tpIdle) then
@@ -96,6 +98,7 @@ begin
     LFilesList := TStringList.Create;
     LParallelScanner := TParallelFileScanner.Create(GetExtensions);
     try
+      LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
       LExludes := GetExcludes;
 
       if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList
@@ -126,10 +129,10 @@ var
 begin
   UpdateGUIState(Sender as TControl, False);
   try
-
     LFilesList := TCollections.CreateList<string>;
     LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions);
     try
+      LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
       LExludes := GetExcludes;
 
       if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList
