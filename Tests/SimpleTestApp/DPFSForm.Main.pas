@@ -205,6 +205,7 @@ begin
   else
   begin
     MemoLog.Lines.EndUpdate;
+    MemoLog.Perform(WM_VSCROLL, SB_BOTTOM, 0);
     Screen.Cursor := crDefault;
   end;
 end;
