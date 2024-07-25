@@ -17,6 +17,8 @@ uses
 type
   TDirectoryWalkProc = reference to procedure(const AFileName: string);
 
+  TExclusionArray = (eaPathPrefixes, eaPathSuffixes);
+
   TFileScanExclusions = record
   strict private
     FUpdateCount: Integer;
@@ -40,6 +42,7 @@ type
     property PathSuffixes: TArray<string> read FPathSuffixes write SetPathSuffixes;
     property PathSuffixesString: string read GetPathSuffixesString;
   public
+    procedure InitArrayFromStrings(const AArray: TExclusionArray; const AArrayData: TStrings);
     property UpperPathPrefixes: TArray<string> read GetUpperPathPrefixes;
     property UpperPathSuffixes: TArray<string> read GetUpperPathSuffixes;
   end;
@@ -111,6 +114,8 @@ type
     {$ENDIF}
   end;
 
+  procedure InitArrayDataFromStrings(var AArray: TArray<string>; const AArrayData: TStrings);
+
 implementation
 
 uses
@@ -120,6 +125,17 @@ uses
 {$ELSE}
   , System.Threading
 {$ENDIF};
+
+procedure InitArrayDataFromStrings(var AArray: TArray<string>; const AArrayData: TStrings);
+var
+  LIndex: Integer;
+begin
+  AArray := [];
+  SetLength(AArray, AArrayData.Count);
+
+  for LIndex := 0 to AArrayData.Count - 1 do
+    AArray[LIndex] := AArrayData[LIndex];
+end;
 
 { TFileScanExcludes }
 
@@ -172,6 +188,14 @@ end;
 class operator TFileScanExclusions.Initialize(out ADest: TFileScanExclusions);
 begin
   ADest.FUpdateCount := 0;
+end;
+
+procedure TFileScanExclusions.InitArrayFromStrings(const AArray: TExclusionArray; const AArrayData: TStrings);
+begin
+  case AArray of
+    eaPathPrefixes: InitArrayDataFromStrings(FPathPrefixes, AArrayData);
+    eaPathSuffixes: InitArrayDataFromStrings(FPathSuffixes, AArrayData);
+  end;
 end;
 
 procedure TFileScanExclusions.SetPathPrefixes(const AValue: TArray<string>);
