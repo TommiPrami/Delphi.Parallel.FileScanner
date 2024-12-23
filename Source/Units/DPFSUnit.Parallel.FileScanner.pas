@@ -8,11 +8,10 @@ interface
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
 
 uses
-  System.Classes, System.IOUtils, System.Math, System.SyncObjs, System.SysUtils, System.Generics.Collections
+  System.Classes, System.Generics.Collections, System.IOUtils, System.Math, System.SyncObjs, System.SysUtils
   {$IFDEF USE_OMNI_THREAD_LIBRARY}
   , OtlTaskControl, OtlContainers
-  {$ENDIF}
-  ;
+  {$ENDIF};
 
 type
   TDirectoryWalkProc = reference to procedure(const AFileName: string);
@@ -85,7 +84,7 @@ type
     {$ENDIF}): Boolean; overload; virtual;
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; overload; virtual;
+      const AFileNamesOmniValueQueue: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; overload; virtual;
     {$ENDIF}
   public
     constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload;
@@ -427,7 +426,7 @@ end;
 
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
+  const AFileNamesOmniValueQueue: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
 var
   LTaskConfig: IOmniTaskConfig;
   LCurrentRootPath: string;
@@ -471,9 +470,17 @@ begin
 
           for LIndex := 0 to LTempFileNames.Count - 1 do
           begin
-            LOmniValue := LTempFileNames[LIndex];
+            FLock.Acquire;
+            try
+              var LFileName: string;
+              LFileName := LTempFileNames[LIndex];
 
-            AFileNamesList.Enqueue(LOmniValue);
+              LOmniValue.AsString := LFileName;
+              AFileNamesOmniValueQueue.Enqueue(LOmniValue);
+            finally
+              FLock.Release;
+            end;
+
             LFileCount.Increment;
           end;
         finally
