@@ -69,13 +69,13 @@ begin
       LTaskConfig.SetPriority(APriority);
 
       Parallel
-        .For(0, FExtensions.Count - 1)
+        .&for(0, FExtensions.Count - 1)
         .TaskConfig(LTaskConfig)
         .NumTasks(TThread.ProcessorCount)
         .Execute(
 {$ELSE}
       TParallel
-        .For(0, FExtensions.Count - 1,
+        .&for(0, FExtensions.Count - 1,
 {$ENDIF}
         procedure(AIndex: Integer)
         var
