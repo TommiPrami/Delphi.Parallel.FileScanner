@@ -1,4 +1,4 @@
-unit DPFSUnit.Parallel.FileScanner.Spring;
+﻿unit DPFSUnit.Parallel.FileScanner.Spring;
 
 interface
 
