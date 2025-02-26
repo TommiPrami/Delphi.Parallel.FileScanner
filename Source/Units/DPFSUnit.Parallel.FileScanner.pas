@@ -3,7 +3,7 @@
 interface
 
 {TODO: Could we move more code to the to the TParallelFileScannerCustom? Have to think about it.
-       Still way too much duplicate code between "reguar" and Spring4D version }
+       Still way too much duplicate code between "regular" and Spring4D version }
 
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
 
