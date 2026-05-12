@@ -305,7 +305,7 @@ begin
     LCurrentExcludedFilename := FExclusions.UpperPathSuffixes[LIndex];
 
     if LCurrentFilename.EndsWith(LCurrentExcludedFilename) then
-      Exit(True)
+      Exit(True);
   end;
 end;
 
