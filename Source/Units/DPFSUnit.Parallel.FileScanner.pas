@@ -2,9 +2,6 @@
 
 interface
 
-{TODO: The RTL and Spring4D variants still duplicate the parallel GetFileList body; only the
-       result container differs. A shared "result sink" seam could remove what is left. }
-
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
 
 uses
@@ -65,8 +62,12 @@ type
     function ExcludedPathByPrefix(const APath: string): Boolean;
     function MatchesAnyExtension(const AFileName: string): Boolean;
     function BuildScanJobs(const ADirectories: TArray<string>): TArray<TScanJob>;
-    procedure MergeResultLists(const AResultList: TObjectList<TStringList>; const AResult: TStringList); virtual;
     procedure WalkThroughDirectory(const APath: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
+    // Shared scan/merge core for both the RTL and Spring4D result containers.
+    function ScanToArray(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): TArray<string>;
     // GetFileList overloads
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -319,11 +320,12 @@ begin
   end;
 end;
 
-function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TStringList
+function TParallelFileScannerCustom.ScanToArray(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+{$ENDIF}): TArray<string>;
+const
+  MERGE_INITIAL_CAPACITY = 2000;
 var
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   LTaskConfig: IOmniTaskConfig;
@@ -331,6 +333,8 @@ var
   LListOfFileLists: TObjectList<TStringList>;
   LScanJobs: TArray<TScanJob>;
   LFileScanStopWatch: TStopwatch;
+  LUniqueFiles: TDictionary<string, Boolean>;
+  LResult: TStringList;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
   FExclusions := AExclusions;
@@ -341,6 +345,8 @@ begin
   LScanJobs := BuildScanJobs(ADirectories);
 
   LListOfFileLists := TObjectList<TStringList>.Create(True);
+  LUniqueFiles := TDictionary<string, Boolean>.Create(MERGE_INITIAL_CAPACITY);
+  LResult := TStringList.Create;
   try
     if Length(LScanJobs) > 0 then
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -390,17 +396,39 @@ begin
 {$ENDIF}
 
     // All worker tasks have finished here (Execute blocks), so no lock is needed.
-    MergeResultLists(LListOfFileLists, AFileNamesList);
+    // Deduplicate across the per-job lists (only matters when scanned roots overlap),
+    // preserving first-seen order; sorting is applied only when SortResultList is set.
+    for var LList in LListOfFileLists do
+      for var LFileName in LList do
+        if LUniqueFiles.TryAdd(LFileName, True) then
+          LResult.Add(LFileName);
 
     if FSortResultList then
-      AFileNamesList.Sort;
+      LResult.Sort;
+
+    Result := LResult.ToStringArray;
   finally
+    LResult.Free;
+    LUniqueFiles.Free;
     LListOfFileLists.Free;
   end;
 
-  Result := AFileNamesList.Count > 0;
   LFileScanStopWatch.Stop;
   FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
+end;
+
+function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+  const AFileNamesList: TStringList
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF}): Boolean;
+begin
+  AFileNamesList.AddStrings(ScanToArray(ADirectories, AExclusions
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+    , APriority
+{$ENDIF}));
+
+  Result := AFileNamesList.Count > 0;
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
@@ -476,27 +504,6 @@ begin
     FCachedSkippedDirectoriesFileCount := GetFileCounts(FSkippedDirectories);
 
   Result := FSkippedFilesCount + FCachedSkippedDirectoriesFileCount;
-end;
-
-procedure TParallelFileScannerCustom.MergeResultLists(const AResultList: TObjectList<TStringList>;
-  const AResult: TStringList);
-const
-  MERGE_INITIAL_CAPACITY = 2000;
-var
-  LUniqueFiles: TDictionary<string, Boolean>;
-begin
-  // Deduplicate across the per-job lists (only matters when the scanned roots overlap).
-  // The caller sorts the result afterwards when SortResultList is set.
-  LUniqueFiles := TDictionary<string, Boolean>.Create(MERGE_INITIAL_CAPACITY);
-  try
-    for var LList in AResultList do
-      for var LFileName in LList do
-        LUniqueFiles.TryAdd(LFileName, True);
-
-    AResult.AddStrings(LUniqueFiles.Keys.ToArray);
-  finally
-    LUniqueFiles.Free;
-  end;
 end;
 
 procedure TParallelFileScannerCustom.WalkThroughDirectory(const APath: string;
