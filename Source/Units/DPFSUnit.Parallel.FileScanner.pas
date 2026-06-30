@@ -42,6 +42,8 @@ type
     FSkippedDirectories: TStringList;
     FCachedSkippedDirectoriesFileCount: Integer;
     FConvertRelativePathsToAbsolute: Boolean;
+    FFastExtensions: TArray<string>;  // extensions (with dot, e.g. '.pas') for simple "*.ext" patterns
+    FComplexPatterns: TArray<string>; // patterns that still need full TPath.MatchesPattern
     function GetSkippedFilesCount: Integer;
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     procedure AddSkippedDirectories(const APath: string);
@@ -57,17 +59,17 @@ type
     FSkippedFilesCount: Integer;
     FSortResultList: Boolean;
     procedure ResetCounters;
-    procedure CheckExtensions;
+    procedure PrepareExtensions;
     function ExcludedFileNameBySuffix(const AFileName: string): Boolean;
     function ExcludedPathByPrefix(const APath: string): Boolean;
     function MatchesAnyExtension(const AFileName: string): Boolean;
     function BuildScanJobs(const ADirectories: TArray<string>): TArray<TScanJob>;
     procedure WalkThroughDirectory(const APath: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
-    // Shared scan/merge core for both the RTL and Spring4D result containers.
-    function ScanToArray(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions
+    // Shared scan/merge core for both the RTL and Spring4D result containers; fills AResult.
+    procedure ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AResult: TStringList
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
       ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): TArray<string>;
+    {$ENDIF});
     // GetFileList overloads
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -233,16 +235,43 @@ begin
   end;
 end;
 
-procedure TParallelFileScannerCustom.CheckExtensions;
+procedure TParallelFileScannerCustom.PrepareExtensions;
+var
+  LFast: TList<string>;
+  LComplex: TList<string>;
 begin
-  for var LIndex := 0 to FExtensions.Count - 1 do
-  begin
-    var LPattern := FExtensions[LIndex];
+  LFast := TList<string>.Create;
+  LComplex := TList<string>.Create;
+  try
+    for var LIndex := 0 to FExtensions.Count - 1 do
+    begin
+      var LPattern := FExtensions[LIndex];
 
-    if Trim(LPattern) = '' then
-      raise EInOutArgumentException.Create('Empty search pattern')
-    else if not TPath.HasValidFileNameChars(LPattern, True) then
-      raise EInOutArgumentException.Create('Search pattern has invalid characters');
+      if Trim(LPattern) = '' then
+        raise EInOutArgumentException.Create('Empty search pattern')
+      else if not TPath.HasValidFileNameChars(LPattern, True) then
+        raise EInOutArgumentException.Create('Search pattern has invalid characters');
+
+      // A plain "*.ext" pattern (no further wildcards) can be matched with a fast, allocation-free
+      // extension compare instead of TPath.MatchesPattern, which would run once per file scanned.
+      if LPattern.StartsWith('*.') then
+      begin
+        var LExtension := LPattern.Substring(1); // ".ext" from "*.ext"
+
+        if (Length(LExtension) > 1) and (LExtension.IndexOfAny(['*', '?']) < 0) then
+          LFast.Add(LExtension)
+        else
+          LComplex.Add(LPattern);
+      end
+      else
+        LComplex.Add(LPattern);
+    end;
+
+    FFastExtensions := LFast.ToArray;
+    FComplexPatterns := LComplex.ToArray;
+  finally
+    LComplex.Free;
+    LFast.Free;
   end;
 end;
 
@@ -299,8 +328,13 @@ function TParallelFileScannerCustom.MatchesAnyExtension(const AFileName: string)
 begin
   Result := False;
 
-  for var LIndex := 0 to FExtensions.Count - 1 do
-    if TPath.MatchesPattern(AFileName, FExtensions[LIndex], False) then
+  // Fast path: a plain "*.ext" pattern is just a case-insensitive suffix test (no allocation).
+  for var LFast in FFastExtensions do
+    if AFileName.EndsWith(LFast, True) then
+      Exit(True);
+
+  for var LPattern in FComplexPatterns do
+    if TPath.MatchesPattern(AFileName, LPattern, False) then
       Exit(True);
 end;
 
@@ -320,10 +354,11 @@ begin
   end;
 end;
 
-function TParallelFileScannerCustom.ScanToArray(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions
+procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+  const AResult: TStringList
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): TArray<string>;
+{$ENDIF});
 const
   MERGE_INITIAL_CAPACITY = 2000;
 var
@@ -334,19 +369,18 @@ var
   LScanJobs: TArray<TScanJob>;
   LFileScanStopWatch: TStopwatch;
   LUniqueFiles: TDictionary<string, Boolean>;
-  LResult: TStringList;
+  LUpperBound: Integer;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
   FExclusions := AExclusions;
 
   ResetCounters;
-  CheckExtensions;
+  PrepareExtensions;
 
   LScanJobs := BuildScanJobs(ADirectories);
 
   LListOfFileLists := TObjectList<TStringList>.Create(True);
   LUniqueFiles := TDictionary<string, Boolean>.Create(MERGE_INITIAL_CAPACITY);
-  LResult := TStringList.Create;
   try
     if Length(LScanJobs) > 0 then
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -398,17 +432,19 @@ begin
     // All worker tasks have finished here (Execute blocks), so no lock is needed.
     // Deduplicate across the per-job lists (only matters when scanned roots overlap),
     // preserving first-seen order; sorting is applied only when SortResultList is set.
+    LUpperBound := 0;
+    for var LList in LListOfFileLists do
+      Inc(LUpperBound, LList.Count);
+    AResult.Capacity := AResult.Count + LUpperBound;
+
     for var LList in LListOfFileLists do
       for var LFileName in LList do
         if LUniqueFiles.TryAdd(LFileName, True) then
-          LResult.Add(LFileName);
+          AResult.Add(LFileName);
 
     if FSortResultList then
-      LResult.Sort;
-
-    Result := LResult.ToStringArray;
+      AResult.Sort;
   finally
-    LResult.Free;
     LUniqueFiles.Free;
     LListOfFileLists.Free;
   end;
@@ -423,10 +459,10 @@ function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<strin
   ; const APriority: TOTLThreadPriority = tpNormal
 {$ENDIF}): Boolean;
 begin
-  AFileNamesList.AddStrings(ScanToArray(ADirectories, AExclusions
+  ScanInto(ADirectories, AExclusions, AFileNamesList
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
     , APriority
-{$ENDIF}));
+{$ENDIF});
 
   Result := AFileNamesList.Count > 0;
 end;
@@ -456,7 +492,7 @@ begin
   FExclusions := AExclusions;
 
   ResetCounters;
-  CheckExtensions;
+  PrepareExtensions;
   AFileCount := 0;
   LFileCount.Value := 0;
 

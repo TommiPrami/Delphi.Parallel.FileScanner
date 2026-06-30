@@ -13,7 +13,7 @@ uses
 
 type
   // Spring4D-flavoured result container. The actual scanning/merging lives in the base
-  // class (ScanToArray); these overloads only adapt the result into an IList<string>.
+  // class (ScanInto); these overloads only adapt the result into an IList<string>.
   TParallelFileScannerSpring = class(TParallelFileScannerCustom)
   public
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
@@ -38,11 +38,20 @@ function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<strin
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   ; const APriority: TOTLThreadPriority = tpNormal
 {$ENDIF}): Boolean;
+var
+  LResults: TStringList;
 begin
-  AFileNamesList.AddRange(ScanToArray(ADirectories, AExclusions
+  // Scan into a plain TStringList in the base, then bulk-copy into the Spring4D list once.
+  LResults := TStringList.Create;
+  try
+    ScanInto(ADirectories, AExclusions, LResults
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    , APriority
-{$ENDIF}));
+      , APriority
+{$ENDIF});
+    AFileNamesList.AddRange(LResults.ToStringArray);
+  finally
+    LResults.Free;
+  end;
 
   Result := AFileNamesList.Count > 0;
 end;
