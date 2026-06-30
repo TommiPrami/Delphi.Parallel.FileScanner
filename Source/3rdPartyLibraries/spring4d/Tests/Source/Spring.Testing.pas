@@ -133,7 +133,7 @@ type
     constructor Create(const method: TRttiMethod; const args: TArray<TValue>); reintroduce;
     function GetName: string; override;
 
-    procedure CheckEqualsString(const expected, actual: string; const msg: string = '');
+    procedure CheckEqualsString(const expected, actual: string; const msg: string = ''); reintroduce;
 
     property Name: string read fName write fName;
     class function Suite: ITestSuite; override;

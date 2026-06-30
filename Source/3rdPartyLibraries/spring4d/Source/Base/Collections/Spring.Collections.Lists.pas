@@ -619,7 +619,7 @@ var
   listCount: Integer;
 begin
   listCount := Count;
-  if Cardinal(index) < Cardinal(listCount) then
+  if index < listCount then
     Result := LastIndexOf(item, index, index + 1)
   else
     Result := RaiseHelper.ArgumentOutOfRange_Index;
@@ -675,6 +675,8 @@ end;
 procedure TAbstractArrayList<T>.SetItem(index: Integer; const value: T);
 var
   listCount: Integer;
+  itemRef: Pointer<T>.Raw;
+  item: TObject;
 begin
   listCount := Count;
   if Cardinal(index) < Cardinal(listCount) then
@@ -685,9 +687,20 @@ begin
       Inc(fVersion);
       {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
 
-      if OwnsObjects then
-        TArray<TObject>(fItems)[index].Free;
-      fItems[index] := value;
+      {$IFDEF DELPHIXE7_UP}
+      if GetTypeKind(T) = tkClass then
+      {$ELSE}
+      if TType.Kind<T> = tkClass then
+      {$ENDIF}
+      begin
+        itemRef := @fItems[index];
+        item := PObject(itemRef)^;
+        itemRef^ := value;
+        if OwnsObjects then
+          item.Free;
+      end
+      else
+        fItems[index] := value;
       Exit;
     end;
     SetItemInternal(index, value);
@@ -1331,6 +1344,8 @@ begin
   if Cardinal(index1) >= Cardinal(listCount) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.index1);
   if Cardinal(index2) >= Cardinal(listCount) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.index2);
 
+  if index1 = index2 then Exit;
+
   temp := fItems[index1];
 
   {$Q-}
@@ -1830,12 +1845,21 @@ var
   listCount: Integer;
 begin
   listCount := Count;
-  Result := LastIndexOf(item, listCount - 1, listCount);
+  if listCount > 0 then
+    Result := LastIndexOf(item, listCount - 1, listCount)
+  else
+    Result := -1;
 end;
 
 function TSortedList<T>.LastIndexOf(const item: T; index: Integer): Integer;
+var
+  listCount: Integer;
 begin
-  Result := LastIndexOf(item, index, index + 1);
+  listCount := Count;
+  if index < listCount then
+    Result := LastIndexOf(item, index, index + 1)
+  else
+    Result := RaiseHelper.ArgumentOutOfRange_Index;
 end;
 
 function TSortedList<T>.LastIndexOf(const item: T; index, count: Integer): Integer;
@@ -1846,21 +1870,26 @@ var
   searchResult: Boolean;
 begin
   listCount := Self.Count;
-  if (Cardinal(index) < Cardinal(listCount)) or (index or listcount = 0) then
-    if Cardinal(count) <= Cardinal(index + 1) then
-    begin
-      {$R-}
-      offset := index - count + 1;
-      span.Init(@fItems[offset], count);
-      {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
-      searchResult := TArray.BinarySearchUpperBound<T>(span, item, foundIndex, fComparer);
-      Inc(foundIndex, offset);
-      Result := foundIndex or Pred(Integer(searchResult));
-    end
+
+  if listCount = 0 then
+    if (index <> - 1) and (index <> 0) then
+      Exit(RaiseHelper.ArgumentOutOfRange_Index)
+    else if count <> 0 then
+      Exit(RaiseHelper.ArgumentOutOfRange_Count)
     else
-      Result := RaiseHelper.ArgumentOutOfRange_Count
-  else
-    Result := RaiseHelper.ArgumentOutOfRange_Index;
+      Exit(-1);
+  if Cardinal(index) >= Cardinal(listCount) then
+    Exit(RaiseHelper.ArgumentOutOfRange_Index);
+  if Cardinal(count) > Cardinal(index + 1) then
+    Exit(RaiseHelper.ArgumentOutOfRange_Count);
+
+  {$R-}
+  offset := index - count + 1;
+  span.Init(@fItems[offset], count);
+  {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
+  searchResult := TArray.BinarySearchUpperBound<T>(span, item, foundIndex, fComparer);
+  Inc(foundIndex, offset);
+  Result := foundIndex or Pred(Integer(searchResult));
 end;
 
 procedure TSortedList<T>.Move(sourceIndex, targetIndex: Integer);
@@ -2017,6 +2046,8 @@ var
 begin
   if Cardinal(index1) >= Cardinal(fCollection.Count) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.index1);
   if Cardinal(index2) >= Cardinal(fCollection.Count) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.index2);
+
+  if index1 = index2 then Exit;
 
   temp := T(fCollection.Items[index1]);
 
