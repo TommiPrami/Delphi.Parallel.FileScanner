@@ -151,6 +151,16 @@ msbuild Packages\Delphi12\Spring4D.groupproj /target:build /p:DCC_BuildAllUnits=
 msbuild Packages\Delphi12\Spring4D.groupproj /target:build /p:DCC_BuildAllUnits=true /p:Config=%config% /p:Platform=Win64 /verbosity:quiet
 )
 
+:Delphi13
+echo.
+echo Building for Delphi 13
+echo.
+if exist "C:\Program Files (x86)\Embarcadero\Studio\37.0\bin\rsvars.bat" (
+call "C:\Program Files (x86)\Embarcadero\Studio\37.0\bin\rsvars.bat"
+msbuild Packages\Delphi13\Spring4D.groupproj /target:build /p:DCC_BuildAllUnits=true /p:Config=%config% /p:Platform=Win32 /verbosity:quiet
+msbuild Packages\Delphi13\Spring4D.groupproj /target:build /p:DCC_BuildAllUnits=true /p:Config=%config% /p:Platform=Win64 /verbosity:quiet
+)
+
 
 :Exit
 rem pause
