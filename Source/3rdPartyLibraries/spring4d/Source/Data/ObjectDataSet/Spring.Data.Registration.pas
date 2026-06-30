@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -36,7 +36,7 @@ uses
   Classes,
   Spring.Data.ObjectDataSet;
 
-{$R ..\..\Resources\Spring.Data.ObjectDataSet.dcr}
+{$R ..\..\..\Resources\Spring.Data.ObjectDataSet.dcr}
 
 procedure Register;
 begin

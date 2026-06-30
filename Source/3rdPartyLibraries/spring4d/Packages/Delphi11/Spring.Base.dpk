@@ -75,9 +75,11 @@ contains
   Spring.Patterns.Specification in '..\..\Source\Base\Patterns\Spring.Patterns.Specification.pas',
   Spring.Reflection in '..\..\Source\Base\Spring.Reflection.pas',
   Spring.ResourceStrings in '..\..\Source\Base\Spring.ResourceStrings.pas',
+  Spring.Sorting in '..\..\Source\Base\Spring.Sorting.pas',
   Spring.Span in '..\..\Source\Base\Spring.Span.pas',
   Spring.SystemUtils in '..\..\Source\Base\Spring.SystemUtils.pas',
   Spring.Times in '..\..\Source\Base\Spring.Times.pas',
+  Spring.Threading in '..\..\Source\Base\Spring.Threading.pas',
   Spring.ValueConverters in '..\..\Source\Base\Spring.ValueConverters.pas',
   Spring.VirtualClass in '..\..\Source\Base\Spring.VirtualClass.pas',
   Spring.VirtualInterface in '..\..\Source\Base\Spring.VirtualInterface.pas';

@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -195,7 +195,8 @@ type
   end;
 
   /// <summary>
-  ///   Base <see cref="Spring.Persistence.Core.Interfaces|IDBPage&lt;T&gt;" />
+  ///   Base <see
+  ///   cref="Spring.Persistence.Criteria.Interfaces|IDBPage&lt;T&gt;" />
   ///   adapter which descendents must override.
   /// </summary>
   TDriverPageAdapter<T: class> = class(TInterfacedObject, IDBPage<T>)

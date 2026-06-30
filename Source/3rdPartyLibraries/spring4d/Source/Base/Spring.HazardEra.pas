@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -77,6 +77,7 @@ const
 
 {$IFDEF MSWINDOWS}
 function GetCurrentThreadID: TThreadID;
+{$IFDEF ASSEMBLER}
 asm
 {$IFDEF CPUX86}
   mov eax,fs:[$24]
@@ -84,6 +85,9 @@ asm
   mov eax,gs:[$48]
 {$ENDIF}
 end;
+{$ELSE}
+external 'kernel32.dll' name 'GetCurrentThreadId';
+{$ENDIF}
 {$ENDIF}
 
 function GetMem_Aligned64(size: Integer): Pointer;
@@ -104,6 +108,16 @@ begin
   UIntPtr(Result) := (UIntPtr(Result) + AlignmentMask) and not AlignmentMask;
 end;
 
+{$IFDEF CPUX86}
+function AtomicLoad(var source: Int64): Int64;
+asm
+  movq xmm0,[source]
+  movd eax,xmm0
+  psrldq xmm0,4
+  movd edx,xmm0
+end;
+{$ENDIF}
+
 {$ENDREGION}
 
 
@@ -113,6 +127,8 @@ const
   // size of used data in THazardEraThreadControlBlock
   DataSize =
     SizeOf(Pointer) +     // Next
+    SizeOf(Pointer) +     // Prev
+    SizeOf(NativeUInt) +  // ThreadId
     SizeOf(NativeInt) +   // Active
     SizeOf(TEra);         // Era
   CacheLineSize = 64;
@@ -122,69 +138,36 @@ type
   PHazardEraThreadControlBlock = ^THazardEraThreadControlBlock;
   THazardEraThreadControlBlock = record
   private
-    Next: PHazardEraThreadControlBlock;
+    Next, Prev: PHazardEraThreadControlBlock;
+    ThreadId: NativeUInt;
     Active: NativeInt;
     Era: TEra;
   strict private
     // ensure that each block aligns to its own cache line
     Padding: array[1..CacheLineSize - DataSize] of Byte;
-  public
-    procedure Store(
-      {$IFDEF CPUX86}{$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}{$ENDIF}
-      const value: TEra); {$IFNDEF CPUX86}inline;{$ENDIF}
-    function Load: TEra; {$IFNDEF CPUX86}inline;{$ENDIF}
   end;
 
   TThreadBlockList = record
   private class var
     blocks: array[0..255] of PHazardEraThreadControlBlock;
+    latest: PHazardEraThreadControlBlock;
   class threadvar
     activeBlock: PHazardEraThreadControlBlock;
   public
     class function Acquire(isFirstAttempt: Boolean): PHazardEraThreadControlBlock; static;
   end;
 
-function THazardEraThreadControlBlock.Load: TEra;
-{$IFDEF CPUX86}
-asm
-  movq xmm0,[Self].Era
-  movd eax,xmm0
-  psrldq xmm0,4
-  movd edx,xmm0
-end;
-{$ELSE}
-begin
-  Result := Era;
-end;
-{$ENDIF}
-
-procedure THazardEraThreadControlBlock.Store(
-  {$IFDEF CPUX86}{$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}{$ENDIF}
-  const value: TEra);
-{$IFDEF CPUX86}
-asm
-{$IFDEF SUPPORTS_CONSTREF}
-  movq xmm0,[value]
-{$ELSE}
-  movq xmm0,value
-{$ENDIF}
-  movq [Self].Era,xmm0
-end;
-{$ELSE}
-begin
-  Era := value;
-end;
-{$ENDIF}
-
 class function TThreadBlockList.Acquire(isFirstAttempt: Boolean): PHazardEraThreadControlBlock;
 
   function New(var era: PHazardEraThreadControlBlock; currentThreadId: TThreadID): PHazardEraThreadControlBlock;
   begin
     Result := GetMem_Aligned64(SizeOf(THazardEraThreadControlBlock));
+    Result.ThreadId := currentThreadId;
     Result.Active := Active;
     Result.Era := Inactive;
 
     Result.Next := PHazardEraThreadControlBlock(AtomicExchange(Pointer(era), Pointer(Result)));
+    Result.Prev := PHazardEraThreadControlBlock(AtomicExchange(Pointer(latest), Pointer(Result)));
     activeBlock := Result;
   end;
 
@@ -209,6 +192,7 @@ begin
   repeat
     if AtomicExchange(Result.Active, Active) = Inactive then
     begin
+      Result.ThreadId := currentThreadId;
       activeBlock := Result;
       Exit;
     end;
@@ -230,75 +214,106 @@ var
 
 
 function AcquireGuard(var p; isFirstAttempt: Boolean): GuardedPointer;
+{$IFDEF CPUX86}
+asm
+  push ebx
+  mov ebx, ecx
+  mov eax, [eax]
+  mov [ebx], eax
+  mov eax, edx
+  call TThreadBlockList.Acquire
+  mov [ebx].GuardedPointer.ThreadControlBlock, eax
+  movq xmm0, eraClock
+  movq [eax].THazardEraThreadControlBlock.Era, xmm0
+  pop ebx
+end;
+{$ELSE}
 var
   current: PHazardEraThreadControlBlock;
-  prevEra, era: TEra;
 begin
+  Result.ptr := Pointer(p);
   current := TThreadBlockList.Acquire(isFirstAttempt);
-  prevEra := current.Load;
-  repeat
-    Result.ptr := Pointer(p);
-    Result.ThreadControlBlock := current;
-
-    era := AtomicLoad(eraClock);
-    if era = prevEra then Break;
-    current.Store(era);
-    prevEra := era;
-  until False;
+  Result.ThreadControlBlock := current;
+  current.Era := eraClock;
 end;
+{$ENDIF}
 
 procedure GuardedPointer.Release;
+{$IFDEF CPUX86}
+asm
+  mov eax, [eax].GuardedPointer.ThreadControlBlock
+  pxor xmm0, xmm0
+  movq [eax].THazardEraThreadControlBlock.Era, xmm0
+  xor edx, edx
+  mov [eax].THazardEraThreadControlBlock.Active, edx
+end;
+{$ELSE}
 begin
   with PHazardEraThreadControlBlock(ThreadControlBlock)^ do
   begin
-    Store(0);
+    Era := 0;
     Active := 0;
   end;
 end;
+{$ENDIF}
 
 class operator GuardedPointer.Implicit(const value: GuardedPointer): Pointer;
 begin
   Result := value.ptr;
 end;
 
-function Delete_Ptr(const obj: PEraEntity): Boolean;
+function Delete_Ptr(const obj: PEraEntity): TThreadId;
+label
+  Exit;
 var
-  era: TEra;
   info: PHazardEraThreadControlBlock;
-  i: Integer;
+  era: TEra;
 begin
-  for i := 0 to High(TThreadBlockList.blocks) do
+  info := TThreadBlockList.latest;
+  while Assigned(info) do
   begin
-    info := TThreadBlockList.blocks[i];
-    while Assigned(info) do
+    if info.Active <> Inactive then
     begin
-      if info.Active <> Inactive then
-        era := info.Load
-      else
-        era := None;
-
-      if (era = None) or (era < obj.newEra) or (era > obj.delEra) then
-      begin
-        info := info.Next;
-        Continue;
-      end;
-      Exit(False);
+      era := {$IFDEF CPUX86}AtomicLoad(info.Era){$ELSE}info.Era{$ENDIF};
+      if (era >= obj.newEra) and (era <= obj.delEra) then
+        goto Exit;
     end;
+    info := info.Prev;
   end;
   FreeMem(obj);
-  Result := True;
+  System.Exit(0);
+Exit:
+  Result := info.ThreadId;
+end;
+
+type
+  TListHelper = class helper for TList
+    procedure DeleteRange(Index, Count: NativeInt);
+  end;
+
+procedure TListHelper.DeleteRange(Index, Count: NativeInt);
+var
+  DeleteCount, TailCount: NativeInt;
+begin
+  DeleteCount := Count;
+  with Self do
+  begin
+    Dec(FCount, DeleteCount);
+    TailCount := FCount - Index;
+    if TailCount > 0 then
+      System.Move(FList[Index + DeleteCount], FList[Index], TailCount * SizeOf(Pointer));
+  end;
 end;
 
 procedure Retire(p: PEraEntity);
 var
   currEra: TEra;
-  entity: PEraEntity;
-  info: PHazardEraThreadControlBlock;
-  i: Integer;
+  threadId, currentThreadId: TThreadID;
+  i, index, count: Integer;
 begin
   if Assigned(lock) then
   begin
-    currEra := AtomicLoad(eraClock);
+    currEra := {$IFDEF CPUX86}AtomicLoad(eraClock){$ELSE}eraClock{$ENDIF};
 
    	lock.Acquire;
     try
@@ -308,20 +323,30 @@ begin
         retiredList.Add(p);
       end;
 
-      if AtomicLoad(eraClock) = currEra then
+      if {$IFDEF CPUX86}AtomicLoad(eraClock){$ELSE}eraClock{$ENDIF} = currEra then
         AtomicIncrement(eraClock);
 
-      i := 0;
-      while i < retiredList.Count do
-        if Delete_Ptr(retiredList.List[i]) then
-          retiredList.Delete(i)
-        else
+      currentThreadId := GetCurrentThreadID;
+      index := 0;
+      count := 0;
+      for i := 1 to retiredList.Count do
+      begin
+        threadId := Delete_Ptr(retiredList.List[index + count]);
+        if threadId <> 0 then
         begin
-          entity := retiredList.List[i];
-          repeat
-            Inc(i);
-          until (i >= retiredList.Count) or (PEraEntity(retiredList.List[i]).delEra > entity.delEra);
-        end;
+          if threadId = currentThreadId then Break;
+          if count > 0 then
+          begin
+            retiredList.DeleteRange(index, count);
+            count := 0;
+          end;
+          Inc(index);
+        end
+        else
+          Inc(count);
+      end;
+      if count > 0 then
+        retiredList.DeleteRange(index, count);
     finally
       lock.Release;
     end;
@@ -367,7 +392,7 @@ begin
   ReallocMem(p, newSize);
   if newSize > oldSize then
     FillChar((PByte(p) + oldSize)^, newSize - oldSize, 0);
-  p.newEra := AtomicLoad(eraClock);
+  p.newEra := {$IFDEF CPUX86}AtomicLoad(eraClock){$ELSE}eraClock{$ENDIF};
   p.elemInfo := elemInfo;
   p.Length := count;
   Inc(UIntPtr(p), SizeOf(TEraArray));

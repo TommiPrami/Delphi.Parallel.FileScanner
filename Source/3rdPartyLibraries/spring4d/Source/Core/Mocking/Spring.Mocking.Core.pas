@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -57,7 +57,7 @@ type
       const constructorArguments: array of TValue): TValue;
   public
     constructor Create(typeInfo: PTypeInfo; const interceptor: TMockInterceptor;
-      const proxy: TValue) overload;
+      const proxy: TValue); overload;
     constructor Create(typeInfo: PTypeInfo;
       behavior: TMockBehavior = DefaultMockBehavior); overload;
     constructor Create(typeInfo: PTypeInfo;
@@ -255,7 +255,7 @@ end;
 
 function TMock.Default(const target): ISetup;
 begin
-  fInterceptor.SetDefaultExpectations(TValue.From(target, fTypeInfo));
+  fInterceptor.SetDefaultExpectations(TValue.From(fTypeInfo, target));
   Result := Self;
 end;
 

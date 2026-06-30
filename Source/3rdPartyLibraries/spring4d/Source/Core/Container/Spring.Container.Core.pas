@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -265,14 +265,14 @@ type
   ICreationContext = interface(ISubDependencyResolver)
     ['{0E788A94-AD9B-4951-85C1-40F877BB8A24}']
     function EnterResolution(const model: TComponentModel;
-      out instance: TValue): Boolean;
+      var instance: TValue): Boolean;
     procedure LeaveResolution(const model: TComponentModel);
 
     function AddArgument(const argument: TValue): Integer;
     procedure RemoveTypedArgument(index: Integer);
     procedure AddPerResolve(const model: TComponentModel; const instance: TValue);
     function TryHandle(const injection: IInjection;
-      out handled: IInjection): Boolean;
+      var handled: IInjection): Boolean;
   end;
 
   IDependencyResolver = interface(ISubDependencyResolver)
@@ -434,7 +434,7 @@ type
 
   EActivatorException = class(EContainerException);
 
-  TInjectableMethodFilter = class(TSpecification<TRttiMethod>)
+  TInjectableMethodFilter = class(TRefCountedObject, ISpecification<TRttiMethod>)
   private
     fKernel: TKernel;
     fModel: TComponentModel;
@@ -442,15 +442,15 @@ type
   public
     constructor Create(const kernel: TKernel; const model: TComponentModel;
       const arguments: TArray<TValue>);
-    function IsSatisfiedBy(const method: TRttiMethod): Boolean; override;
+    function IsSatisfiedBy(const method: TRttiMethod): Boolean;
   end;
 
-  TContainsMemberFilter = class(TSpecification<IInjection>)
+  TContainsMemberFilter = class(TRefCountedObject, ISpecification<IInjection>)
   private
     fMember: TRttiMember;
   public
     constructor Create(const member: TRttiMember);
-    function IsSatisfiedBy(const injection: IInjection): Boolean; override;
+    function IsSatisfiedBy(const injection: IInjection): Boolean;
   end;
 
   TInjectionFilters = class

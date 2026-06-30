@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -153,7 +153,8 @@ begin
         Exit(False);
       if method.DispatchKind <> dkVtable then
       begin
-        hook.NonVirtualMemberNotification(method);
+        if Assigned(hook) then
+          hook.NonVirtualMemberNotification(method);
         Exit(False);
       end;
       if method.VirtualIndex < 0 then
@@ -215,6 +216,7 @@ var
   interfaces: IEnumerable<TRttiInterfaceType>;
   intf: TRttiInterfaceType;
   additionalInterface: PTypeInfo;
+  proxy: IInterface;
 begin
   entryCount := Length(additionalInterfaces) + 1;
   for i := 0 to options.Mixins.Count - 1 do
@@ -242,9 +244,8 @@ begin
   for i := 1 to Length(additionalInterfaces) do
   begin
     additionalInterface := additionalInterfaces[i - 1];
-    TInterfaceProxy.Create(additionalInterface, [], options, nil,
-      fInterceptors.ToArray).QueryInterface(
-      additionalInterface.TypeData.Guid, fAdditionalInterfaces[i - 1]);
+    proxy := TInterfaceProxy.Create(additionalInterface, [], options, nil, fInterceptors.ToArray);
+    proxy.QueryInterface(additionalInterface.TypeData.Guid, fAdditionalInterfaces[i - 1]);
     table.Entries[i].IID := additionalInterfaces[i - 1].TypeData.Guid;
     table.Entries[i].VTable := nil;
     table.Entries[i].IOffset := 0;

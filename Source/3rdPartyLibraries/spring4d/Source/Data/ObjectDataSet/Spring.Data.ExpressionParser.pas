@@ -140,10 +140,8 @@ type
   TScan = class(TObjectList)
   private
     FErrorMessage: string;
-    function GetItem(Index: Integer): TLex;
   public
     constructor Create;
-    property Items[Index: Integer]: TLex read GetItem; default;
     function Parse(const Str: string): Boolean;
     {$IFDEF TESTING_PARSER}
     procedure DebugPrint;
@@ -300,11 +298,6 @@ begin
   inherited Create;
   OwnsObjects := True;
   FErrorMessage := '';
-end;
-
-function TScan.GetItem(Index: Integer): TLex;
-begin
-  Result := inherited Items[Index] as TLex;
 end;
 
 function TScan.Parse(const Str: string): Boolean;
@@ -525,7 +518,7 @@ end;
 function TParser.LexLook(LookAhead: Integer): TLex;
 begin
   if (FScanIdx + LookAhead) < FScan.Count then
-    Result := FScan[FScanIdx + LookAhead]
+    Result := TLex(FScan[FScanIdx + LookAhead])
   else
     Result := ELexEOF;
 end;

@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -168,6 +168,12 @@ uses
   Spring.Container.ResourceStrings,
   Spring.Reflection;
 
+type
+  TDynArrayMarker = type Pointer;
+
+var
+  DynArrayMarker: TValue;
+
 
 {$REGION 'TSubDependencyResolverBase'}
 
@@ -183,13 +189,16 @@ end;
 
 function TSubDependencyResolverBase.CanResolve(const context: ICreationContext; //FI:O804
   const dependency: TDependencyModel; const argument: TValue): Boolean;
+var
+  typeInfo: PTypeInfo;
 begin
-  if not argument.IsEmpty and argument.IsString then
-    Result := not Kernel.Registry.HasService(dependency.TypeInfo, argument.AsString)
-      and (dependency.TypeInfo <> argument.TypeInfo)
+  typeInfo := dependency.TypeInfo;
+  if typeInfo = TValueData(argument).FTypeInfo then
+    Exit(False);
+  if argument.IsEmpty or (TValueData(argument).FTypeInfo.Kind <> tkUString) then
+    Result := not Kernel.Registry.HasService(typeInfo)
   else
-    Result := not Kernel.Registry.HasService(dependency.TypeInfo)
-      and (dependency.TypeInfo <> argument.TypeInfo);
+    Result := not Kernel.Registry.HasService(typeInfo, PUnicodeString(argument.GetReferenceToRawData)^);
 end;
 
 {$ENDREGION}
@@ -264,7 +273,6 @@ end;
 function TDependencyResolver.CanResolve(const context: ICreationContext;
   const dependency: TDependencyModel; const argument: TValue): Boolean;
 var
-  kind: TTypeKind;
   serviceName: string;
   componentModel: TComponentModel;
 begin
@@ -282,7 +290,7 @@ begin
 
   if argument.IsEmpty then
     Result := Kernel.Registry.HasDefault(dependency.TypeInfo)
-  else if argument.TryAsType(TypeInfo(TTypeKind), kind) and (kind = tkDynArray) then
+  else if TValueData(argument).FTypeInfo = TypeInfo(TDynArrayMarker) then
     Result := Kernel.Registry.HasService(dependency.TypeInfo)
   else
   begin
@@ -355,19 +363,19 @@ function TDependencyResolver.CanResolveFromArgument(const context: ICreationCont
   const dependency: TDependencyModel;
   const argument: TValue): Boolean;
 begin
-  Result := Assigned(argument.TypeInfo) and argument.IsType(dependency.TypeInfo);
+  Result := Assigned(TValueData(argument).FTypeInfo) and argument.IsType(dependency.TypeInfo);
   if not Result and (argument.Kind in [tkInteger, tkFloat, tkInt64]) then
     Result := argument.Kind = dependency.TypeInfo.Kind;
   if Result and argument.IsString then
-    Result := not Kernel.Registry.HasService(dependency.TypeInfo, argument.AsString);
+    Result := not Kernel.Registry.HasService(dependency.TypeInfo, PUnicodeString(argument.GetReferenceToRawData)^);
 end;
 
 function TDependencyResolver.CanResolveFromContext(
   const context: ICreationContext;  const dependency: TDependencyModel;
   const argument: TValue): Boolean;
 begin
-  Result := Assigned(context)
-    and context.CanResolve(context, dependency, argument);
+  if not Assigned(context) then Exit(Boolean(Pointer(context)));
+  Result := context.CanResolve(context, dependency, argument);
 end;
 
 function TDependencyResolver.CanResolveFromSubResolvers(
@@ -410,14 +418,13 @@ var
   targetType: TRttiType;
   dependencyModel: TDependencyModel;
 begin
-  Result := IsLazyType(dependency.TypeInfo)
-    and inherited CanResolve(context, dependency, argument);
-  if Result then
-  begin
-    targetType := GetLazyType(dependency.TargetType.Handle).RttiType;
-    dependencyModel := TDependencyModel.Create(targetType, dependency.Target);
-    Result := Kernel.Resolver.CanResolve(context, dependencyModel, argument);
-  end;
+  Result := IsLazyType(dependency.TypeInfo);
+  if not Result then Exit;
+  Result := inherited CanResolve(context, dependency, argument);
+  if not Result then Exit;
+  targetType := GetLazyType(TRttiObject(dependency.TargetType).Handle).RttiType;
+  dependencyModel := TDependencyModel.Create(targetType, dependency.Target);
+  Result := Kernel.Resolver.CanResolve(context, dependencyModel, argument);
 end;
 
 function TLazyResolver.InternalResolve<T>(const context: ICreationContext;
@@ -521,30 +528,36 @@ function TDynamicArrayResolver.CanResolve(const context: ICreationContext;
   const dependency: TDependencyModel; const argument: TValue): Boolean;
 var
   targetType: TRttiType;
+  handle: PTypeInfo;
   dependencyModel: TDependencyModel;
 begin
   targetType := dependency.TargetType;
-  Result := targetType.IsDynamicArray
-    and inherited CanResolve(context, dependency, argument);
-  if Result then
+  handle := TRttiObject(targetType).Handle;
+  if handle.Kind = tkDynArray then
   begin
-    targetType := targetType.AsDynamicArray.ElementType;
+    Result := inherited CanResolve(context, dependency, argument);
+    if not Result then Exit;
+    targetType := TRttiDynamicArrayType(targetType).ElementType;
     dependencyModel := TDependencyModel.Create(targetType, dependency.Target);
-    Result := Kernel.Resolver.CanResolve(context, dependencyModel, TValue.From(tkDynArray));
-  end;
+    Result := Kernel.Resolver.CanResolve(context, dependencyModel, DynArrayMarker);
+  end
+  else
+    Result := False;
 end;
 
 function TDynamicArrayResolver.Resolve(const context: ICreationContext;
   const dependency: TDependencyModel; const argument: TValue): TValue;
 var
   targetType: TRttiType;
+  handle: PTypeInfo;
   dependencyModel: TDependencyModel;
   values: TArray<TValue>;
 begin
   targetType := dependency.TargetType;
-  if not targetType.IsDynamicArray then
+  handle := TRttiObject(targetType).Handle;
+  if handle.Kind <> tkDynArray then
     raise EResolveException.CreateResFmt(@SCannotResolveType, [dependency.Name]);
-  targetType := targetType.AsDynamicArray.ElementType;
+  targetType := TRttiDynamicArrayType(targetType).ElementType;
   dependencyModel := TDependencyModel.Create(targetType, dependency.Target);
 
   values := ResolveDynamicArray(Kernel, context, dependencyModel, targetType);
@@ -559,23 +572,37 @@ end;
 function TCollectionResolver.CanResolve(const context: ICreationContext;
   const dependency: TDependencyModel; const argument: TValue): Boolean;
 const
-  SupportedTypes: array[0..4] of string = (
-    'IList<>', 'IReadOnlyList<>', 'ICollection<>', 'IReadOnlyCollection<T>', 'IEnumerable<>');
+  SupportedTypes: array[0..4] of AnsiString = (
+    'IList<', 'IEnumerable<', 'ICollection<', 'IReadOnlyList<', 'IReadOnlyCollection<');
 var
   targetType: TRttiType;
+  handle: PTypeInfo;
   dependencyModel: TDependencyModel;
+  i, len: Integer;
 begin
   targetType := dependency.TargetType;
-  Result := targetType.IsGenericType
-    and MatchStr(targetType.GetGenericTypeDefinition, SupportedTypes)
-    and inherited CanResolve(context, dependency, argument);
-  if Result then
-  begin
-    targetType := GetElementType(targetType.Handle).RttiType;
-    dependencyModel := TDependencyModel.Create(targetType, dependency.Target);
-    Result := targetType.IsClassOrInterface
-      and Kernel.Resolver.CanResolve(context, dependencyModel, TValue.From(tkDynArray));
-  end;
+  handle := TRttiObject(targetType).Handle;
+  if (handle.Kind = tkInterface) and (handle.Name[Length(handle.Name)] = '>') then
+    for i := 0 to High(SupportedTypes) do
+    begin
+      {$POINTERMATH ON}
+      len := PInteger(SupportedTypes[i])[-1];
+      {$POINTERMATH OFF}
+      if (len < Length(handle.Name))
+        and (Spring.BinaryCompare(Pointer(SupportedTypes[i]), @handle.Name[1], len) = 0) then
+      begin
+        Result := inherited CanResolve(context, dependency, argument);
+        if not Result then Exit;
+        targetType := GetElementType(TRttiObject(targetType).Handle).RttiType;
+        if not Assigned(targetType) then Break;
+        handle := TRttiObject(targetType).Handle;
+        if not (handle.Kind in [tkClass, tkInterface]) then Break;
+        dependencyModel := TDependencyModel.Create(targetType, dependency.Target);
+        Result := Kernel.Resolver.CanResolve(context, dependencyModel, DynArrayMarker);
+        Exit;
+      end;
+    end;
+  Result := False;
 end;
 
 function TCollectionResolver.Resolve(const context: ICreationContext;
@@ -706,5 +733,13 @@ end;
 
 {$ENDREGION}
 
+
+procedure Init;
+begin
+  TValue.Make(-1, TypeInfo(TDynArrayMarker), DynArrayMarker);
+end;
+
+initialization
+  Init;
 
 end.

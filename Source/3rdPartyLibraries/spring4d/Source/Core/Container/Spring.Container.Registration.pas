@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -195,13 +195,13 @@ begin
   fModels := TCollections.CreateObjectList<TComponentModel>(True);
   fModels.OnChanged.Add(fOnChanged.Invoke);
   fDefaultRegistrations := TCollections.CreateDictionary<PTypeInfo, TComponentModel>(
-    IEqualityComparer<PTypeInfo>(GetTypeInfoEqualityComparer));;
+    IEqualityComparer<PTypeInfo>(GetTypeInfoEqualityComparer));
   fDefaultRegistrations.OnValueChanged.Add(fOnChanged.Invoke);
   fUnnamedRegistrations := TCollections.CreateMultiMap<PTypeInfo, TComponentModel>(
-    IEqualityComparer<PTypeInfo>(GetTypeInfoEqualityComparer));;
+    IEqualityComparer<PTypeInfo>(GetTypeInfoEqualityComparer));
   fUnnamedRegistrations.OnValueChanged.Add(fOnChanged.Invoke);
   fServiceTypeMappings := TCollections.CreateMultiMap<PTypeInfo, TComponentModel>(
-    IEqualityComparer<PTypeInfo>(GetTypeInfoEqualityComparer));;
+    IEqualityComparer<PTypeInfo>(GetTypeInfoEqualityComparer));
   fServiceTypeMappings.OnValueChanged.Add(fOnChanged.Invoke);
   fServiceNameMappings := TCollections.CreateDictionary<string, TComponentModel>;
   fServiceNameMappings.OnValueChanged.Add(fOnChanged.Invoke);
@@ -209,6 +209,7 @@ end;
 
 destructor TComponentRegistry.Destroy;
 begin
+  UnregisterAll;
   fOnChanged.Free;
   inherited;
 end;
@@ -596,7 +597,7 @@ end;
 function TRegistration.InjectParameter<TParameterType>(
   const value: TParameterType): TRegistration;
 begin
-  Result := InjectParameter(TypeInfo(TParameterType), TValue.From(value, TypeInfo(TParameterType)));
+  Result := InjectParameter(TypeInfo(TParameterType), TValue.From(TypeInfo(TParameterType), value));
 end;
 
 function TRegistration.InjectParameter<TParameterType>(

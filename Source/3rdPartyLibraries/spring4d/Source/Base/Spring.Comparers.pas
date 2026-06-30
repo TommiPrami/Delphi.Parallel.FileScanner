@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -80,8 +80,11 @@ type
 
 function _LookupVtableInfo(intf: TDefaultGenericInterface; info: PTypeInfo; size: Integer): Pointer;
 procedure RegisterComparer(intf: TDefaultGenericInterface; typeInfo: PTypeInfo; const comparer: IInterface);
-function SameGuid(const left, right: TGUID): Boolean;
 function GetTypeInfoEqualityComparer: Pointer;
+
+{$IFDEF DELPHIXE7_UP}
+function GetLessThanOperator(typeInfo: PTypeInfo): Pointer;
+{$ENDIF}
 
 var
   DefaultHashFunction: THashFunction = xxHash32;
@@ -93,223 +96,106 @@ uses
   Character,
   {$ENDIF}
   Math,
+  Rtti,
   SyncObjs,
   SysUtils,
   {$IFDEF MSWINDOWS}
   Windows,
   {$ENDIF}
-  {$IFDEF POSIX}
-  Posix.String_,
-  {$ENDIF}
   Spring,
   Spring.HashTable;
 
-function BinaryCompare(left, right: Pointer; size: NativeInt): Integer;
-{$IF Defined(ASSEMBLER)}
-{$IFDEF CPUX86}
-asm
-  cmp       eax, edx
-  je        @@equalNoPop
+{$IFDEF DELPHIXE7_UP}
+{$IFNDEF DELPHIX_ALEXANDRIA_UP}
+type
+  TTypeInfoFieldAccessorHelper = record helper for TTypeInfoFieldAccessor
+    function HasName(const AName: string): Boolean;
+  end;
 
-  push      esi
-  push      edi
-  lea       esi, [eax+ecx]
-  lea       edi, [edx+ecx]
-  neg       ecx
-  jnl       @@equal
-
-  mov       edx, $FFFF
-  cmp       ecx, -16
-  ja        @@lessThan16
-
-@@loop:
-  movdqu    xmm1, [esi+ecx]
-  movdqu    xmm2, [edi+ecx]
-  pcmpeqb   xmm1, xmm2
-  pmovmskb  eax, xmm1
-  xor       eax, edx
-  jnz       @@notEqual
-  add       ecx, 16
-  jz        @@equal
-  cmp       ecx, -16
-  jna       @@loop
-
-@@lessThan16:
-  cmp       ecx, -8
-  ja        @@lessThan8
-  movq      xmm1, [esi+ecx]
-  movq      xmm2, [edi+ecx]
-  pcmpeqb   xmm1, xmm2
-  pmovmskb  eax, xmm1
-  xor       eax, edx
-  jnz       @@notEqual
-  add       ecx, 8
-  jz        @@equal
-
-@@lessThan8:
-  cmp       ecx, -4
-  ja        @@lessThan4
-  movd      xmm1, [esi+ecx]
-  movd      xmm2, [edi+ecx]
-  pcmpeqb   xmm1, xmm2
-  pmovmskb  eax, xmm1
-  xor       eax, edx
-  jnz       @@notEqual
-  add       ecx, 4
-  jz        @@equal
-
-@@lessThan4:
-  cmp       ecx, -2
-  ja        @@lessThan2
-  movzx     eax, word ptr [esi+ecx]
-  movzx     edx, word ptr [edi+ecx]
-  sub       eax, edx
-  jnz       @@notEqual2Bytes
-  add       ecx, 2
-  jz        @@equal
-
-@@lessThan2:
-  test      ecx, ecx
-  jz        @@equal
-  jmp       @@compareByte
-
-@@notEqual2Bytes:
-  neg       al
-  sbb       size, -1
-  jmp       @@compareByte
-
-@@notEqual:
-  bsf       eax, eax
-  add       ecx, eax
-@@compareByte:
-  movzx     eax, byte ptr [esi+ecx]
-  movzx     edx, byte ptr [edi+ecx]
-  sub       eax, edx
-  pop       edi
-  pop       esi
-  ret
-
-@@equal:
-  pop       edi
-  pop       esi
-@@equalNoPop:
-  xor       eax, eax
-end;
-{$ELSE}
-asm
-  cmp       left, right
-  je        @@equal
-
-  add       left, size
-  add       right, size
-  neg       size
-  jnl       @@equal
-
-  mov       r9d, $FFFF
-  cmp       size, -16
-  ja        @@lessThan16
-
-@@loop:
-  movdqu    xmm1, dqword [left+size]
-  movdqu    xmm2, dqword [right+size]
-  pcmpeqb   xmm1, xmm2
-  pmovmskb  eax, xmm1
-  xor       eax, r9d
-  jnz       @@notEqual
-  add       size, 16
-  jz        @@equal
-  cmp       size, -16
-  jna       @@loop
-
-@@lessThan16:
-  cmp       size, -8
-  ja        @@lessThan8
-  movq      xmm1, qword [left+size]
-  movq      xmm2, qword [right+size]
-  pcmpeqb   xmm1, xmm2
-  pmovmskb  eax, xmm1
-  xor       eax, r9d
-  jnz       @@notEqual
-  add       size, 8
-  jz        @@equal
-
-@@lessThan8:
-  cmp       size, -4
-  ja        @@lessThan4
-  movd      xmm1, dword [left+size]
-  movd      xmm2, dword [right+size]
-  pcmpeqb   xmm1, xmm2
-  pmovmskb  eax, xmm1
-  xor       eax, r9d
-  jnz       @@notEqual
-  add       size, 4
-  jz        @@equal
-
-@@lessThan4:
-  cmp       size, -2
-  ja        @@lessThan2
-  movzx     eax, word [left+size]
-  movzx     r9d, word [right+size]
-  sub       eax, r9d
-  jnz       @@notEqual2Bytes
-  add       size, 2
-  jz        @@equal
-
-@@lessThan2:
-  test      size, size
-  jz        @@equal
-  jmp       @@compareByte
-
-@@notEqual2Bytes:
-  neg       al
-  sbb       size, -1
-  jmp       @@compareByte
-
-@@notEqual:
-  bsf       eax, eax
-  add       size, rax
-@@compareByte:
-  movzx     eax, byte [left+size]
-  movzx     r9d, byte [right+size]
-  sub       eax, r9d
-  ret
-
-@@equal:
-  xor       eax, eax
+function TTypeInfoFieldAccessorHelper.HasName(const AName: string): Boolean;
+begin
+  Result := AnsiSameText(ToString, AName);
 end;
 {$ENDIF}
-{$ELSEIF Defined(POSIX)}
-begin
-  if size > 0 then
-    Result := memcmp(left^, right^, size)
-  else
-    Result := 0;
-end;
-{$ELSE}
-  {$MESSAGE ERROR 'Missing plaform support'}
-{$IFEND}
 
-function SameGuid(const left, right: TGUID): Boolean;
-{$IFDEF ASSEMBLER}
-asm
-  movdqu   xmm0, [left]
-  movdqu   xmm1, [right]
-  pcmpeqb  xmm0, xmm1
-  pmovmskb eax, xmm0
-  cmp      ax, 65535
-  sete     al
-end;
-{$ELSE}
+function GetLessThanOperator(typeInfo: PTypeInfo): Pointer;
+const
+  LessThanOperatorName = '&op_LessThan';
+type
+  PFieldTable = ^TFieldTable;
+  TFieldTable = packed record
+    X: Word;
+    RecSize: Cardinal;
+    ManagedFldCount: Cardinal;
+    ManagedFields: array[0..0] of TManagedField;
+  end;
+  PRecordOperatorTable = ^TRecordOperatorTable;
+  TRecordOperatorTable = packed record
+    NumOps: Byte;
+    RecOps: array[0..0] of Pointer;
+  end;
+  PRecFieldTable = ^TRecFieldTable;
+  TRecFieldTable = packed record
+    RecFldCnt: Integer;
+    RecFields: array[0..0] of TRecordTypeField;
+  end;
+var
+  ft: PFieldTable;
+  p: PByte;
+  count, paramCount: Integer;
+  method: TypInfo.PRecordTypeMethod;
+  signature: TypInfo.PProcedureSignature;
 begin
-{$IFDEF CPU32BITS}
-  Result := (left.D1 = right.D1)
-    and (PInteger(@left.D2)^ = PInteger(@right.D2)^)
-    and (PInteger(@left.D4[0])^ = PInteger(@right.D4[0])^)
-    and (PInteger(@left.D4[4])^ = PInteger(@right.D4[4])^);
-{$ELSE}
-  Result := (PInt64(@left)^ = PInt64(@right)^)
-    and (PInt64(@left.D4[0])^ = PInt64(@right.D4[0])^);
-{$ENDIF}
+  Result := nil;
+  if (typeInfo = nil) or not (typeInfo.Kind in [tkRecord{$IF Declared(tkMRecord)}, tkMRecord{$IFEND}]) then
+    Exit;
+
+  ft := PFieldTable(@PByte(typeInfo)[Byte(PTypeInfo(typeInfo).Name[0])]);
+  p := @ft.ManagedFields[ft.ManagedFldCount];
+  p := @PRecordOperatorTable(p).RecOps[PRecordOperatorTable(p).NumOps];
+
+  count := PInteger(p)^; Inc(p, SizeOf(Integer));
+  while count > 0 do
+  begin
+    // skip Name and AttrData
+    p := PByte(@PRecordTypeField(p).Name[0]) + Byte(PRecordTypeField(p).Name[0]) + 1;
+    Inc(p, PWord(p)^);
+    Dec(count);
+  end;
+
+  Inc(p, PWord(p)^);
+
+  count := PWord(p)^; Inc(p, SizeOf(Word));
+  method := TypInfo.PRecordTypeMethod(p);
+
+  while count > 0 do
+  begin
+    // skip Name
+    signature := TypInfo.PProcedureSignature(PByte(@method.Name[0]) + Byte(method.Name[0]) + 1);
+    if (signature.ParamCount = 2) and ((method.Flags and 3) = 3) and (signature.CC = ccReg)
+      and (signature.ResultType <> nil) and (signature.ResultType^ = System.TypeInfo(Boolean))
+      and method.NameFld.HasName(LessThanOperatorName) then
+    begin
+      Result := method.Code;
+      if PPointer(Result)^ = nil then
+        Result := nil;
+      Break;
+    end;
+
+    paramCount := signature.ParamCount;
+    p := PByte(signature) + SizeOf(TProcedureSignature);
+    while paramCount > 0 do
+    begin
+      // skip Name and AttrData
+      p := PByte(@PProcedureParam(p).Name[0]) + Byte(PProcedureParam(p).Name[0]) + 1;
+      Inc(p, PWord(p)^);
+      Dec(paramCount);
+    end;
+
+    Inc(p, PWord(p)^);
+    method := TypInfo.PRecordTypeMethod(p);
+    Dec(count);
+  end;
 end;
 {$ENDIF}
 
@@ -353,8 +239,8 @@ type
   TComparerInstance = record
     VTable: Pointer;
     RefCount: Integer;
-    TypeInfo: PTypeInfo;
     Size: Integer;
+    TypeInfo: PTypeInfo;
 
     function AddRef: Integer; stdcall;
     function Release: Integer; stdcall;
@@ -366,6 +252,31 @@ type
     function Compare_DynArray(const left, right: Pointer): Integer;
     function Equals_DynArray(const left, right: Pointer): Boolean;
     function GetHashCode_DynArray(const value: Pointer): Integer;
+  end;
+
+  PRecordComparerInstance = ^TRecordComparerInstance;
+  TRecordComparerInstance = record
+    type
+      TCompareOperator = function(const left, right: Pointer): Boolean;
+      TCompareOperator_UInt24 = function(const left, right: UInt24): Boolean;
+      TGetHashCodeMethod = function(self: Pointer): Integer;
+      TGetHashCodeMethod_UInt24 = function(self: UInt24): Integer;
+
+    function Compare_Record(const left, right: Pointer): Integer;
+    function Compare_Record_UInt24(const left, right: UInt24): Integer;
+    function Equals_Record(const left, right: Pointer): Boolean;
+    function Equals_Record_UInt24(const left, right: UInt24): Boolean;
+    function GetHashCode_Record(const value: Pointer): Integer;
+    function GetHashCode_Record_UInt24(const value: UInt24): Integer;
+  public
+    VTable: Pointer;
+    RefCount: Integer;
+    Size: Integer;
+    TypeInfo: PTypeInfo;
+    Equals: TCompareOperator;
+    case TDefaultGenericInterface of
+      giComparer: (LessThan: TCompareOperator);
+      giEqualityComparer: (GetHashCode: TGetHashCodeMethod);
   end;
 
   TRegistryItem = packed record
@@ -405,8 +316,8 @@ begin
   GetMem(Result, SizeOf(TComparerInstance));
   Result.VTable := vtable;
   Result.RefCount := 0;
-  Result.TypeInfo := typeInfo;
   Result.Size := size;
+  Result.TypeInfo := typeInfo;
 end;
 
 function TComparerInstance.AddRef: Integer; stdcall;
@@ -421,9 +332,12 @@ begin
     FreeMem(@Self);
 end;
 
-function GetTypeData(typeInfo: PTypeInfo): PTypeData; inline;
+function GetTypeInfoData(typeInfo: PTypeInfo): PTypeInfoData; inline;
+var
+  len: NativeInt;
 begin
-  Result := Pointer(NativeUInt(typeInfo) + NativeUInt(PByte(@PByte(typeInfo)[1])^) + 2);
+  len := PTypeInfoData(typeInfo).Name;
+  Result := Pointer(PByte(@typeInfo.Kind) + len);
 end;
 
 function Compare_Int8(const inst: Pointer; const left, right: ShortInt): Integer;
@@ -760,15 +674,15 @@ end;
 
 function GetHashCode_Single(const inst: Pointer; const value: Single): Integer;
 var
-  bits: Int32;
+  bits: UInt32;
 begin
-  bits := PInt32(@value)^;
+  bits := UInt32(LongRec(value));
 
   if ((bits - 1) and $7FFFFFFF) >= $7F800000 then
     // Ensure that all NaNs and both zeros have the same hash code
     bits := bits and $7F800000;
 
-  Result := DefaultHashFunction(bits, SizeOf(Int32));
+  Result := Integer(bits);
 end;
 
 {$IFDEF ASSEMBLER}
@@ -801,12 +715,12 @@ asm
   movsd   xmm1, qword ptr [esp+12]
   movsd   xmm2, qword ptr [esp+4]
   {$ENDIF}
-  mov     al, 1
   ucomisd xmm1, xmm2
   jne     @@not_equal
   jp      @@not_equal
+  mov     al, 1
   {$IFDEF CPUX86}
-  ret     $10
+  ret     16
   {$ELSE}
   ret
   {$ENDIF}
@@ -817,7 +731,7 @@ asm
   setp    al
   and     al, cl
   {$IFDEF CPUX86}
-  ret 16
+  ret     16
   {$ENDIF}
 end;
 {$ELSE}
@@ -827,18 +741,30 @@ begin
 end;
 {$ENDIF}
 
+{$IFDEF CPUX86}
+function GetHashCode_Double(const inst: Pointer; const bits: UInt64): Integer;
+var
+  hi: Integer;
+begin
+  hi := Int64Rec(bits).Hi;
+  if Int64Rec(bits - 1).Hi and $7FFFFFFF >= $7FF00000 then
+    // Ensure that all NaNs and both zeros have the same hash code
+    Exit(hi and $7FF00000);
+  Result := hi xor Integer(bits);
+end;
+{$ELSE}
 function GetHashCode_Double(const inst: Pointer; const value: Double): Integer;
 var
-  bits: Int64;
+  bits: UInt64;
 begin
-  bits := PInt64(@value)^;
-
-  if ((bits - 1) and $7FFFFFFFFFFFFFFF) >= $7FF0000000000000 then
+  bits := UInt64(Int64Rec(value));
+  Result := Integer(Int64Rec(value).Hi);
+  if Int64Rec(bits - 1).Hi and $7FFFFFFF >= $7FF00000 then
     // Ensure that all NaNs and both zeros have the same hash code
-    bits := bits and $7FF0000000000000;
-
-  Result := DefaultHashFunction(bits, SizeOf(Int64));
+    Exit(Result and $7FF00000);
+  Result := Result xor Integer(bits);
 end;
+{$ENDIF}
 
 function Compare_Extended(const inst: Pointer; const left, right: Extended): Integer;
 begin
@@ -1349,34 +1275,39 @@ end;
 
 function Compare_UString(const inst: Pointer; left, right: PByte): Integer;
 label
-  foundMismatch;
+  immediateMismatch, foundMismatch;
 var
+  lenDiff: Integer;
   i: NativeInt;
 begin
   if left <> right then
     if Assigned(left) then
       if Assigned(right) then
       begin
-        i := 0;
         if PInteger(@left[0])^ <> PInteger(@right[0])^ then
-          goto foundMismatch;
-        Result := PInteger(@left[-4])^ - PInteger(@right[-4])^;
-        // set i to -Min(Length(S1), Length(S2) * 2
-        i := (((Result shr 31 - 1) and Result) - PInteger(@left[-4])^) * 2;
+          goto immediateMismatch;
+        lenDiff := PInteger(@left[-4])^ - PInteger(@right[-4])^;
+        // set i to -Min(Length(left), Length(right)) * 2
+        // this is a slight modification of the algorithm shown here:
+        // https://graphics.stanford.edu/~seander/bithacks.html#IntegerMinOrMax
+        i := (((lenDiff shr 31 - 1) and lenDiff) - PInteger(@left[-4])^) * 2;
         left := left - i;
         right := right - i;
         repeat
           Inc(i, 4);
-          if i >= 0 then Exit;
+          if i >= 0 then Break;
           if PInteger(@left[i])^ <> PInteger(@right[i])^ then
           begin
           foundMismatch:
-            Result := PWord(@left[i])^ - PWord(@right[i])^;
-            if Result = 0 then
-              Result := PWord(@left[i+2])^ - PWord(@right[i+2])^;
+            left := left + i;
+            right := right + i;
+          immediateMismatch:
+            Result := (PWord(@left[0])^ shl 16) or PWord(@left[2])^;
+            Result := Result - ((PWord(@right[0])^ shl 16) or PWord(@right[2])^);
             Exit;
           end;
         until False;
+        Result := lenDiff;
       end
       else
         Result := 1
@@ -1625,7 +1556,7 @@ begin
     varSingle:
       Exit(GetHashCode_Single(nil, value.VSingle));
     varDouble, varDate:
-      Exit(GetHashCode_Double(nil, value.VDouble));
+      Exit(GetHashCode_Double(nil, {$IFDEF CPUX86}value.VUInt64{$ELSE}value.VDouble{$ENDIF}));
     varString:
       with PShortString(value.VPointer)^ do
         Exit(DefaultHashFunction(Data, Length));
@@ -1768,6 +1699,87 @@ begin
   if hashCode <> 0 then
     hashCode := DefaultHashFunction(PPointer(hashCode)^, PNativeUInt(@PByte(value)[-SizeOf(NativeInt)])^ * Cardinal(size));
   Result := Integer(hashCode);
+end;
+
+function TRecordComparerInstance.Compare_Record(const left, right: Pointer): Integer;
+{$IFDEF CPUX86}
+asm
+  push ebx
+  push esi
+  push edi
+  mov edi,ecx
+  mov esi,edx
+  mov ebx,eax
+
+  mov eax,esi
+  mov edx,edi
+  call [ebx].LessThan
+  mov ecx,eax
+  mov eax,-1
+  test cl,cl
+  jne @Done
+  mov eax,esi
+  mov edx,edi
+  call [ebx].Equals
+  xor al,1
+  movzx eax,al
+
+@Done:
+  pop edi
+  pop esi
+  pop ebx
+end;
+{$ELSE}
+begin
+  if LessThan(left, right) then
+    Result := -1
+  else
+    Result := Byte(not Equals(left, right));
+end;
+{$ENDIF}
+
+function TRecordComparerInstance.Compare_Record_UInt24(const left, right: UInt24): Integer;
+begin
+  if TCompareOperator_UInt24(LessThan)(left, right) then
+    Result := -1
+  else
+    Result := Byte(not TCompareOperator_UInt24(Equals)(left, right));
+end;
+
+function TRecordComparerInstance.Equals_Record(const left, right: Pointer): Boolean;
+{$IFDEF ASSEMBLER}
+asm
+  xchg Self,left
+  xchg left,right
+  jmp [right].TRecordComparerInstance.Equals
+end;
+{$ELSE}
+begin
+  Result := Equals(left, right);
+end;
+{$ENDIF}
+
+function TRecordComparerInstance.Equals_Record_UInt24(const left, right: UInt24): Boolean;
+begin
+  Result := TCompareOperator_UInt24(Equals)(left, right);
+end;
+
+function TRecordComparerInstance.GetHashCode_Record(const value: Pointer): Integer;
+var
+  selfRef: PPointer;
+begin
+  selfRef := @value;
+  case Size of
+    1, 2, 3, 4 {$IFDEF PASS_64BIT_VALUE_REGISTER}, 8{$ENDIF}: ;
+  else
+    selfRef := selfRef^;
+  end;
+  Result := GetHashCode(selfRef);
+end;
+
+function TRecordComparerInstance.GetHashCode_Record_UInt24(const value: UInt24): Integer;
+begin
+  Result := TGetHashCodeMethod_UInt24(GetHashCode)(value);
 end;
 
 const
@@ -2158,6 +2170,40 @@ const
     @TComparerInstance.GetHashCode_DynArray
   );
 
+  Comparer_VTable_Record: array[0..3] of Pointer =
+  (
+    @NopQueryInterface,
+    @TComparerInstance.AddRef,
+    @TComparerInstance.Release,
+    @TRecordComparerInstance.Compare_Record
+  );
+
+  EqualityComparer_VTable_Record: array[0..4] of Pointer =
+  (
+    @NopQueryInterface,
+    @TComparerInstance.AddRef,
+    @TComparerInstance.Release,
+    @TRecordComparerInstance.Equals_Record,
+    @TRecordComparerInstance.GetHashCode_Record
+  );
+
+  Comparer_VTable_Record_UInt24: array[0..3] of Pointer =
+  (
+    @NopQueryInterface,
+    @TComparerInstance.AddRef,
+    @TComparerInstance.Release,
+    @TRecordComparerInstance.Compare_Record_UInt24
+  );
+
+  EqualityComparer_VTable_Record_UInt24: array[0..4] of Pointer =
+  (
+    @NopQueryInterface,
+    @TComparerInstance.AddRef,
+    @TComparerInstance.Release,
+    @TRecordComparerInstance.Equals_Record_UInt24,
+    @TRecordComparerInstance.GetHashCode_Record_UInt24
+  );
+
   EqualityComparer_PTypeInfo: IEqualityComparer = (
     VTable: @EqualityComparer_PTypeInfo.QueryInterface;
     QueryInterface: @NopQueryInterface;
@@ -2180,7 +2226,7 @@ const
    (@Comparer_Int32, @EqualityComparer_Int32), (@Comparer_UInt32, @EqualityComparer_Int32)
   );
 begin
-  Result := ComparerTable[GetTypeData(typeInfo).OrdType, intf];
+  Result := ComparerTable[GetTypeInfoData(typeInfo).OrdType, intf];
 end;
 
 function Selector_Int64(intf: TDefaultGenericInterface; typeInfo: PTypeInfo; size: Integer): Pointer;
@@ -2189,7 +2235,7 @@ const
    (@Comparer_Int64, @EqualityComparer_Int64), (@Comparer_UInt64, @EqualityComparer_Int64)
   );
 begin
-  with GetTypeData(typeInfo)^ do
+  with GetTypeInfoData(typeInfo)^ do
     Result := ComparerTable[MaxInt64Value <= MinInt64Value, intf];
 end;
 
@@ -2198,10 +2244,10 @@ const
   ComparerTable: array[TFloatType, TDefaultGenericInterface] of Pointer = (
    (@Comparer_Single, @EqualityComparer_Single), (@Comparer_Double, @EqualityComparer_Double),
    (@Comparer_Extended, @EqualityComparer_Extended),
-   (@Comparer_UInt64, @EqualityComparer_Int64), (@Comparer_UInt64, @EqualityComparer_Int64)
+   (@Comparer_UInt64, @EqualityComparer_Int64), (@Comparer_Int64, @EqualityComparer_Int64)
   );
 begin
-  Result := ComparerTable[GetTypeData(typeInfo).FloatType, intf];
+  Result := ComparerTable[GetTypeInfoData(typeInfo).FloatType, intf];
 end;
 
 function Selector_Binary(intf: TDefaultGenericInterface; typeInfo: PTypeInfo; size: Integer): Pointer;
@@ -2246,7 +2292,111 @@ begin
     Result := FindComparer(intf, typeInfo);
     if not Assigned(Result) then
     begin
-      Result := MakeInstance(ComparerTable[intf], typeInfo, typeInfo.TypeData.elSize);
+      Result := MakeInstance(ComparerTable[intf], typeInfo, GetTypeInfoData(typeInfo).elSize);
+      RegisterComparer(intf, typeInfo, IInterface(Result));
+    end;
+  finally
+    lock.Release;
+  end;
+end;
+
+function Selector_Record(intf: TDefaultGenericInterface; typeInfo: PTypeInfo; size: Integer): PRecordComparerInstance;
+const
+  ComparerTable: array[TDefaultGenericInterface] of Pointer = (
+    @Comparer_VTable_Record, @EqualityComparer_VTable_Record
+  );
+  ComparerTable_UInt24: array[TDefaultGenericInterface] of Pointer = (
+    @Comparer_VTable_Record_UInt24, @EqualityComparer_VTable_Record_UInt24
+  );
+
+  procedure GetRecordMethodAddresses(const typeInfo: PTypeInfo;
+    out equals, lessThan, getHashCode: Pointer);
+  const
+    EqualsOperatorName = '&op_Equality';
+    LessThanOperatorName = '&op_LessThan';
+    GetHashCodeName = 'GetHashCode';
+  var
+    method: TRttiMethod;
+    parameters: TArray<TRttiParameter>;
+  begin
+    equals := nil;
+    lessThan := nil;
+    getHashCode := nil;
+    for method in TType.GetType(typeInfo).GetMethods do
+    begin
+      if method.CallingConvention <> ccReg then
+        Continue;
+
+      if method.MethodKind = mkOperatorOverload then
+      begin
+        if method.HasName(EqualsOperatorName) then
+        begin
+          parameters := method.GetParameters;
+          if (Length(parameters) = 2)
+            and (parameters[0].ParamType.Handle = typeInfo) and (parameters[1].ParamType.Handle = typeInfo)
+            and (pfConst in parameters[0].Flags) and (pfConst in parameters[1].Flags) then
+           equals := method.CodeAddress;
+        end else
+        if method.HasName(LessThanOperatorName) then
+        begin
+          parameters := method.GetParameters;
+          if (Length(parameters) = 2)
+            and (parameters[0].ParamType.Handle = typeInfo) and (parameters[1].ParamType.Handle = typeInfo)
+            and (pfConst in parameters[0].Flags) and (pfConst in parameters[1].Flags) then
+           lessThan := method.CodeAddress;
+        end
+      end
+      else if method.HasName(GetHashCodeName) then
+      begin
+        if method.MethodKind <> mkFunction then
+          Continue;
+
+        parameters := method.GetParameters;
+        if (parameters = nil) and (method.ReturnType.Handle = System.TypeInfo(Integer)) then
+          getHashCode := method.CodeAddress;
+      end;
+    end;
+  end;
+
+var
+  equals, lessThan, getHashCode: Pointer;
+begin
+  lock.Acquire;
+  try
+    Result := FindComparer(intf, typeInfo);
+    if not Assigned(Result) then
+    begin
+      GetRecordMethodAddresses(typeInfo, equals, lessThan, getHashCode);
+      case intf of
+        giComparer:
+          if not (Assigned(equals) and Assigned(PPointer(equals)^)
+            and Assigned(lessThan) and Assigned(PPointer(lessThan)^)) then
+            Exit(Selector_Binary(intf, typeInfo, size));
+        giEqualityComparer:
+          if not (Assigned(equals) and Assigned(PPointer(equals)^)
+            and Assigned(getHashCode) and Assigned(PPointer(getHashCode)^)) then
+            Exit(Selector_Binary(intf, typeInfo, size));
+      end;
+
+      GetMem(Result, SizeOf(TRecordComparerInstance));
+      {$IFDEF WIN32}
+      if size = 3 then
+        Result.VTable := ComparerTable_UInt24[intf]
+      else
+      {$ENDIF}
+      Result.VTable := ComparerTable[intf];
+      Result.RefCount := 0;
+      Result.Size := size;
+      Result.TypeInfo := typeInfo;
+
+      Result.Equals := equals;
+      case intf of
+        giComparer:
+          Result.LessThan := lessThan;
+        giEqualityComparer:
+          Result.GetHashCode := getHashCode;
+      end;
+
       RegisterComparer(intf, typeInfo, IInterface(Result));
     end;
   finally
@@ -2270,7 +2420,7 @@ const
     (Instance: (@Comparer_WString, @EqualityComparer_WString)), // tkWString,
     (Instance: (@Comparer_Variant, @EqualityComparer_Variant)), // tkVariant
     (Selector: @Selector_Binary),                               // tkArray
-    (Selector: @Selector_Binary),                               // tkRecord
+    (Selector: @Selector_Record),                               // tkRecord
     (Instance: {$IFDEF CPU64BITS}(                              // tkInterface
       @Comparer_UInt64, @EqualityComparer_Int64){$ELSE}(
       @Comparer_UInt32, @EqualityComparer_Int32){$ENDIF}),
@@ -2287,7 +2437,7 @@ const
       @Comparer_UInt64, @EqualityComparer_Int64){$ELSE}(
       @Comparer_UInt32, @EqualityComparer_Int32){$ENDIF})
   {$IF Declared(tkMRecord)}
-    , (Selector: @Selector_Binary)                              // tkMRecord
+    , (Selector: @Selector_Record)                              // tkMRecord
   {$IFEND}
   );
 
@@ -2322,14 +2472,26 @@ begin
 end;
 
 function TStringComparer.TOrdinalCaseInsensitiveStringComparer.Equals(const left, right: string): Boolean;
+{$IFDEF ASSEMBLER}
+asm
+  jmp Equals_UString_OrdinalCaseInsensitive
+end;
+{$ELSE}
 begin
   Result := Equals_UString_OrdinalCaseInsensitive(@Self, Pointer(left), Pointer(right));
 end;
+{$ENDIF}
 
 function TStringComparer.TOrdinalCaseInsensitiveStringComparer.GetHashCode(const value: string): Integer;
+{$IFDEF ASSEMBLER}
+asm
+  jmp GetHashCode_UString_OrdinalCaseInsensitive
+end;
+{$ELSE}
 begin
   Result := GetHashCode_UString_OrdinalCaseInsensitive(@Self, Pointer(value));
 end;
+{$ENDIF}
 
 class operator TStringComparer.TOrdinalCaseInsensitiveStringComparer.Implicit(
   const value: TOrdinalCaseInsensitiveStringComparer): IComparer<string>;
@@ -2344,9 +2506,15 @@ begin
 end;
 
 function TStringComparer.TOrdinalCaseSensitiveStringComparer.Compare(const left, right: string): Integer;
+{$IFDEF ASSEMBLER}
+asm
+  jmp Compare_UString_OrdinalCaseSensitive
+end;
+{$ELSE}
 begin
   Result := Compare_UString_OrdinalCaseSensitive(@Self, Pointer(left), Pointer(right));
 end;
+{$ENDIF}
 
 function TStringComparer.TOrdinalCaseSensitiveStringComparer.Comparer: IComparer<string>;
 begin
@@ -2359,14 +2527,26 @@ begin
 end;
 
 function TStringComparer.TOrdinalCaseSensitiveStringComparer.Equals(const left, right: string): Boolean;
+{$IFDEF ASSEMBLER}
+asm
+  jmp Equals_UString
+end;
+{$ELSE}
 begin
   Result := Equals_UString(@Self, Pointer(left), Pointer(right));
 end;
+{$ENDIF}
 
 function TStringComparer.TOrdinalCaseSensitiveStringComparer.GetHashCode(const value: string): Integer;
+{$IFDEF ASSEMBLER}
+asm
+  jmp GetHashCode_UString
+end;
+{$ELSE}
 begin
   Result := GetHashCode_UString(@Self, Pointer(value));
 end;
+{$ENDIF}
 
 class operator TStringComparer.TOrdinalCaseSensitiveStringComparer.Implicit(
   const value: TOrdinalCaseSensitiveStringComparer): IComparer<string>;

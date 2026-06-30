@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -231,7 +231,6 @@ destructor TContainer.Destroy;
 begin
   fChangedModels.Clear;
   Builder.ClearInspectors;
-  Registry.UnregisterAll;
   inherited Destroy;
 end;
 
@@ -305,7 +304,7 @@ begin
       instance: T;
     begin
       instance := delegate();
-      Result := TValue.From(instance, TypeInfo(T));
+      Result := TValue.From(TypeInfo(T), instance);
     end;
 end;
 
@@ -319,7 +318,7 @@ begin
       instance: IInterface;
     begin
       instance := TActivatorDelegate<IInterface>(delegate)();
-      Result := TValue.From(instance, typeInfo);
+      Result := TValue.From(typeInfo, instance);
     end;
 end;
 
@@ -332,7 +331,7 @@ begin
       instance: TObject;
     begin
       instance := TActivatorDelegate<TObject>(delegate)();
-      Result := TValue.From(instance, typeInfo);
+      Result := TValue.From(typeInfo, instance);
     end;
 end;
 {$ENDIF}

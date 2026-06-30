@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -920,6 +920,7 @@ end;
 
 procedure TObjectDataSet.SetDataList(const value: IObjectList);
 begin
+  Cancel;
   fDataList := value;
   if Assigned(fDataList) then
     fItemTypeInfo := fDataList.ElementType

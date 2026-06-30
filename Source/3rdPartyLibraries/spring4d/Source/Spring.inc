@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2025 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -66,6 +66,12 @@
 
 {$IFDEF DELPHIXE4_UP}
   {$DEFINE SUPPORTS_CONSTREF}
+
+  // in some cases [ref] causes either bad code gen (this has been seen in
+  // versions before XE8)
+  // in other cases (seen with an enum type) that are still existing in
+  // Delphi 13 this causes internal compiler error
+  {$DEFINE CONSTREF_BROKEN}
 {$ENDIF}
 
 {$IFNDEF DELPHIX_RIO_UP}
@@ -79,8 +85,18 @@
   // otherwise a global dictionary will be used which is slightly slower
   {$DEFINE USE_VMTAUTOTABLE}
 
-  // see https://quality.embarcadero.com/browse/RSP-31615
-  {$IF defined(DELPHIX_SYDNEY_UP)}{$DEFINE RSP31615}{$IFEND}
+  {$IFNDEF CPUARM}
+    {$DEFINE INTERFACE_RVO}
+
+    {$IFDEF DELPHIXE7_UP}
+      {$DEFINE MANAGED_TYPE_RVO}
+    {$ENDIF}
+
+    // see https://quality.embarcadero.com/browse/RSP-31615
+    {$IFDEF DELPHIX_SYDNEY_UP}
+      {$DEFINE MANAGED_TYPE_RVO_BROKEN}
+    {$ENDIF}
+  {$ENDIF}
 {$ELSE}
   // cannot use the vmtAutoTable slot on any platform except Windows (yet)
   {$UNDEF USE_VMTAUTOTABLE}
@@ -118,6 +134,20 @@
 
 {$IFNDEF DELPHIXE2_UP}
   {$DEFINE SPRING_DISABLE_GRAPHICS}
+{$ENDIF}
+
+{$IFNDEF DELPHIXE5_UP}
+  {$DEFINE POINTERMATH_BROKEN}
+{$ENDIF}
+
+{$IFDEF DELPHIX_SYDNEY_UP}
+  {$DEFINE HAS_BITCOUNTING_INTRINSICS}
+{$ENDIF}
+
+{$IFDEF DELPHI_ATHENS_UP}
+  {$IFNDEF DELPHI_ATHENS}
+    {$DEFINE SUPPORTS_NORETURN}
+  {$ENDIF}
 {$ENDIF}
 
 // If we are running on Android or iOS, we are sure we are running using FMX.

@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -232,6 +232,7 @@ type
   TRangeIterator = class(TEnumerableBase<Integer>,
     IEnumerable<Integer>, IReadOnlyCollection<Integer>, IReadOnlyList<Integer>)
   private type
+  {$REGION 'Nested Types'}
     PEnumerator = ^TEnumerator;
     TEnumerator = record
       Vtable: Pointer;
@@ -242,6 +243,7 @@ type
       function _Release: Integer; stdcall;
       class function Create(start, count: Integer): IEnumerator<Integer>; static;
     end;
+  {$ENDREGION}
   const
     Enumerator_Vtable: TEnumeratorVtable = (
       @NopQueryInterface,
@@ -257,11 +259,17 @@ type
     function GetItem(index: Integer): Integer;
     function GetNonEnumeratedCount: Integer;
   {$ENDREGION}
+    class procedure Empty(var result); static;
   public
     constructor Create(start, count: Integer);
 
   {$REGION 'Implements IEnumerable<Integer>'}
+    function Contains(const item: Integer): Boolean; overload; inline;
+    function Distinct: IEnumerable<Integer>; overload;
     function GetEnumerator: IEnumerator<Integer>;
+    procedure ForEach(const action: Action<Integer>);
+    function Min: Integer; overload;
+    function Max: Integer; overload;
     function Ordered: IEnumerable<Integer>; overload;
     function Skip(count: Integer): IEnumerable<Integer>;
     function SkipLast(count: Integer): IEnumerable<Integer>;
@@ -381,6 +389,8 @@ type
     IEnumerable<IInterface>)
   private
     type
+      TKeyGroupingComparer = TGroupingComparer<TKey>;
+
       TEnumerator = class(TRefCountedObject, IEnumerator<IInterface>)
       private
         fSource: IEnumerable<TSource>;
@@ -402,7 +412,7 @@ type
     fSource: IEnumerable<TSource>;
     fKeySelector: Func<TSource, TKey>;
     fElementSelector: Func<TSource, TElement>;
-    fComparer: IEqualityComparer<TKey>;
+    fKeyComparer: IEqualityComparer<TKey>;
   public
     constructor Create(const source: IEnumerable<TSource>;
       const keySelector: Func<TSource, TKey>;
@@ -410,7 +420,8 @@ type
     constructor Create(const source: IEnumerable<TSource>;
       const keySelector: Func<TSource, TKey>;
       const elementSelector: Func<TSource, TElement>;
-      const comparer: IEqualityComparer<TKey>); overload;
+      const keyComparer: IEqualityComparer<TKey>); overload;
+    procedure AfterConstruction; override;
     function GetEnumerator: IEnumerator<IInterface>;
   end;
 
@@ -457,6 +468,8 @@ type
     IEnumerable<IInterface>, IReadOnlyCollection<IInterface>, ILookupInternal<TKey, TElement>)
   private
     type
+      TKeyGroupingComparer = TGroupingComparer<TKey>;
+
       TGrouping = class(TEnumerableBase<TElement>,
         IEnumerable<TElement>, IReadOnlyCollection<TElement>, IGrouping<TKey, TElement>)
       private
@@ -485,7 +498,7 @@ type
         function MoveNext: Boolean;
       end;
   private
-    fComparer: IEqualityComparer<TKey>;
+    fKeyComparer: IEqualityComparer<TKey>;
     fGroupings: IList<TObject>;
     fGroupingKeys: IDictionary<TKey, TGrouping>;
   {$REGION 'Property Accessors'}
@@ -496,18 +509,19 @@ type
   {$ENDREGION}
   public
     constructor Create; reintroduce; overload;
-    constructor Create(const comparer: IEqualityComparer<TKey>); overload;
+    constructor Create(const keyComparer: IEqualityComparer<TKey>); overload;
     class function Create<TSource>(const source: IEnumerable<TSource>;
       const keySelector: Func<TSource, TKey>;
       const elementSelector: Func<TSource, TElement>): TLookup<TKey, TElement>; overload; static;
     class function Create<TSource>(const source: IEnumerable<TSource>;
       const keySelector: Func<TSource, TKey>;
       const elementSelector: Func<TSource, TElement>;
-      const comparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>; overload; static;
+      const keyComparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>; overload; static;
     class function CreateForJoin(const source: IEnumerable<TElement>;
       const keySelector: Func<TElement, TKey>;
-      const comparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>; static;
+      const keyComparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>; static;
 
+    procedure AfterConstruction; override;
     function Contains(const key: TKey): Boolean; overload;
     function GetEnumerator: IEnumerator<IInterface>;
     property Items[const key: TKey]: IReadOnlyCollection<TElement> read GetItem; default;
@@ -591,6 +605,8 @@ type
   public
     constructor Create(const source: IEnumerable<TSource>;
       const selector: Func<TSource, IEnumerable<TResult>>);
+
+    function Contains(const value: TResult): Boolean;
   end;
 
   TSelectManyIndexIterator<TSource, TResult> = class(TIterator<TResult>, IEnumerable<TResult>)
@@ -702,7 +718,7 @@ type
     function GetNonEnumeratedCount: Integer;
   {$ENDREGION}
   protected
-    function GetElementType: PTypeInfo; override;
+    function GetElementType: PTypeInfo;
     function GetEnumerableSorter(
       const next: IEnumerableSorter<T>): IEnumerableSorter<T>; virtual; abstract;
   public
@@ -841,9 +857,78 @@ type
     function Clone: TIterator<TArray<T>>; override;
     procedure Dispose; override;
     procedure Start; override;
+    function GetNonEnumeratedCount: Integer;
     function TryMoveNext(var current: TArray<T>): Boolean; override;
   public
     constructor Create(const source: IEnumerable<T>; size: Integer);
+  end;
+
+  TCountByIterator<T> = class(TIterator<TPair<T, Integer>>, IEnumerable<TPair<T, Integer>>)
+  private
+    fSource: IEnumerable<T>;
+    fComparer: IEqualityComparer<T>;
+    fEnumerator: IEnumerator<TPair<T, Integer>>;
+    fCountsBy: IDictionary<T, Integer>;
+  protected
+    function Clone: TIterator<TPair<T, Integer>>; override;
+    procedure Dispose; override;
+    procedure Start; override;
+    function TryMoveNext(var current: TPair<T, Integer>): Boolean; override;
+  public
+    constructor Create(const source: IEnumerable<T>; const comparer: IEqualityComparer<T>);
+  end;
+
+  TCountByIterator<T, TKey> = class(TIterator<TPair<TKey, Integer>>, IEnumerable<TPair<TKey, Integer>>)
+  private
+    fSource: IEnumerable<T>;
+    fKeySelector: Func<T, TKey>;
+    fComparer: IEqualityComparer<TKey>;
+    fEnumerator: IEnumerator<TPair<TKey, Integer>>;
+    fCountsBy: IDictionary<TKey, Integer>;
+  protected
+    function Clone: TIterator<TPair<TKey, Integer>>; override;
+    procedure Dispose; override;
+    procedure Start; override;
+    function TryMoveNext(var current: TPair<TKey, Integer>): Boolean; override;
+  public
+    constructor Create(const source: IEnumerable<T>;
+      const keySelector: Func<T, TKey>; const comparer: IEqualityComparer<TKey>);
+  end;
+
+  TAggregateByIterator<TSource, TKey, TAccumulate> = class(TIterator<TPair<TKey, TAccumulate>>, IEnumerable<TPair<TKey, TAccumulate>>)
+  private
+    fSource: IEnumerable<TSource>;
+    fKeySelector: Func<TSource, TKey>;
+    fSeedSelector: Func<TKey, TAccumulate>;
+    fFunc: Func<TAccumulate, TSource, TAccumulate>;
+    fKeyComparer: IEqualityComparer<TKey>;
+    fEnumerator: IEnumerator<TPair<TKey, TAccumulate>>;
+    fDict: IDictionary<TKey, TAccumulate>;
+  protected
+    function Clone: TIterator<TPair<TKey, TAccumulate>>; override;
+    procedure Dispose; override;
+    procedure Start; override;
+    function TryMoveNext(var current: TPair<TKey, TAccumulate>): Boolean; override;
+  public
+    constructor Create(const source: IEnumerable<TSource>;
+      const keySelector: Func<TSource, TKey>;
+      const seedSelector: Func<TKey, TAccumulate>;
+      const func: Func<TAccumulate, TSource, TAccumulate>;
+      const keyComparer: IEqualityComparer<TKey>);
+  end;
+
+  TIndexedIterator<T> = class(TIterator<TIndexedItem<T>>, IEnumerable<TIndexedItem<T>>)
+  private
+    fSource: IEnumerable<T>;
+    fStart: Integer;
+    fEnumerator: IEnumerator<T>;
+  protected
+    function Clone: TIterator<TIndexedItem<T>>; override;
+    procedure Dispose; override;
+    procedure Start; override;
+    function TryMoveNext(var current: TIndexedItem<T>): Boolean; override;
+  public
+    constructor Create(const source: IEnumerable<T>; start: Integer);
   end;
 
   TAnonymousIterator<T> = class(TIterator<T>, IEnumerable<T>)
@@ -971,8 +1056,7 @@ uses
   Rtti,
   SysUtils,
   TypInfo,
-  Spring.Comparers,
-  Spring.ResourceStrings;
+  Spring.Comparers;
 
 
 {$REGION 'TEmptyEnumerable<T>'}
@@ -1498,6 +1582,7 @@ constructor TDistinctByIterator<T, TKey>.Create(const source: IEnumerable<T>;
   const keySelector: Func<T, TKey>; const comparer: IEqualityComparer<TKey>);
 begin
   if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
+  if not Assigned(keySelector) then RaiseHelper.ArgumentNil(ExceptionArgument.keySelector);
 
   inherited Create(source);
   fKeySelector := keySelector;
@@ -1545,6 +1630,21 @@ begin
   fCount := count;
 end;
 
+function TRangeIterator.Distinct: IEnumerable<Integer>;
+begin
+  Result := Self;
+end;
+
+class procedure TRangeIterator.Empty(var result);
+begin
+  TEnumerableExtension.Empty(TEnumerableExtension<Integer>, TypeInfo(Integer), result);
+end;
+
+function TRangeIterator.Contains(const item: Integer): Boolean;
+begin
+  Result := Cardinal(item - fStart) < Cardinal(fCount);
+end;
+
 function TRangeIterator.CopyTo(var values: TArray<Integer>; index: Integer): Integer;
 var
   i: Integer;
@@ -1555,6 +1655,14 @@ begin
     Inc(index);
   end;
   Result := fCount;
+end;
+
+procedure TRangeIterator.ForEach(const action: Action<Integer>);
+var
+  i: Integer;
+begin
+  for i := 0 to fCount - 1 do
+    action(fStart + i);
 end;
 
 function TRangeIterator.GetCount: Integer;
@@ -1581,8 +1689,8 @@ end;
 
 function TRangeIterator.IndexOf(const item: Integer): Integer;
 begin
-  if fCount > 0 then
-    Result := IndexOf(item, 0, fCount)
+  if Contains(item) then
+    Result := item - fStart
   else
     Result := -1;
 end;
@@ -1606,6 +1714,16 @@ begin
     Result := -1;
 end;
 
+function TRangeIterator.Min: Integer;
+begin
+  Result := fStart;
+end;
+
+function TRangeIterator.Max: Integer;
+begin
+  Result := fStart + fCount - 1;
+end;
+
 function TRangeIterator.Ordered: IEnumerable<Integer>;
 begin
   Result := Self;
@@ -1616,7 +1734,7 @@ begin
   if count < 0 then
     count := 0;
   if count >= fCount then
-    Result := TEnumerable.Empty<Integer>
+    Empty(Result)
   else
     Result := TRangeIterator.Create(fStart + count, fCount - count);
 end;
@@ -1626,7 +1744,7 @@ begin
   if count < 0 then
     count := 0;
   if count >= fCount then
-    Result := TEnumerable.Empty<Integer>
+    Empty(Result)
   else
     Result := TRangeIterator.Create(fStart, fCount - count);
 end;
@@ -1634,7 +1752,7 @@ end;
 function TRangeIterator.Take(count: Integer): IEnumerable<Integer>;
 begin
   if count <= 0 then
-    Result := TEnumerable.Empty<Integer>
+    Empty(Result)
   else if count >= fCount then
     Result := IEnumerable<Integer>(this)
   else
@@ -1644,7 +1762,7 @@ end;
 function TRangeIterator.TakeLast(count: Integer): IEnumerable<Integer>;
 begin
   if count <= 0 then
-    Result := TEnumerable.Empty<Integer>
+    Empty(Result)
   else if count >= fCount then
     Result := IEnumerable<Integer>(this)
   else
@@ -1927,7 +2045,7 @@ end;
 
 function TSelectIterator<TSource, TResult>.Clone: TIterator<TResult>;
 begin
-  Result := TSelectIterator<TSource, TResult>.Create(fSource, fSelector)
+  Result := TSelectIterator<TSource, TResult>.Create(fSource, fSelector);
 end;
 
 procedure TSelectIterator<TSource, TResult>.Dispose;
@@ -2051,7 +2169,7 @@ end;
 constructor TGroupedEnumerable<TSource, TKey, TElement>.Create(
   const source: IEnumerable<TSource>; const keySelector: Func<TSource, TKey>;
   const elementSelector: Func<TSource, TElement>;
-  const comparer: IEqualityComparer<TKey>);
+  const keyComparer: IEqualityComparer<TKey>);
 begin
   if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   if not Assigned(keySelector) then RaiseHelper.ArgumentNil(ExceptionArgument.keySelector);
@@ -2060,14 +2178,23 @@ begin
   fSource := source;
   fKeySelector := keySelector;
   fElementSelector := elementSelector;
-  fComparer := comparer;
-  if not Assigned(fComparer) then
-    fComparer := IEqualityComparer<TKey>(_LookupVtableInfo(giEqualityComparer, TypeInfo(TKey), SizeOf(TKey)));
+  fKeyComparer := keyComparer;
+  if not Assigned(fKeyComparer) then
+    fKeyComparer := IEqualityComparer<TKey>(_LookupVtableInfo(giEqualityComparer, TypeInfo(TKey), SizeOf(TKey)));
+end;
+
+procedure TGroupedEnumerable<TSource, TKey, TElement>.AfterConstruction;
+begin
+  inherited AfterConstruction;
+  TGroupingComparer.Create(@fComparer,
+    @TKeyGroupingComparer.Comparer_Vtable,
+    @TKeyGroupingComparer.Compare,
+    TypeInfo(TKey));
 end;
 
 function TGroupedEnumerable<TSource, TKey, TElement>.GetEnumerator: IEnumerator<IInterface>;
 begin
-  Result := TEnumerator.Create(fSource, fKeySelector, fElementSelector, fComparer);
+  Result := TEnumerator.Create(fSource, fKeySelector, fElementSelector, fKeyComparer);
 end;
 
 {$ENDREGION}
@@ -2192,13 +2319,13 @@ begin
   Create(nil);
 end;
 
-constructor TLookup<TKey, TElement>.Create(const comparer: IEqualityComparer<TKey>);
+constructor TLookup<TKey, TElement>.Create(const keyComparer: IEqualityComparer<TKey>);
 begin
-  fComparer := comparer;
-  if not Assigned(fComparer) then
-    fComparer := IEqualityComparer<TKey>(_LookupVtableInfo(giEqualityComparer, TypeInfo(TKey), SizeOf(TKey)));
+  fKeyComparer := keyComparer;
+  if not Assigned(fKeyComparer) then
+    fKeyComparer := IEqualityComparer<TKey>(_LookupVtableInfo(giEqualityComparer, TypeInfo(TKey), SizeOf(TKey)));
   fGroupings := TGroupings.Create;
-  fGroupingKeys := TCollections.CreateDictionary<TKey, TGrouping>(fComparer);
+  fGroupingKeys := TCollections.CreateDictionary<TKey, TGrouping>(fKeyComparer);
 end;
 
 class function TLookup<TKey, TElement>.Create<TSource>(
@@ -2211,11 +2338,11 @@ end;
 class function TLookup<TKey, TElement>.Create<TSource>(
   const source: IEnumerable<TSource>; const keySelector: Func<TSource, TKey>;
   const elementSelector: Func<TSource, TElement>;
-  const comparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>;
+  const keyComparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>;
 var
   item: TSource;
 begin
-  Result := TLookup<TKey, TElement>.Create(comparer);
+  Result := TLookup<TKey, TElement>.Create(keyComparer);
   try
     for item in source do
       Result.GetGrouping(keySelector(item), True).Add(elementSelector(item));
@@ -2227,12 +2354,12 @@ end;
 
 class function TLookup<TKey, TElement>.CreateForJoin(
   const source: IEnumerable<TElement>; const keySelector: Func<TElement, TKey>;
-  const comparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>;
+  const keyComparer: IEqualityComparer<TKey>): TLookup<TKey, TElement>;
 var
   element: TElement;
   key: TKey;
 begin
-  Result := TLookup<TKey, TElement>.Create(comparer);
+  Result := TLookup<TKey, TElement>.Create(keyComparer);
   try
     for element in source do
     begin
@@ -2243,6 +2370,15 @@ begin
     FreeAndNil(Result);
     raise;
   end;
+end;
+
+procedure TLookup<TKey, TElement>.AfterConstruction;
+begin
+  inherited AfterConstruction;
+  TGroupingComparer.Create(@fComparer,
+    @TKeyGroupingComparer.Comparer_Vtable,
+    @TKeyGroupingComparer.Compare,
+    TypeInfo(TKey));
 end;
 
 function TLookup<TKey, TElement>.Contains(const key: TKey): Boolean;
@@ -2279,7 +2415,7 @@ function TLookup<TKey, TElement>.GetItem(
 begin
   Result := GetGrouping(key, False);
   if not Assigned(Result) then
-    Result := TEnumerable.Empty<TElement>;
+    TEnumerableExtension.Empty(TEnumerableExtension<TElement>, TypeInfo(TElement), Result);
 end;
 
 function TLookup<TKey, TElement>.GetNonEnumeratedCount: Integer;
@@ -2584,6 +2720,19 @@ begin
     fEnumerator2 := collection.GetEnumerator;
     fFlag := False;
   end;
+end;
+
+function TSelectManyIterator<TSource, TResult>.Contains(const value: TResult): Boolean;
+var
+  enumerator: IEnumerator<TSource>;
+begin
+  enumerator := fSource.GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    Result := fSelector(enumerator.Current).Contains(value);
+    if Result then Exit;
+  end;
+  Result := False;
 end;
 
 {$ENDREGION}
@@ -3199,7 +3348,7 @@ begin
   if Result then
   begin
     item := fEnumerator.Current;
-    value := TValue.From(item, TypeInfo(T));
+    value := TValue.From(TypeInfo(T), item);
     value.AsType(TypeInfo(TResult), current);
   end;
 end;
@@ -3239,7 +3388,7 @@ begin
   while fEnumerator.MoveNext do
   begin
     item := fEnumerator.Current;
-    value := TValue.From(item, TypeInfo(T));
+    value := TValue.From(TypeInfo(T), item);
     if value.TryAsType(TypeInfo(TResult), current) then
       Exit(True);
   end;
@@ -3280,6 +3429,7 @@ end;
 function TRepeatIterator<T>.TryMoveNext(var current: T): Boolean;
 begin
   Result := fIndex < fCount;
+  if Result then
   begin
     Inc(fIndex);
     current := fElement;
@@ -3303,7 +3453,6 @@ begin
     fCapacity := fSize;
 end;
 
-
 function TChunkIterator<T>.Clone: TIterator<TArray<T>>;
 begin
   Result := TChunkIterator<T>.Create(fSource, fSize);
@@ -3312,6 +3461,13 @@ end;
 procedure TChunkIterator<T>.Dispose;
 begin
   fEnumerator := nil;
+end;
+
+function TChunkIterator<T>.GetNonEnumeratedCount: Integer;
+begin
+  Result := fSource.GetNonEnumeratedCount;
+  if Result > 0 then
+    Result :=  Integer(Cardinal(Result - 1) div Cardinal(fSize) + 1);
 end;
 
 procedure TChunkIterator<T>.Start;
@@ -3944,6 +4100,258 @@ begin
   end
   else
     Result := RaiseHelper.EnumFailedVersion;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TCountByIterator<T>'}
+
+constructor TCountByIterator<T>.Create(const source: IEnumerable<T>;
+  const comparer: IEqualityComparer<T>);
+begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
+
+  fSource := source;
+  fComparer := comparer;
+end;
+
+function TCountByIterator<T>.Clone: TIterator<TPair<T, Integer>>;
+begin
+  Result := TCountByIterator<T>.Create(fSource, fComparer);
+end;
+
+procedure TCountByIterator<T>.Dispose;
+begin
+  fEnumerator := nil;
+  fCountsBy := nil;
+end;
+
+procedure TCountByIterator<T>.Start;
+var
+  enumerator: IEnumerator<T>;
+  value: T;
+  currentCount: Ref<Integer>.PT;
+begin
+  enumerator := fSource.GetEnumerator;
+  if enumerator.MoveNext then
+  begin
+    fCountsBy := TCollections.CreateDictionary<T,Integer>(fComparer);
+
+    repeat
+      value := enumerator.Current;
+
+      currentCount := fCountsBy.GetValueRefOrAddDefault(value);
+      {$Q-}
+      Inc(currentCount^);
+      {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+    until not enumerator.MoveNext;
+    fEnumerator := fCountsBy.GetEnumerator;
+  end;
+end;
+
+function TCountByIterator<T>.TryMoveNext(
+  var current: TPair<T, Integer>): Boolean;
+begin
+  if Assigned(fEnumerator) and fEnumerator.MoveNext then
+  begin
+    current := fEnumerator.Current;
+    Result := True;
+  end
+  else
+    Result := False;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TCountByIterator<T, TKey>'}
+
+constructor TCountByIterator<T, TKey>.Create(const source: IEnumerable<T>;
+  const keySelector: Func<T, TKey>; const comparer: IEqualityComparer<TKey>);
+begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
+  if not Assigned(keySelector) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.keySelector);
+
+  fSource := source;
+  fKeySelector := keySelector;
+  fComparer := comparer;
+end;
+
+function TCountByIterator<T, TKey>.Clone: TIterator<TPair<TKey, Integer>>;
+begin
+  Result := TCountByIterator<T, TKey>.Create(fSource, fKeySelector, fComparer);
+end;
+
+procedure TCountByIterator<T, TKey>.Dispose;
+begin
+  fEnumerator := nil;
+  fCountsBy := nil;
+end;
+
+procedure TCountByIterator<T, TKey>.Start;
+var
+  enumerator: IEnumerator<T>;
+  value: T;
+  key: TKey;
+  currentCount: Ref<Integer>.PT;
+begin
+  enumerator := fSource.GetEnumerator;
+  if enumerator.MoveNext then
+  begin
+    fCountsBy := TCollections.CreateDictionary<TKey,Integer>(fComparer);
+
+    repeat
+      value := enumerator.Current;
+      key := fKeySelector(value);
+
+      currentCount := fCountsBy.GetValueRefOrAddDefault(key);
+      {$Q-}
+      Inc(currentCount^);
+      {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+    until not enumerator.MoveNext;
+    fEnumerator := fCountsBy.GetEnumerator;
+  end;
+end;
+
+function TCountByIterator<T, TKey>.TryMoveNext(
+  var current: TPair<TKey, Integer>): Boolean;
+begin
+  if Assigned(fEnumerator) and fEnumerator.MoveNext then
+  begin
+    current := fEnumerator.Current;
+    Result := True;
+  end
+  else
+    Result := False;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TAggregateByIterator<TSource, TKey, TAccumulate>'}
+
+constructor TAggregateByIterator<TSource, TKey, TAccumulate>.Create(
+  const source: IEnumerable<TSource>; const keySelector: Func<TSource, TKey>;
+  const seedSelector: Func<TKey, TAccumulate>;
+  const func: Func<TAccumulate, TSource, TAccumulate>;
+  const keyComparer: IEqualityComparer<TKey>);
+begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
+  if not Assigned(keySelector) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.keySelector);
+  if not Assigned(seedSelector) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.seedSelector);
+  if not Assigned(func) then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.func);
+
+  fSource := source;
+  fKeySelector := keySelector;
+  fSeedSelector := seedSelector;
+  fFunc := func;
+  fKeyComparer := keyComparer;
+end;
+
+function TAggregateByIterator<TSource, TKey, TAccumulate>.Clone: TIterator<TPair<TKey, TAccumulate>>;
+begin
+  Result := TAggregateByIterator<TSource, TKey, TAccumulate>.Create(fSource, fKeySelector, fSeedSelector, fFunc, fKeyComparer);
+end;
+
+procedure TAggregateByIterator<TSource, TKey, TAccumulate>.Dispose;
+begin
+  fEnumerator := nil;
+  fDict := nil;
+end;
+
+procedure TAggregateByIterator<TSource, TKey, TAccumulate>.Start;
+var
+  enumerator: IEnumerator<TSource>;
+  value: TSource;
+  key: TKey;
+  acc: Ref<TAccumulate>.PT;
+  exists: Boolean;
+begin
+  enumerator := fSource.GetEnumerator;
+
+  if enumerator.MoveNext then
+  begin
+    fDict := TCollections.CreateDictionary<TKey, TAccumulate>(fKeyComparer);
+
+    repeat
+      value := enumerator.Current;
+      key := fKeySelector(value);
+
+      acc := fDict.GetValueRefOrAddDefault(key, Default(TAccumulate), exists);
+      if exists then
+        acc^ := fFunc(acc^, value)
+      else
+        acc^ := fFunc(fSeedSelector(key), value);
+    until not enumerator.MoveNext;
+    fEnumerator := fDict.GetEnumerator;
+  end;
+end;
+
+function TAggregateByIterator<TSource, TKey, TAccumulate>.TryMoveNext(
+  var current: TPair<TKey, TAccumulate>): Boolean;
+begin
+  if Assigned(fEnumerator) and fEnumerator.MoveNext then
+  begin
+    current := fEnumerator.Current;
+    Result := True;
+  end
+  else
+    Result := False;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TIndexedIterator<T>'}
+
+constructor TIndexedIterator<T>.Create(const source: IEnumerable<T>;
+  start: Integer);
+begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
+
+  fSource := source;
+  fStart := start;
+end;
+
+function TIndexedIterator<T>.Clone: TIterator<TIndexedItem<T>>;
+begin
+  Result := TIndexedIterator<T>.Create(fSource, fStart);
+end;
+
+procedure TIndexedIterator<T>.Dispose;
+begin
+  fEnumerator := nil;
+end;
+
+procedure TIndexedIterator<T>.Start;
+begin
+  {$IFDEF INTERFACE_RVO}
+  IEnumerableInternal(fSource).GetEnumerator(fEnumerator);
+  {$ELSE}
+  fEnumerator := fSource.GetEnumerator;
+  {$ENDIF}
+  {$Q-}
+  fCurrent.Index := fStart - 1;
+  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+end;
+
+function TIndexedIterator<T>.TryMoveNext(var current: TIndexedItem<T>): Boolean;
+begin
+  if Assigned(fEnumerator) and fEnumerator.MoveNext then
+  begin
+    {$IFDEF MANAGED_TYPE_RVO}
+    if IsManagedType(T) then
+      IEnumeratorInternal(fEnumerator).GetCurrent(current.Item)
+    else{$ENDIF}
+    current.Item := fEnumerator.Current;
+    {$Q-}
+    Inc(current.Index);
+    {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+    Result := True;
+  end
+  else
+    Result := False;
 end;
 
 {$ENDREGION}

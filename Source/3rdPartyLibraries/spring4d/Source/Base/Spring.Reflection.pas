@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -68,7 +68,6 @@ type
     class function GetInterfaces: IEnumerable<TRttiInterfaceType>; static;
     class function GetTypes: IEnumerable<TRttiType>; static;
 
-    class function FindType(const qualifiedName: string): TRttiType; static;
     class function TryGetType(typeInfo: PTypeInfo; out rttiType: TRttiType): Boolean; static;
 
     /// <summary>
@@ -101,16 +100,23 @@ type
 
   {$REGION 'TRttiTypeIterator<T>'}
 
-  TRttiTypeIterator<T: TRttiType> = class(TIterator<T>, IEnumerable<T>)
+  TRttiTypeIterator = class(TIterator<TObject>, IEnumerable<TObject>)
   private
     fContext: TRttiContext;
     fIndex: Integer;
     fTypes: TArray<TRttiType>;
   protected
-    function Clone: TIterator<T>; override;
+    function Clone: TIterator<TObject>; override;
     procedure Dispose; override;
     procedure Start; override;
-    function TryMoveNext(var current: T): Boolean; override;
+    function TryMoveNext(var current: TObject): Boolean; overload; override;
+    function TryMoveNext(var current: TObject; typeClass: TClass): Boolean; reintroduce; overload;
+  end;
+  TRttiTypeIteratorClass = class of TRttiTypeIterator;
+
+  TRttiTypeIterator<T: TRttiType> = class(TRttiTypeIterator)
+  protected
+    function TryMoveNext(var current: TObject): Boolean; override;
   end;
 
   {$ENDREGION}
@@ -166,6 +172,7 @@ type
 
   TRttiTypeHelper = class helper for TRttiType
   private
+    class function InheritsFrom(cls: TClass): Boolean;
     function GetAsInterface: TRttiInterfaceType;
     function GetIsClass: Boolean;
     function GetIsInterface: Boolean;
@@ -308,6 +315,7 @@ type
     /// </summary>
     property IsGenericType: Boolean read GetIsGenericType;
 
+    property DeclaringUnitName: string read GetDeclaringUnitName;
     property DefaultName: string read GetDefaultName;
     property AncestorCount: Integer read GetAncestorCount;
   end;
@@ -471,11 +479,11 @@ type
 
   {$REGION 'TNameFilter<T>'}
 
-  TNameFilter<T: TRttiNamedObject> = class(TSpecification<T>)
+  TNameFilter<T: TRttiNamedObject> = class(TRefCountedObject, ISpecification<T>)
   private
     fName: string;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(const name: string);
   end;
@@ -485,9 +493,9 @@ type
 
   {$REGION 'TInvokableFilter<T>'}
 
-  TInvokableFilter<T: TRttiMember> = class(TSpecification<T>)
+  TInvokableFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   end;
 
   {$ENDREGION}
@@ -495,12 +503,12 @@ type
 
   {$REGION 'THasAttributeFilter<T>'}
 
-  THasAttributeFilter<T: TRttiObject> = class(TSpecification<T>)
+  THasAttributeFilter<T: TRttiObject> = class(TRefCountedObject, ISpecification<T>)
   private
     fAttributeClass: TAttributeClass;
     fInherit: Boolean;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(attributeClass: TAttributeClass; inherit: Boolean = False);
   end;
@@ -510,11 +518,11 @@ type
 
   {$REGION 'TTypeFilter<T>'}
 
-  TTypeFilter<T: TRttiMember> = class(TSpecification<T>)
+  TTypeFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   private
     fTypeInfo: PTypeInfo;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(const typeInfo: PTypeInfo);
   end;
@@ -524,11 +532,11 @@ type
 
   {$REGION 'THasParameterTypesFilter<T>'}
 
-  THasParameterTypesFilter<T: TRttiMember> = class(TSpecification<T>)
+  THasParameterTypesFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   private
     fTypes: TArray<PTypeInfo>;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(const types: array of PTypeInfo);
   end;
@@ -538,11 +546,11 @@ type
 
   {$REGION 'TContainsParameterTypeFilter<T>'}
 
-  TContainsParameterTypeFilter<T: TRttiMember> = class(TSpecification<T>)
+  TContainsParameterTypeFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   private
     fTypeInfo: PTypeInfo;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(const typeInfo: PTypeInfo);
   end;
@@ -555,11 +563,11 @@ type
 
   {$REGION 'TMemberTypeFilter<T>'}
 
-  TMemberTypeFilter<T: TRttiMember> = class(TSpecification<T>)
+  TMemberTypeFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   private
     fMemberClass: TRttiMemberClass;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(memberClass: TRttiMemberClass);
   end;
@@ -569,9 +577,9 @@ type
 
   {$REGION 'TConstructorFilter<T>'}
 
-  TConstructorFilter<T: TRttiMember> = class(TSpecification<T>)
+  TConstructorFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   end;
 
   {$ENDREGION}
@@ -579,9 +587,9 @@ type
 
   {$REGION 'TInstanceMethodFilter<T>'}
 
-  TInstanceMethodFilter<T: TRttiMember> = class(TSpecification<T>)
+  TInstanceMethodFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   end;
 
   {$ENDREGION}
@@ -589,9 +597,9 @@ type
 
   {$REGION 'TClassMethodFilter<T>'}
 
-  TClassMethodFilter<T: TRttiMember> = class(TSpecification<T>)
+  TClassMethodFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   end;
 
   {$ENDREGION}
@@ -599,11 +607,11 @@ type
 
   {$REGION 'THasParameterFlagsFilter<T>'}
 
-  THasParameterFlagsFilter<T: TRttiMember> = class(TSpecification<T>)
+  THasParameterFlagsFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   private
     fFlags: TParamFlags;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(const flags: TParamFlags);
   end;
@@ -613,11 +621,11 @@ type
 
   {$REGION 'TMethodKindFilter<T>'}
 
-  TMethodKindFilter<T: TRttiMember> = class(TSpecification<T>)
+  TMethodKindFilter<T: TRttiMember> = class(TRefCountedObject, ISpecification<T>)
   private
     fFlags: TMethodKinds;
   protected
-    function IsSatisfiedBy(const member: T): Boolean; override;
+    function IsSatisfiedBy(const member: T): Boolean;
   public
     constructor Create(const flags: TMethodKinds);
   end;
@@ -627,9 +635,9 @@ type
 
   {$REGION 'TIsClassFilter'}
 
-  TIsClassFilter = class(TSpecification<TRttiType>)
+  TIsClassFilter = class(TRefCountedObject, ISpecification<TRttiType>)
   protected
-    function IsSatisfiedBy(const member: TRttiType): Boolean; override;
+    function IsSatisfiedBy(const member: TRttiType): Boolean;
   end;
 
   {$ENDREGION}
@@ -637,9 +645,9 @@ type
 
   {$REGION 'TIsInterfaceFilter'}
 
-  TIsInterfaceFilter = class(TSpecification<TRttiType>)
+  TIsInterfaceFilter = class(TRefCountedObject, ISpecification<TRttiType>)
   protected
-    function IsSatisfiedBy(const member: TRttiType): Boolean; override;
+    function IsSatisfiedBy(const member: TRttiType): Boolean;
   end;
 
   {$ENDREGION}
@@ -647,11 +655,11 @@ type
 
   {$REGION 'THasFlagsFilter'}
 
-  THasFlagsFilter = class(TSpecification<TRttiParameter>)
+  THasFlagsFilter = class(TRefCountedObject, ISpecification<TRttiParameter>)
   private
     fFlags: TParamFlags;
   protected
-    function IsSatisfiedBy(const parameter: TRttiParameter): Boolean; override;
+    function IsSatisfiedBy(const parameter: TRttiParameter): Boolean;
   public
     constructor Create(flags: TParamFlags);
   end;
@@ -725,28 +733,17 @@ end;
 
 class function TType.GetClasses: IEnumerable<TRttiInstanceType>;
 begin
-  Result := TRttiTypeIterator<TRttiInstanceType>.Create;
+  IEnumerable<TObject>(Result) := TRttiTypeIterator<TRttiInstanceType>.Create;
 end;
 
 class function TType.GetInterfaces: IEnumerable<TRttiInterfaceType>;
 begin
-  Result := TRttiTypeIterator<TRttiInterfaceType>.Create;
+  IEnumerable<TObject>(Result) := TRttiTypeIterator<TRttiInterfaceType>.Create;
 end;
 
 class function TType.GetTypes: IEnumerable<TRttiType>;
 begin
-  Result := TRttiTypeIterator<TRttiType>.Create;
-end;
-
-class function TType.FindType(const qualifiedName: string): TRttiType;
-var
-  item: TRttiType;
-begin
-  Result := Context.FindType(qualifiedName);
-  if not Assigned(Result) then
-    for item in Context.GetTypes do
-      if item.HasName(qualifiedName) then
-        Exit(item);
+  IEnumerable<TObject>(Result) := TRttiTypeIterator.Create;
 end;
 
 class function TType.IsAssignable(typeFrom, typeTo: PTypeInfo): Boolean;
@@ -841,38 +838,84 @@ end;
 {$ENDREGION}
 
 
-{$REGION 'TRttiTypeIterator<T>'}
+{$REGION 'TRttiTypeIterator'}
 
-function TRttiTypeIterator<T>.Clone: TIterator<T>;
+function TRttiTypeIterator.Clone: TIterator<TObject>;
 begin
-  Result := TRttiTypeIterator<T>.Create;
+  Result := TRttiTypeIteratorClass(ClassType).Create;
 end;
 
-procedure TRttiTypeIterator<T>.Dispose;
+procedure TRttiTypeIterator.Dispose;
 begin
   fTypes := nil;
 end;
 
-procedure TRttiTypeIterator<T>.Start;
+procedure TRttiTypeIterator.Start;
 begin
   fTypes := fContext.GetTypes;
 end;
 
-function TRttiTypeIterator<T>.TryMoveNext(var current: T): Boolean;
+function TRttiTypeIterator.TryMoveNext(var current: TObject): Boolean;
 var
-  typ: TRttiType;
+  types: Pointer;
+  index: NativeInt;
 begin
-  while fIndex < Length(fTypes) do
+  types := Pointer(fTypes);
+  if Assigned(types) then
   begin
-    typ := fTypes[fIndex];
-    Inc(fIndex);
-    if typ.InheritsFrom(T) then
+    index := fIndex;
+    {$POINTERMATH ON}
+    if index < PNativeInt(types)[-1] then
+    {$POINTERMATH OFF}
     begin
-      current := T(typ);
+      Inc(fIndex);
+      current := TArray<TRttiType>(types)[index];
       Exit(True);
     end;
   end;
   Result := False;
+end;
+
+function TRttiTypeIterator.TryMoveNext(var current: TObject;
+  typeClass: TClass): Boolean;
+var
+  types: Pointer;
+  index: NativeInt;
+  typ: TRttiType;
+begin
+  types := Pointer(fTypes);
+  if Assigned(types) then
+  begin
+    index := fIndex;
+    {$POINTERMATH ON}
+    if index < PNativeInt(types)[-1] then
+    {$POINTERMATH OFF}
+    repeat
+      Inc(fIndex);
+      typ := TArray<TRttiType>(types)[index];
+      Result := typ.InheritsFrom(typeClass);
+      if not Result then
+      begin
+        index := fIndex;
+        {$POINTERMATH ON}
+        if index < PNativeInt(types)[-1] then Continue else Break;
+        {$POINTERMATH OFF}
+      end;
+      current := typ;
+      Exit;
+    until False;
+  end;
+  Result := False;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TRttiTypeIterator<T>'}
+
+function TRttiTypeIterator<T>.TryMoveNext(var current: TObject): Boolean;
+begin
+  Result := TryMoveNext(current, TClass(T));
 end;
 
 {$ENDREGION}
@@ -963,6 +1006,26 @@ end;
 
 {$REGION 'TRttiTypeHelper'}
 
+class function TRttiTypeHelper.InheritsFrom(cls: TClass): Boolean;
+label
+  ReturnFalse;
+var
+  P: Pointer;
+begin
+  P := Self;
+  if P <> Pointer(cls) then
+  repeat
+    if P = TRttiType then goto ReturnFalse;
+    P := PPointer(@PByte(P)[vmtParent])^;
+    if P = nil then
+      Exit(Boolean(P));
+    P := PPointer(P)^;
+  until P = Pointer(cls);
+  Exit(True);
+ReturnFalse:
+  Result := False;
+end;
+
 function TRttiTypeHelper.GetAttributes(
   inherit: Boolean): TArray<TCustomAttribute>;
 var
@@ -1045,15 +1108,18 @@ begin
   end;
 end;
 
+type
+  TRttiPackageAccess = class(TRttiNamedObject)
+    function GetNameFromType(AType: TRttiType): string; virtual; abstract;
+  end;
+
 function TRttiTypeHelper.GetDefaultName: string;
 begin
-  if IsPublicType then
-    Result := QualifiedName
-  else
+  Result := TRttiPackageAccess(Package).GetNameFromType(Self);
+  if Result = '' then
     case TypeKind of
-      tkClass: Result := TRttiInstanceType(Self).DeclaringUnitName + '.' + Name;
-      tkInterface: Result := TRttiInterfaceType(Self).DeclaringUnitName + '.' + Name;
-      tkDynArray: Result := TRttiDynamicArrayType(Self).DeclaringUnitName + '.' + Name;
+      tkClass, tkInterface, tkDynArray:
+        Result := DeclaringUnitName + '.' + Name;
     else
       Result := Name;
     end;
@@ -1225,8 +1291,20 @@ begin
 end;
 
 function TRttiTypeHelper.GetIsGenericType: Boolean;
+const
+  OpenBracket: string[1] = '<';
+var
+  handle: PTypeInfo;
+  idx: Integer;
 begin
-  Result := (Pos('<', Name) > 0) and (Pos('>', Name) > 0);
+  handle := TRttiObject(Self).Handle;
+  if handle.Name[Length(handle.Name)] = '>' then
+  begin
+    idx := Pos(OpenBracket, handle.Name);
+    Result := idx > 0;
+  end
+  else
+    Result := False;
 end;
 
 function TRttiTypeHelper.GetIsInterface: Boolean;
@@ -1489,10 +1567,10 @@ end;
 
 function GetCodeAddress(const classType: TClass; const proc: Pointer): Pointer;
 begin
-  if (Integer(proc) and $FF000000) = $FF000000 then
+  if (IntPtr(proc) and PROPSLOT_MASK) = PROPSLOT_FIELD then
     Exit(nil);
-  if (Integer(proc) and $FF000000) = $FE000000 then
-    Result := PPointer(Integer(classType) + SmallInt(proc))^
+  if (IntPtr(proc) and PROPSLOT_MASK) = PROPSLOT_VIRTUAL then
+    Result := PPointer(IntPtr(classType) + SmallInt(IntPtr(proc)))^
   else
     Result := proc;
 end;

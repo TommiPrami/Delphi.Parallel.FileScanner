@@ -107,13 +107,16 @@
         <DCCReference Include="..\..\Source\Base\Logging\Spring.Logging.ResourceStrings.pas"/>
         <DCCReference Include="..\..\Source\Base\Logging\Spring.Logging.Serializers.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.MethodIntercept.pas"/>
+        <DCCReference Include="..\..\Source\Base\Patches\Spring.Patches.RSP9815.pas"/>
         <DCCReference Include="..\..\Source\Base\Patches\Spring.Patches.RSP13163.pas"/>
         <DCCReference Include="..\..\Source\Base\Patterns\Spring.Patterns.Specification.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.Reflection.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.ResourceStrings.pas"/>
+        <DCCReference Include="..\..\Source\Base\Spring.Sorting.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.Span.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.SystemUtils.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.Times.pas"/>
+        <DCCReference Include="..\..\Source\Base\Spring.Threading.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.ValueConverters.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.VirtualClass.pas"/>
         <DCCReference Include="..\..\Source\Base\Spring.VirtualInterface.pas"/>

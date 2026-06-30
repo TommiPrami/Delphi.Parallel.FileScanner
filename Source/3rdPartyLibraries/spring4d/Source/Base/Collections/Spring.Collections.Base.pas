@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -37,12 +37,13 @@ uses
   Spring.Collections.Events,
   Spring.Collections.Trees,
   Spring.Events.Base,
-  Spring.HashTable;
+  Spring.HashTable,
+  Spring.Span;
 
 {$IFDEF DELPHIXE6_UP}{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS(FieldVisibility)}{$ENDIF}
 
 type
-  {$IFDEF MSWINDOWS}
+  {$IFDEF INTERFACE_RVO}
   IEnumerableInternal = interface //FI:W523
     procedure GetEnumerator(var result);
     function GetCount: Integer;
@@ -68,9 +69,7 @@ type
     Parent: TRefCountedObject;
     function _Release: Integer; stdcall;
     class function Create(enumerator: PPointer; vtable: PEnumeratorVtable;
-      typeInfo, getCurrent, moveNext: Pointer): Pointer; overload; static;
-    class function Create(enumerator: PPointer; vtable: PEnumeratorVtable;
-      typeInfo: Pointer): Pointer; overload; static;
+      typeInfo, getCurrent, moveNext: Pointer): Pointer; static;
   end;
 
   PComparerVtable = ^TComparerVtable;
@@ -82,7 +81,7 @@ type
     KeyComparer, ValueComparer: IInterface;
     function _Release: Integer; stdcall;
     class function Create(comparer: PPointer; vtable: PComparerVtable;
-      compare: Pointer; keyType, valueType: PTypeInfo): Pointer; static;
+      compare: Pointer; typeInfo: PTypeInfo): Pointer; static;
   end;
 
   TPairComparer<TKey, TValue> = record
@@ -95,16 +94,34 @@ type
     class function Default: IComparer<TPair<TKey, TValue>>; static;
   end;
 
+  PGroupingComparer = ^TGroupingComparer;
+  TGroupingComparer = record
+    Vtable: Pointer;
+    RefCount: Integer;
+    KeyComparer: IInterface;
+    function _Release: Integer; stdcall;
+    class function Create(comparer: PPointer; vtable: PComparerVtable;
+      compare: Pointer; keyType: PTypeInfo): Pointer; static;
+  end;
+
+  TGroupingComparer<TKey> = record
+    Vtable: Pointer;
+    RefCount: Integer;
+    KeyComparer: IComparer<TKey>;
+    class var Comparer_Vtable: TComparerVtable;
+    // only the key type is needed here so we omit the value type to reduce bloat
+    function Compare(const left, right: IGrouping<TKey, Pointer>): Integer;
+  end;
+
   TComparerThunks<T> = record
-    class function Compare(instance: Pointer; const left, right): Integer; static;
-    class function Equals(instance: Pointer; const left, right): Boolean; static;
-    class function GetHashCode(instance: Pointer; const value): Integer; static;
+    class function Compare(const comparer: IInterface; const left, right): Integer; static;
+    class function Equals(const comparer: IInterface; const left, right): Boolean; static;
+    class function GetHashCode(const comparer: IInterface; const value): Integer; static;
   end;
 
   TActionCall = procedure(const enumerator, action: IInterface);
   TAssign = procedure(var target; const source);
-  TCompare = function(self: Pointer; const left, right): Integer;
-  TContains = function(const collection: IInterface; const value; const comparer: IInterface): Boolean;
+  TContainsThunk = function(const collection: IInterface; const value; const comparer: IInterface): Boolean;
   TEqualsCurrentWithOtherEnumerator = function(const enumerator1, enumerator2, comparer: IInterface): Boolean;
   TEqualsValue = function(const enumerator, comparer: IInterface; const value): Boolean;
   TEqualsArray = function(const enumerator: IInterface; comparer, values: Pointer; index: NativeInt): Boolean;
@@ -115,16 +132,23 @@ type
   TGetDefault = procedure(var value);
   TCollectionOperation = function(const enumerator, collection: IInterface): Boolean;
   TAddToCollection = function(const collection: IInterface; const value): Boolean;
+  TPredicateMethod<T> = function(const item: T): Boolean of object;
+  TEqualsMethod<T> = function(const left, right: T): Boolean of object;
 
   TEnumerableBase = class abstract(TRefCountedObject)
   private
     // Win64 compilers of XE2 and XE3 generate some bad code when using nil directly
     const emptyComparer{$IF defined(WIN64) and not defined(DELPHIXE4_UP)}: Pointer{$IFEND} = nil;
+
+    function IsCountInRange(min, max, limit: Integer): Boolean;
     function MemoizeCanReturnThis(iteratorClass: TClass): Boolean;
   protected
     this: Pointer;
+    fElementType: PTypeInfo;
   {$REGION 'Property Accessors'}
-    function GetCount: Integer;
+    function GetCount: Integer; overload;
+    function GetCount(limit: Integer): Integer; overload; virtual;
+    function GetElementType: PTypeInfo;
     function GetIsEmpty: Boolean;
     function GetNonEnumeratedCount: Integer;
   {$ENDREGION}
@@ -161,8 +185,10 @@ type
     function MoveTo(const collection: IInterface; typeInfo: PTypeInfo): Integer; overload;
     function MoveTo(const collection, predicate: IInterface; typeInfo: PTypeInfo): Integer; overload;
 
-    procedure ExtractAll(const match: IInterface; var result);
+    procedure ExtractAll(var result); overload;
+    procedure ExtractAll(const match: IInterface; var result); overload;
     function RemoveAll(const match: IInterface; typeInfo: PTypeInfo): Integer;
+    function RemoveRange(const values: IInterface; operation: TCollectionOperation): Integer;
 
     function Sum(const selector: IInterface; getCurrent: TGetCurrentWithSelector<Integer>): Integer; overload;
     function Sum(const selector: IInterface; getCurrent: TGetCurrentWithSelector<Int64>): Int64; overload;
@@ -191,6 +217,7 @@ type
     procedure DefaultIfEmpty(defaultValue: Pointer; var result; typeInfo: Pointer; classType: TClass);
     procedure Distinct(comparer: Pointer; var result; classType: TClass);
     procedure Exclude(const second: IInterface; comparer: Pointer; var result; classType: TClass);
+    procedure Indexed(start: Integer; var result; vtable: PEnumeratorVtable; getCurrent: Pointer);
     procedure Intersect(const second: IInterface; comparer: Pointer; var result; classType: TClass);
     procedure Memoize(var result; classType: TClass);
     procedure Ordered(const comparer: IInterface; var result; classType: TClass);
@@ -218,12 +245,49 @@ type
     function Exactly(count: Integer): Boolean;
   end;
 
+  TEnumerableIndexed = class(TRefCountedObject, IEnumerableIndexed<Pointer>)
+  strict private type
+  {$REGION 'Nested Types'}
+    PEnumerator = ^TEnumerator;
+    TEnumerator = record
+      Vtable: Pointer;
+      RefCount: Integer;
+      TypeInfo: PTypeInfo;
+      Parent: TRefCountedObject;
+      fEnumerator: IEnumerator;
+      fIndex: Integer;
+      function MoveNext: Boolean;
+    end;
+  {$ENDREGION}
+  private
+    fSource: IEnumerable;
+    fVtable: PEnumeratorVtable;
+    fGetCurrent: Pointer;
+    fStart: Integer;
+  public
+    constructor Create(start: Integer; const source: IEnumerable; vtable: PEnumeratorVtable; getCurrent: Pointer);
+    function GetEnumerator: IEnumerator<TIndexedItem<Pointer>>;
+  end;
+
   TEnumerableBase<T> = class abstract(TEnumerableBase)
+  strict private type
+  {$REGION 'Nested Types'}
+    PEnumerator = ^TEnumerator;
+    TEnumerator = record
+      Vtable: Pointer;
+      RefCount: Integer;
+      TypeInfo: PTypeInfo;
+      Parent: TRefCountedObject;
+      fEnumerator: IEnumerator<T>;
+      fIndex: Integer;
+      function GetCurrent: TIndexedItem<T>;
+      class var Enumerator_Vtable: TEnumeratorVtable;
+    end;
+  {$ENDREGION}
   protected
     fComparer: IComparer<T>;
   {$REGION 'Property Accessors'}
     function GetComparer: IComparer<T>;
-    function GetElementType: PTypeInfo; virtual;
   {$ENDREGION}
     function QueryInterface(const IID: TGUID; out obj): HResult; stdcall;
     function CopyTo(var values: TArray<T>; index: Integer): Integer;
@@ -234,6 +298,7 @@ type
     function TryGetLast(var value: T; const predicate: Predicate<T>): Boolean; overload;
     function TryGetSingle(var value: T): Boolean; overload;
     function TryGetSingle(var value: T; const predicate: Predicate<T>): Boolean; overload;
+    function TryGetSpan(var span: Span<T>): Boolean;
 
     {$IFDEF DELPHIXE7_UP}
     class procedure __SuppressWarning(var value); static; inline;
@@ -285,6 +350,8 @@ type
     function FirstOrDefault(const predicate: Predicate<T>; const defaultValue: T): T; overload;
 
     procedure ForEach(const action: Action<T>); overload;
+
+    function Indexed(start: Integer): IEnumerableIndexed<T>;
 
     function Intersect(const second: IEnumerable<T>): IEnumerable<T>; overload;
     function Intersect(const second: IEnumerable<T>; const comparer: IEqualityComparer<T>): IEnumerable<T>; overload;
@@ -357,7 +424,8 @@ type
   end;
 
   TEnumerableWrapper = class(TRefCountedObject, IInterface, IEnumerable)
-  private type
+  strict private type
+  {$REGION 'Nested Types'}
     TEnumerator = class(TRefCountedObject, IEnumerator)
     private
       fSource: IEnumerator;
@@ -368,6 +436,7 @@ type
       constructor Create(const source: IEnumerator; elementType: PTypeInfo; getCurrent: TGetCurrent);
       function MoveNext: Boolean;
     end;
+  {$ENDREGION}
   private
     fSource: IEnumerable;
     fElementType: PTypeInfo;
@@ -395,7 +464,7 @@ type
   end;
 
   TExtensionKind = (
-    Empty, DefaultIfEmpty, Partition, PartitionFromEnd,
+    Empty, DefaultIfEmpty, Repeated, Items, Partition, PartitionFromEnd,
     Distinct, Exclude, Intersect, Union,
     Concat, Memoize, Ordered, Reversed, Shuffled,
     SkipWhile, SkipWhileIndex,
@@ -407,7 +476,30 @@ type
     Finalize: function(self: Pointer): Boolean;
   end;
 
-  TEnumerableExtension = class sealed(TEnumerableBase)
+  TExtensionEnumeratorVtables = array[{$IFNDEF DELPHIXE}TExtensionKind.{$ENDIF}Repeated..TExtensionKind.Items] of TEnumeratorVtable;
+
+  TEnumerableExtension = class(TEnumerableBase)
+  private type
+  {$REGION 'Nested Types'}
+    PEnumerator = ^TEnumerator;
+    TEnumerator = record
+      Vtable: Pointer;
+      RefCount: Integer;
+      TypeInfo: PTypeInfo;
+      Parent: TRefCountedObject;
+      fItems: Pointer;
+      fIndex, fCount: Integer;
+      function MoveNextCount: Boolean;
+      function MoveNextIndex: Boolean;
+    end;
+    function ClassType: TClass; inline;
+  {$ENDREGION}
+  const
+    MoveNext: array[{$IFNDEF DELPHIXE}TExtensionKind.{$ENDIF}Repeated..TExtensionKind.Items] of Pointer = (
+      @TEnumerator.MoveNextCount,
+      @TEnumerator.MoveNextIndex
+    );
+  public
     // field layout has to match with TEnumerableExtension<T> below
     // TEnumerableBase<T>
     fComparer: IInterface;
@@ -415,6 +507,7 @@ type
     fSource: IEnumerable;
     fPredicate: IInterface;
     fItems: Pointer;
+    fData: Pointer;
     fIndex, fCount: Integer;
     fEqualityComparer: IInterface;
     fKind: TExtensionKind;
@@ -422,30 +515,84 @@ type
 
     class function Create(classType: TClass; const source: IEnumerable;
       kind: TExtensionKind): TEnumerableExtension; static;
+    class procedure Empty(classType: TClass; elementType: PTypeInfo; var result); static;
+    class procedure From(values: PPointer; count: NativeInt; var result;
+      classType: TClass; typeInfo: PTypeInfo); static;
+    class procedure Repeated(const value; count: Integer; var result;
+      classType: TClass; typeInfo: PTypeInfo); static;
 
+    function Any(var value; getCurrent: TGetCurrent; default: TGetDefault;
+      assign: TAssign): Boolean;
+    function GetCount: Integer; overload;
     function GetNonEnumeratedCount: Integer;
-    procedure MemoizeToArray(var values: Pointer; typeInfo: PTypeInfo);
-    function PartitionToArray(var values: Pointer; typeInfo: PTypeInfo): Boolean;
-    procedure Skip(count: Integer; var result; classType: TClass);
-    procedure Take(count: Integer; var result; classType: TClass);
-    function TryGetElementAt(var value; index: Integer; getCurrent: TGetCurrent; default: TGetDefault): Boolean;
-    function TryGetFirst(var value; getCurrent: TGetCurrent; default: TGetDefault): Boolean;
-    function TryGetLast(var value; getCurrent: TGetCurrent; default: TGetDefault): Boolean;
+    procedure GetEnumerator(var result; var enumeratorVTables: TExtensionEnumeratorVtables;
+      typeInfo, getCurrent: Pointer);
+    function TryGetSpan(var span: Span<Pointer>): Boolean;
+    procedure ToArray(var values: Pointer; typeInfo: PTypeInfo; getCurrent: TGetCurrent);
+    procedure PartitionToArray(var values: Pointer; typeInfo: PTypeInfo; getCurrent: TGetCurrent);
+    procedure RepeatedToArray(var values: Pointer; typeInfo: PTypeInfo);
+    procedure Skip(count: Integer; var result; typeInfo: PTypeInfo);
+    procedure Take(count: Integer; var result; typeInfo: PTypeInfo);
+    function TryGetElementAt(var value; index: Integer; getCurrent: TGetCurrent;
+      getCurrentWithPredicate: TGetCurrentWithPredicate; default: TGetDefault;
+      assign: TAssign; typeInfo: PTypeInfo): Boolean; overload;
+    function TryGetFirst(var value; getCurrent: TGetCurrent;
+      default: TGetDefault; assign: TAssign): Boolean;
+    function TryGetLast(var value; getCurrent: TGetCurrent;
+      default: TGetDefault; assign: TAssign): Boolean;
+    function TryGetLast_PartitionEnumerator(var value; getCurrent: TGetCurrent; default: TGetDefault): Boolean;
+    procedure Where(const predicate: IInterface; var result; combinePredicates: Pointer);
   end;
 
-  TEnumerableExtension<T> = class sealed(TEnumerableBase<T>, IInterface, IEnumerable<T>)
+  // For internal use only - this is for implementing the IReadOnlyList methods in
+  // the TEnumerableExtension class but without implementing its GUID
+  // This is needed for the implementation of TEnumerable.Empty and TEnumerable.From
+  // as they return IReadOnlyList<T> but the class cannot implement those for all
+  // TExtensionKind
+  IEnumerableExtension<T> = interface(IReadOnlyList<T>)
+    ['{163EC7DA-F759-44A8-A34A-77D539C6FE94}']
+  end;
+
+  TEnumerableExtension<T> = class sealed(TEnumerableBase<T>, IInterface, IEnumerable<T>,
+    IEnumerableExtension<T>)
+  private type
+  {$REGION 'Nested Types'}
+    PEnumerator = ^TEnumerator;
+    TEnumerator = record
+      Vtable: Pointer;
+      RefCount: Integer;
+      TypeInfo: PTypeInfo;
+      Parent: TRefCountedObject;
+      fItems: Pointer;
+      fIndex, fCount: Integer;
+      function GetCurrent: T;
+      class var Enumerator_Vtables: TExtensionEnumeratorVtables;
+    end;
+  {$ENDREGION}
   protected
     // field layout has to match with TEnumerableExtension above
     fSource: IEnumerable<T>;
     fPredicate: IInterface;
     fItems: TArray<T>;
+    fData: Pointer;
     fIndex, fCount: Integer;
     fEqualityComparer: IEqualityComparer<T>;
     fKind: TExtensionKind;
 
-    function GetElementType: PTypeInfo; override;
+    function GetCount: Integer; overload;
+    function GetCount(limit: Integer): Integer; overload; override;
     function GetNonEnumeratedCount: Integer;
+
+  {$REGION 'Implements IReadOnlyList<T>'}
+    function CopyTo(var values: TArray<T>; index: Integer): Integer;
+    function GetItem(index: Integer): T;
+    function IndexOf(const item: T): Integer; overload;
+    function IndexOf(const item: T; index: Integer): Integer; overload;
+    function IndexOf(const item: T; index, count: Integer): Integer; overload;
+  {$ENDREGION}
   public
+    function Any: Boolean; overload;
+    function Contains(const value: T): Boolean; overload;
     function GetEnumerator: IEnumerator<T>;
     function Skip(count: Integer): IEnumerable<T>;
     function Take(count: Integer): IEnumerable<T>;
@@ -453,6 +600,8 @@ type
     function TryGetElementAt(var value: T; index: Integer): Boolean;
     function TryGetFirst(var value: T): Boolean; overload;
     function TryGetLast(var value: T): Boolean; overload;
+    function TryGetSpan(var span: Span<T>): Boolean;
+    function Where(const predicate: Predicate<T>): IEnumerable<T>; overload;
   end;
 
   PIteratorBlock = ^TIteratorBlock;
@@ -470,12 +619,13 @@ type
     Source: IEnumerable;
     Predicate: IInterface;
     Items: Pointer;
+    Data: Pointer;
     Index, Count: Integer;
     Kind: TExtensionKind;
 
     Current: record end;
 
-    procedure InitHashTable(const equals, getHashCode: Pointer;
+    procedure InitHashTable(equals: TEqualsThunk; getHashCode: TGetHashCodeThunk;
       itemsInfo: PTypeInfo; const comparer: IInterface);
 
     function Finalize(typeInfo: PTypeInfo): Boolean;
@@ -513,6 +663,7 @@ type
     Source: IEnumerable<T>;
     Predicate: IInterface;
     Items: TArray<T>;
+    Data: Pointer;
     Index, Count: Integer;
     Kind: TExtensionKind;
 
@@ -547,7 +698,7 @@ type
     function MoveNextIndexed: Boolean;
 
     function ToArray: Boolean;
-  private type
+  strict private type
     TItem = packed record
     public
       HashCode: Integer;
@@ -559,8 +710,8 @@ type
 
   TCollectionThunks<T> = record
   public type
-    {$IFDEF RSP31615}
-    FuncInternal = reference to procedure({$IFDEF CPUX64}var result;{$ENDIF}const arg1, arg2: T{$IFDEF CPUX86}; var result{$ENDIF});
+    {$IFDEF MANAGED_TYPE_RVO}
+    FuncInternal = reference to procedure({$IFDEF CPU64BITS}var result;{$ENDIF}const arg1, arg2: T{$IFDEF CPUX86}; var result{$ENDIF});
     {$ENDIF}
     ICollectionInternal = interface(IReadOnlyCollection<T>)
       // IMPORTANT NOTICE:
@@ -570,9 +721,9 @@ type
       // internal helper type to solve compiler issue with using Slice on the
       // overloaded AddRange method in older Delphi versions
       procedure AddRange(const values: array of T);
-      {$IFDEF RSP31615}overload;
+      {$IFDEF MANAGED_TYPE_RVO}overload;
       procedure AddRange(const values: IEnumerable<T>); overload;
-      procedure Extract({$IFDEF CPUX64}var result; {$ENDIF}const item: T{$IFDEF CPUX86}; var result{$ENDIF});
+      procedure Extract({$IFDEF CPU64BITS}var result; {$ENDIF}const item: T{$IFDEF CPUX86}; var result{$ENDIF});
       {$ENDIF}
     end;
   public
@@ -600,67 +751,27 @@ type
     class function GetCurrentWithSelector(const enumerator, selector: IInterface): T2; static;
   end;
 
-  TArrayIterator<T> = class(TEnumerableBase<T>, IInterface,
-    IEnumerable<T>, IReadOnlyCollection<T>, IReadOnlyList<T>)
-  private
-  {$REGION 'Nested Types'}
-    type
-      PEnumerator = ^TEnumerator;
-      TEnumerator = record
-        Vtable: Pointer;
-        RefCount: Integer;
-        TypeInfo: PTypeInfo;
-        Parent: TRefCountedObject;
-        fItems: TArray<T>;
-        fIndex, fCount: Integer;
-        function GetCurrent: T;
-        function MoveNext: Boolean;
-        class var Enumerator_Vtable: TEnumeratorVtable;
-      end;
-  {$ENDREGION}
-  private
-    fItems: TArray<T>;
-  {$REGION 'Property Accessors'}
-    function GetCount: Integer;
-    function GetItem(index: Integer): T;
-    function GetNonEnumeratedCount: Integer;
-  {$ENDREGION}
-  public
-    class function Create(const values: TArray<T>): IReadOnlyList<T>; overload; static;
-    class function Create(const values: array of T): IReadOnlyList<T>; overload; static;
-
-  {$REGION 'Implements IEnumerable<T>'}
-    function GetEnumerator: IEnumerator<T>;
-    function ToArray: TArray<T>;
-  {$ENDREGION}
-
-  {$REGION 'Implements IReadOnlyCollection<T>'}
-    function CopyTo(var values: TArray<T>; index: Integer): Integer;
-  {$ENDREGION}
-
-  {$REGION 'Implements IReadOnlyList<T>'}
-    function IndexOf(const item: T): Integer; overload;
-    function IndexOf(const item: T; index: Integer): Integer; overload;
-    function IndexOf(const item: T; index, count: Integer): Integer; overload;
-  {$ENDREGION}
+  TPredicateThunk = record
+    VTable: Pointer;
+    RefCount: Integer;
+    Predicate1, Predicate2: IInterface;
+    QueryInterface, AddRef, Release, Invoke: Pointer;
+    function _AddRef: Integer; stdcall;
+    function _Release: Integer; stdcall;
   end;
 
-  TFoldedArrayIterator<T> = class(TArrayIterator<T>)
-  private
-    fElementType: PTypeInfo;
-  protected
-    function GetElementType: PTypeInfo; override;
-  public
-    class function Create(const values: TArray<T>; elementType: PTypeInfo): IReadOnlyList<T>; overload; static;
-    class function Create(values: PPointer; count: Integer; elementType: PTypeInfo): IReadOnlyList<T>; overload; static;
+  TPredicateThunk<T> = record
+    VTable: Pointer;
+    RefCount: Integer;
+    Predicate1, Predicate2: Predicate<T>;
+    QueryInterface, AddRef, Release, Invoke: Pointer;
+    function CombinePredicates(const arg: T): Boolean;
   end;
 
   TIterator<T> = class abstract(TEnumerableBase<T>, IInterface, IEnumerator<T>)
   private
-    fCurrent: T;
     fThreadId: TThreadID;
     fState: Integer;
-    fTryMoveNext: function (self: TObject; var current: T): Boolean;
     const
       STATE_INITIAL    = -2; // initial state, before GetEnumerator
       STATE_FINISHED   = -1; // end of enumerator
@@ -668,6 +779,7 @@ type
       STATE_RUNNING    = 1;  // enumeration is running
     function GetCurrent: T;
   protected
+    fCurrent: T;
     function Clone: TIterator<T>; virtual; abstract;
     procedure Dispose; virtual;
     procedure Start; virtual;
@@ -682,7 +794,6 @@ type
   strict private
     fSource: IEnumerable<T>;
   protected
-    function GetElementType: PTypeInfo; override;
     property Source: IEnumerable<T> read fSource;
   public
     constructor Create(const source: IEnumerable<T>);
@@ -697,7 +808,7 @@ type
   ///   False</c> by default.
   /// </remarks>
   TCollectionBase<T> = class abstract(TEnumerableBase<T>)
-  private type
+  strict private type
     TNotify = procedure(Self: TObject; const item: T; action: TCollectionChangedAction);
   private
     fOnChanged: TCollectionChangedEventImpl<T>;
@@ -726,7 +837,8 @@ type
     function RemoveRange(const values: array of T): Integer; overload;
     function RemoveRange(const values: IEnumerable<T>): Integer; overload;
 
-    function ExtractAll(const match: Predicate<T>): TArray<T>;
+    function ExtractAll: TArray<T>; overload;
+    function ExtractAll(const match: Predicate<T>): TArray<T>; overload;
     procedure ExtractRange(const values: array of T); overload;
     procedure ExtractRange(const values: IEnumerable<T>); overload;
 
@@ -760,14 +872,13 @@ type
     // TEnumerableBase<T>
     fComparer: IInterface;
     fSource: TRefCountedObject;
-    fElementType: PTypeInfo;
     fHashTable: PHashTable;
     fValueComparer: IInterface;
     fOffset: Integer;
     fCount: PInteger;
-    fContains: TContains;
+    fContains: TContainsThunk;
     function GetCount: Integer;
-    function Contains(const value; comparer: Pointer; equals: TEqualsMethod): Boolean;
+    function Contains(const value; comparer: Pointer; equals: TEqualsThunk): Boolean;
     procedure ToArray(var result: Pointer; typeInfo: Pointer; assign: TAssign);
     function TryGetElementAt(var value; index: Integer;
       assign: TAssign; default: TGetDefault; getCurrent: TGetCurrent): Boolean;
@@ -775,21 +886,21 @@ type
     class function Create(classType: TClass; source: TRefCountedObject;
       hashTable: PHashTable; const valueComparer: IInterface;
       elementType: PTypeInfo; offset: Integer = 0; count: PInteger = nil;
-      contains: TContains = nil): THashMapInnerCollection; static;
+      contains: TContainsThunk = nil): THashMapInnerCollection; static;
     class function Create_Object(source: TRefCountedObject;
       hashTable: PHashTable; const valueComparer: IInterface;
       elementType: PTypeInfo; offset: Integer = 0; count: PInteger = nil;
-      contains: TContains = nil): THashMapInnerCollection; static;
+      contains: TContainsThunk = nil): THashMapInnerCollection; static;
     class function Create_Interface(source: TRefCountedObject;
       hashTable: PHashTable; const valueComparer: IInterface;
       elementType: PTypeInfo; offset: Integer = 0; count: PInteger = nil;
-      contains: TContains = nil): THashMapInnerCollection; static;
+      contains: TContainsThunk = nil): THashMapInnerCollection; static;
     property _this: Pointer read this;
   end;
 
   THashMapInnerCollection<T> = class(TEnumerableBase<T>,
     IEnumerable<T>, IReadOnlyCollection<T>)
-  private type
+  strict private type
   {$REGION 'Nested Types'}
     PT = ^T;
 
@@ -814,18 +925,15 @@ type
   {$ENDREGION}
   protected
     fSource: TRefCountedObject;
-    fElementType: PTypeInfo;
     fHashTable: PHashTable;
     fValueComparer: IEqualityComparer<T>;
     fOffset: Integer;
     fCount: PInteger;
-    fContains: TContains;
+    fContains: TContainsThunk;
   {$REGION 'Property Accessors'}
     function GetCount: Integer;
     function GetNonEnumeratedCount: Integer;
   {$ENDREGION}
-  protected
-    function GetElementType: PTypeInfo; override;
   public
   {$REGION 'Implements IInterface'}
     function _AddRef: Integer; stdcall;
@@ -833,6 +941,7 @@ type
   {$ENDREGION}
 
   {$REGION 'Implements IEnumerable<T>'}
+    function Contains(const value: T): Boolean; overload;
     function Contains(const value: T; const comparer: IEqualityComparer<T>): Boolean; overload;
     function GetEnumerator: IEnumerator<T>;
     function ToArray: TArray<T>;
@@ -840,7 +949,6 @@ type
   {$ENDREGION}
   end;
 
-  TCompareMethod = function(self: Pointer; const left, right): Integer;
   TTreeMapInnerCollection = class(TEnumerableBase)
   public type
   {$REGION 'Nested Types'}
@@ -850,6 +958,7 @@ type
       Childs: array[0..1] of PNode;
       Key: record end;
     end;
+    TCompareThunk = function(const comparer: IInterface; const left, right): Integer;
 
     TEnumerator = record
       // same layout as TTreeMapInnerCollection<T>.TEnumerator
@@ -872,36 +981,35 @@ type
     // TEnumerableBase<T>
     fComparer: IInterface;
     fSource: TRefCountedObject;
-    fElementType: PTypeInfo;
     fTree: TBinaryTree;
     fVersion: PInteger;
     fValueComparer: IInterface;
     fOffset: Integer;
     fCount: PInteger;
-    fContains: TContains;
+    fContains: TContainsThunk;
     function GetCount: Integer;
     function Contains(const value; comparer: Pointer;
-      compare: TCompareMethod; equals: TEqualsMethod): Boolean;
+      compare: TCompareThunk; equals: TEqualsThunk): Boolean;
     procedure ToArray(var result: Pointer; typeInfo: Pointer; assign: TAssign);
   public
     class function Create(classType: TClass; source: TRefCountedObject;
       tree: TBinaryTree; version: PInteger; const valueComparer: IInterface;
       elementType: PTypeInfo; offset: Integer; count: PInteger = nil;
-      contains: TContains = nil): TTreeMapInnerCollection; static;
+      contains: TContainsThunk = nil): TTreeMapInnerCollection; static;
     class function Create_Object(source: TRefCountedObject;
       tree: TBinaryTree; version: PInteger; const valueComparer: IInterface;
       elementType: PTypeInfo; offset: Integer; count: PInteger = nil;
-      contains: TContains = nil): TTreeMapInnerCollection; static;
+      contains: TContainsThunk = nil): TTreeMapInnerCollection; static;
     class function Create_Interface(source: TRefCountedObject;
       tree: TBinaryTree; version: PInteger; const valueComparer: IInterface;
       elementType: PTypeInfo; offset: Integer; count: PInteger = nil;
-      contains: TContains = nil): TTreeMapInnerCollection; static;
+      contains: TContainsThunk = nil): TTreeMapInnerCollection; static;
     property _this: Pointer read this;
   end;
 
   TTreeMapInnerCollection<T> = class(TEnumerableBase<T>,
     IEnumerable<T>, IReadOnlyCollection<T>)
-  private type
+  strict private type
   {$REGION 'Nested Types'}
     PNode = ^TNode;
     TNode = packed record // same layout as TRedBlackTreeBase<TKey>.TNode
@@ -932,19 +1040,16 @@ type
   {$ENDREGION}
   protected
     fSource: TRefCountedObject;
-    fElementType: PTypeInfo;
     fTree: TBinaryTree;
     fVersion: PInteger;
     fValueComparer: IEqualityComparer<T>;
     fOffset: Integer;
     fCount: PInteger;
-    fContains: TContains;
+    fContains: TContainsThunk;
   {$REGION 'Property Accessors'}
     function GetCount: Integer;
     function GetNonEnumeratedCount: Integer;
   {$ENDREGION}
-  protected
-    function GetElementType: PTypeInfo; override;
   public
   {$REGION 'Implements IInterface'}
     function _AddRef: Integer; stdcall;
@@ -959,23 +1064,22 @@ type
   end;
 
   TCircularArrayBuffer<T> = class(TEnumerableBase<T>)
-  private
+  strict private type
   {$REGION 'Nested Types'}
-    type
-      PEnumerator = ^TEnumerator;
-      TEnumerator = record
-        Vtable: Pointer;
-        RefCount: Integer;
-        TypeInfo: PTypeInfo;
-        fSource: TCircularArrayBuffer<T>;
-        fIndex, fCount: Integer;
-        fVersion: Integer;
-        function GetCurrent: T;
-        function MoveNext: Boolean;
-        class var Enumerator_Vtable: TEnumeratorVtable;
-      end;
-      ItemType = TTypeInfo<T>;
-      PT = ^T;
+    PEnumerator = ^TEnumerator;
+    TEnumerator = record
+      Vtable: Pointer;
+      RefCount: Integer;
+      TypeInfo: PTypeInfo;
+      fSource: TCircularArrayBuffer<T>;
+      fIndex, fCount: Integer;
+      fVersion: Integer;
+      function GetCurrent: T;
+      function MoveNext: Boolean;
+      class var Enumerator_Vtable: TEnumeratorVtable;
+    end;
+    ItemType = TTypeInfo<T>;
+    PT = ^T;
   {$ENDREGION}
   strict private
     fOnChanged: TCollectionChangedEventImpl<T>;
@@ -1029,10 +1133,9 @@ type
   end;
 
   TMapBase<TKey, TValue> = class abstract(TCollectionBase<TPair<TKey, TValue>>)
-  private
-    type
-      TKeyValuePair = TPair<TKey, TValue>;
-      TKeyValuePairComparer = TPairComparer<TKey, TValue>;
+  private type
+    TKeyValuePair = TPair<TKey, TValue>;
+    TKeyValuePairComparer = TPairComparer<TKey, TValue>;
     class function RemoveCurrentFromCollection(const enumerator: IEnumerator<TKey>; const collection: IMap<TKey, TValue>): Boolean; static;
   protected
     fOnKeyChanged: TCollectionChangedEventImpl<TKey>;
@@ -1040,8 +1143,8 @@ type
   {$REGION 'Property Accessors'}
     function GetOnKeyChanged: ICollectionChangedEvent<TKey>;
     function GetOnValueChanged: ICollectionChangedEvent<TValue>;
-    function GetKeyType: PTypeInfo; virtual;
-    function GetValueType: PTypeInfo; virtual;
+    function GetKeyType: PTypeInfo;
+    function GetValueType: PTypeInfo;
   {$ENDREGION}
     procedure DoNotify(const key: TKey; const value: TValue; action: TCollectionChangedAction); overload;
     function AsReadOnly: IReadOnlyDictionary<TKey, TValue>;
@@ -1059,6 +1162,22 @@ type
     function Extract(const item: TKeyValuePair): TKeyValuePair;
 
     function Contains(const item: TKeyValuePair): Boolean; overload;
+  end;
+
+  // special struct for quickly getting the typeInfo of TPair<TKey,TValue> fields
+  PPairFieldTable = ^TPairFieldTable;
+  TPairFieldTable = packed record
+    RecFldCnt: Integer;     // always 2
+    KeyType: PPTypeInfo;
+    KeyOffset: NativeInt;   // always 0
+    KeyFlags: Byte;
+    KeyName: string[3];     // 'Key'
+    KeyAttrData: TAttrData;
+    ValueType: PPTypeInfo;
+    ValueOffset: NativeInt;
+    ValueFlags: Byte;
+    ValueName: string[5];   // 'Value'
+    ValueAttrData: TAttrData;
   end;
 
 const
@@ -1080,6 +1199,7 @@ const
   IReadOnlyDictionaryGuid: TGUID = '{39F7C68B-373E-4758-808C-705D3978E38F}';
 
   IPartitionOfTGuid: TGUID = '{ACFB79AB-F593-4F2B-9720-E6CE984F6844}';
+  IEnumerableExtensionOfTGuid: TGUID = '{163EC7DA-F759-44A8-A34A-77D539C6FE94}';
 
   DefaultMethod: TMethod = ();
 
@@ -1089,6 +1209,7 @@ procedure EnsureEventInstance(var event: TEventBase; var result;
 function SupportsIndexedAccess(const source: IInterface): Boolean;
 procedure UpdateNotify(instance: TObject; baseClass: TClass; var notify);
 function DynArrayGrow(var items: Pointer; typeInfo: PTypeInfo; capacity: NativeInt): NativeInt;
+function GetPairFieldTable(typeInfo: PTypeInfo): PPairFieldTable;
 
 implementation
 
@@ -1100,9 +1221,7 @@ uses
 {$IFDEF POSIX}
   Posix.Pthread,
 {$ENDIF}
-  Spring.Collections.Lists,
-  Spring.Comparers,
-  Spring.ResourceStrings;
+  Spring.Comparers;
 
 procedure AssignComparer(var comparer; const source: IInterface);
 begin
@@ -1153,6 +1272,31 @@ begin
   end;
 end;
 
+function IsEmptyExtension(obj: TObject): Boolean; overload;
+var
+  table: PInterfaceTable;
+begin
+  table := PPointer(@PByte(PPointer(obj)^)[vmtIntfTable])^;
+  if table = nil then Exit(Boolean(NativeInt(table)));
+  Result := SameGuid(table.Entries[0].IID, IEnumerableExtensionOfTGuid);
+  if Result then
+    Result := TEnumerableExtension(obj).fKind = TExtensionKind.Empty;
+end;
+
+function IsEmptyExtension(const source: IInterface): Boolean; overload;
+var
+  obj: TObject;
+  table: PInterfaceTable;
+begin
+  if source = nil then Exit(Boolean(NativeInt(source)));
+  obj := IEnumerable(source).AsObject;
+  table := PPointer(@PByte(PPointer(obj)^)[vmtIntfTable])^;
+  if table = nil then Exit(Boolean(NativeInt(table)));
+  Result := SameGuid(table.Entries[0].IID, IEnumerableExtensionOfTGuid);
+  if Result then
+    Result := TEnumerableExtension(obj).fKind = TExtensionKind.Empty;
+end;
+
 procedure UpdateNotify(instance: TObject; baseClass: TClass; var notify);
 type
   TNotifyRec = record
@@ -1175,10 +1319,10 @@ end;
 
 procedure DynArrayUnwrap(var items: Pointer; typeInfo: PTypeInfo; index, count: NativeInt);
 var
-  p: PDynArrayTypeInfo;
+  p: PTypeInfoData;
   capacity: NativeInt;
 begin
-  p := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name));
+  p := GetTypeInfoData(typeInfo);
   {$POINTERMATH ON}
   capacity := PNativeInt(items)[-1];
   {$POINTERMATH OFF}
@@ -1188,7 +1332,7 @@ begin
     DynArraySetLength(items, typeInfo, 1, @capacity);
   end;
   {$IFDEF WEAKREF}
-  if Assigned(p.elType) and HasWeakRef(PPointer(p.elType)^) then
+  if Assigned(p.elType) and HasWeakRef(p.elType^) then
   begin
     MoveManaged(items, @PByte(items)[count*p.elSize], p.elType^, index);
     MoveManaged(@PByte(items)[index*p.elSize], items, p.elType^, count);
@@ -1208,6 +1352,29 @@ function DynArrayGrow(var items: Pointer; typeInfo: PTypeInfo; capacity: NativeI
 begin
   Result := GrowCapacity(capacity);
   DynArraySetLength(items, typeInfo, 1, @Result);
+end;
+
+function GetPairFieldTable(typeInfo: PTypeInfo): PPairFieldTable;
+type
+  PFieldTable = ^TFieldTable;
+  TFieldTable = packed record
+    X: Word;
+    RecSize: Cardinal;
+    Count: Cardinal;
+    Fields: array[0..0] of TManagedField;
+  end;
+var
+  FT: PFieldTable;
+  NumOps: PByte;
+begin
+  FT := PFieldTable(@PByte(typeInfo)[Byte(PTypeInfo(typeInfo).Name[0])]);
+  {$R-,Q-}
+  NumOps := @FT.Fields[FT.Count];
+  // if one of the types in the pair is a custom managed record the pair gets
+  // some operators as well which we need to skip to get to the field table
+  Result := PPairFieldTable(NumOps + 1 + NumOps^ * SizeOf(Pointer));
+  {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
+  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
 end;
 
 
@@ -1242,33 +1409,6 @@ begin
   end;
 end;
 
-class function TEnumeratorBlock.Create(enumerator: PPointer;
-  vtable: PEnumeratorVtable; typeInfo: Pointer): Pointer;
-
-  function GetEnumeratorBlockSize(typeInfo: Pointer): Integer; inline;
-  var
-    p: PByte;
-  begin
-    p := typeInfo;
-    Result := PTypeData(@p[p[1]+2]).RecSize;
-  end;
-
-begin
-  IInterface(enumerator^) := nil;
-  Result := AllocMem(GetEnumeratorBlockSize(typeInfo));
-  PEnumeratorBlock(Result).Vtable := vtable;
-  PEnumeratorBlock(Result).RefCount := 1;
-  PEnumeratorBlock(Result).TypeInfo := typeInfo;
-  enumerator^ := Result;
-
-  if not Assigned(vtable[0]) then
-  begin
-    vtable[0] := @NopQueryInterface;
-    vtable[1] := @RecAddRef;
-    vtable[2] := @TEnumeratorBlock._Release;
-  end;
-end;
-
 function TEnumeratorBlock._Release: Integer;
 begin
   Result := AtomicDecrement(RefCount);
@@ -1287,7 +1427,9 @@ end;
 {$REGION 'TPairComparer'}
 
 class function TPairComparer.Create(comparer: PPointer; vtable: PComparerVtable;
-  compare: Pointer; keyType, valueType: PTypeInfo): Pointer;
+  compare: Pointer; typeInfo: PTypeInfo): Pointer;
+var
+  pairType: PPairFieldTable;
 begin
   vtable[0] := @NopQueryInterface;
   vtable[1] := @RecAddRef;
@@ -1298,8 +1440,9 @@ begin
   Result := AllocMem(SizeOf(TPairComparer));
   PPairComparer(Result).Vtable := vtable;
   PPairComparer(Result).RefCount := 1;
-  PPairComparer(Result).KeyComparer := IInterface(_LookupVtableInfo(giComparer, keyType, GetTypeSize(keyType)));
-  PPairComparer(Result).ValueComparer := IInterface(_LookupVtableInfo(giComparer, valueType, GetTypeSize(valueType)));
+  pairType := GetPairFieldTable(typeInfo);
+  PPairComparer(Result).KeyComparer := IInterface(_LookupVtableInfo(giComparer, pairType.KeyType^, GetTypeSize(pairType.KeyType^)));
+  PPairComparer(Result).ValueComparer := IInterface(_LookupVtableInfo(giComparer, pairType.ValueType^, GetTypeSize(pairType.ValueType^)));
   comparer^ := Result;
 end;
 
@@ -1329,7 +1472,48 @@ end;
 class function TPairComparer<TKey, TValue>.Default: IComparer<TPair<TKey, TValue>>;
 begin
   TPairComparer.Create(@Result, @Comparer_Vtable,
-    @TPairComparer<TKey, TValue>.Compare, TypeInfo(TKey), TypeInfo(TValue));
+    @TPairComparer<TKey, TValue>.Compare, TypeInfo(TPair<TKey, TValue>));
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TGroupingComparer' }
+
+class function TGroupingComparer.Create(comparer: PPointer;
+  vtable: PComparerVtable; compare: Pointer; keyType: PTypeInfo): Pointer;
+begin
+  vtable[0] := @NopQueryInterface;
+  vtable[1] := @RecAddRef;
+  vtable[2] := @TGroupingComparer._Release;
+  vtable[3] := compare;
+
+  IInterface(comparer^) := nil;
+  Result := AllocMem(SizeOf(TGroupingComparer));
+  PGroupingComparer(Result).Vtable := vtable;
+  PGroupingComparer(Result).RefCount := 1;
+  PGroupingComparer(Result).KeyComparer := IInterface(_LookupVtableInfo(giComparer, keyType, GetTypeSize(keyType)));
+  comparer^ := Result;
+end;
+
+function TGroupingComparer._Release: Integer;
+begin
+  Result := AtomicDecrement(RefCount);
+  if Result = 0 then
+  begin
+    KeyComparer := nil;
+    FreeMem(@Self);
+  end;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TGroupingComparer<TKey>'}
+
+function TGroupingComparer<TKey>.Compare(const left, right: IGrouping<TKey, Pointer>): Integer;
+begin
+  Result := KeyComparer.Compare(left.Key, right.Key);
 end;
 
 {$ENDREGION}
@@ -1337,19 +1521,19 @@ end;
 
 {$REGION 'TComparerThunks<T>'}
 
-class function TComparerThunks<T>.Compare(instance: Pointer; const left, right): Integer;
+class function TComparerThunks<T>.Compare(const comparer: IInterface; const left, right): Integer;
 begin
-  Result := IComparer<T>(instance).Compare(T(left), T(right));
+  Result := IComparer<T>(comparer).Compare(T(left), T(right));
 end;
 
-class function TComparerThunks<T>.Equals(instance: Pointer; const left, right): Boolean;
+class function TComparerThunks<T>.Equals(const comparer: IInterface; const left, right): Boolean;
 begin
-  Result := IEqualityComparer<T>(instance).Equals(T(left), T(right));
+  Result := IEqualityComparer<T>(comparer).Equals(T(left), T(right));
 end;
 
-class function TComparerThunks<T>.GetHashCode(instance: Pointer; const value): Integer;
+class function TComparerThunks<T>.GetHashCode(const comparer: IInterface; const value): Integer;
 begin
-  Result := IEqualityComparer<T>(instance).GetHashCode(T(value));
+  Result := IEqualityComparer<T>(comparer).GetHashCode(T(value));
 end;
 
 {$ENDREGION}
@@ -1380,27 +1564,6 @@ begin
   end
   else
     Result := inherited QueryInterface(IID, obj);
-end;
-
-function IsCountInRange(const this: IEnumerable; min, max, limit: Integer): Boolean;
-
-  function SkipAndCountSlow(const this: IEnumerable; limit: Integer): Integer;
-  var
-    enumerator: IEnumerator;
-  begin
-    Result := 0;
-    enumerator := this.GetEnumerator;
-    while (Result < limit) and enumerator.MoveNext do
-      Inc(Result);
-  end;
-
-var
-  count: Integer;
-begin
-  count := this.GetNonEnumeratedCount;
-  if count < 0 then
-    count := SkipAndCountSlow(this, limit);
-  Result := {$B+}(count >= min) and (count <= max);{$B-}
 end;
 
 function HasAnyItems(const this: IEnumerable): Boolean;
@@ -1468,7 +1631,7 @@ end;
 function TEnumerableBase.AtLeast(count: Integer): Boolean;
 begin
   if count >= 0 then
-    Result := IsCountInRange(IEnumerable(this), count, MaxInt, count)
+    Result := IsCountInRange(count, MaxInt, count)
   else
     Result := Boolean(RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum));
 end;
@@ -1476,7 +1639,7 @@ end;
 function TEnumerableBase.AtMost(count: Integer): Boolean;
 begin
   if count >= 0 then
-    Result := IsCountInRange(IEnumerable(this), 0, count, count + 1)
+    Result := IsCountInRange(0, count, count + 1)
   else
     Result := Boolean(RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum));
 end;
@@ -1587,7 +1750,7 @@ function TEnumerableBase.Between(min, max: Integer): Boolean;
 begin
   if min >= 0 then
     if max >= min then
-      Result := IsCountInRange(IEnumerable(this), min, max, max + 1)
+      Result := IsCountInRange(min, max, max + 1)
     else
       Result := Boolean(RaiseHelper.ArgumentOutOfRange(ExceptionArgument.max))
   else
@@ -1597,6 +1760,18 @@ end;
 procedure TEnumerableBase.Concat(const second: IInterface; var result; classType: TClass);
 begin
   if not Assigned(second) then RaiseHelper.ArgumentNil(ExceptionArgument.second);
+
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := second;
+    Exit;
+  end;
+
+  if IsEmptyExtension(second) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
 
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Concat) do
   begin
@@ -1608,16 +1783,41 @@ end;
 function TEnumerableBase.Contains(const value; comparer: Pointer;
   equals: TEqualsValue): Boolean;
 var
-  elementType: PTypeInfo;
   enumerator: IEnumerator;
+  obj: TObject;
 begin
-  if not Assigned(comparer) then
-  begin
-    elementType := IEnumerable(this).GetElementType;
-    comparer := _LookupVtableInfo(giEqualityComparer, elementType, GetTypeSize(elementType));
-  end;
-
   enumerator := IEnumerable(this).GetEnumerator;
+
+  if not Assigned(comparer) then
+    case fElementType.Kind of
+      tkInteger, tkChar, tkEnumeration, tkWChar, tkInterface, tkInt64, tkClassRef, tkPointer, tkProcedure:
+      begin
+        case GetTypeSize(fElementType) of
+          1: while enumerator.MoveNext do if IEnumerator<Int8>(enumerator).Current = Int8(value) then Exit(True);
+          2: while enumerator.MoveNext do if IEnumerator<Int16>(enumerator).Current = Int16(value) then Exit(True);
+          4: while enumerator.MoveNext do if IEnumerator<Int32>(enumerator).Current = Int32(value) then Exit(True);
+          8: while enumerator.MoveNext do if IEnumerator<Int64>(enumerator).Current = Int64(value) then Exit(True);
+        end;
+        Exit(False);
+      end;
+      tkClass:
+      begin
+        while enumerator.MoveNext do
+        begin
+          obj := IEnumerator<TObject>(enumerator).Current;
+          if (obj = TObject(value)) or (Assigned(obj) and obj.Equals(TObject(value))) then Exit(True);
+        end;
+        Exit(False);
+      end;
+      tkUString:
+      begin
+        while enumerator.MoveNext do if IEnumerator<string>(enumerator).Current = string(value) then Exit(True);
+        Exit(False);
+      end
+    else
+      comparer := _LookupVtableInfo(giEqualityComparer, fElementType, GetTypeSize(fElementType));
+    end;
+
   while enumerator.MoveNext do
     if equals(enumerator, IInterface(comparer), value) then
       Exit(True);
@@ -1643,12 +1843,12 @@ procedure TEnumerableBase.DefaultIfEmpty(defaultValue: Pointer; var result; type
 const
   Len: NativeInt = 1;
 var
-  p: PDynArrayTypeInfo;
+  p: PTypeInfoData;
 begin
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.DefaultIfEmpty) do
   begin
     DynArraySetLength(fItems, typeInfo, 1, @Len);
-    p := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name));
+    p := GetTypeInfoData(typeInfo);
     IInterface(result) := IInterface(@IMT);
     if defaultValue <> nil then
       if p.elType <> nil then
@@ -1659,14 +1859,15 @@ begin
 end;
 
 procedure TEnumerableBase.Distinct(comparer: Pointer; var result; classType: TClass);
-var
-  elementType: PTypeInfo;
 begin
-  if not Assigned(comparer) then
+  if IsEmptyExtension(Self) then
   begin
-    elementType := IEnumerable(this).GetElementType;
-    comparer := _LookupVtableInfo(giEqualityComparer, elementType, GetTypeSize(elementType));
+    IInterface(result) := IInterface(this);
+    Exit;
   end;
+
+  if not Assigned(comparer) then
+    comparer := _LookupVtableInfo(giEqualityComparer, fElementType, GetTypeSize(fElementType));
 
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Distinct) do
   begin
@@ -1678,7 +1879,6 @@ end;
 function TEnumerableBase.EqualsTo(const values: IInterface; comparer: Pointer;
   equals: TEqualsCurrentWithOtherEnumerator): Boolean;
 var
-  elementType: PTypeInfo;
   e1, e2: IEnumerator;
 begin
   if not Assigned(values) then RaiseHelper.ArgumentNil(ExceptionArgument.values);
@@ -1686,10 +1886,7 @@ begin
   if IInterface(this) = values then Exit(True);
 
   if not Assigned(comparer) then
-  begin
-    elementType := IEnumerable(this).GetElementType;
-    comparer := _LookupVtableInfo(giEqualityComparer, elementType, GetTypeSize(elementType));
-  end;
+    comparer := _LookupVtableInfo(giEqualityComparer, fElementType, GetTypeSize(fElementType));
 
   e1 := IEnumerable(this).GetEnumerator;
   e2 := IEnumerable(values).GetEnumerator;
@@ -1702,13 +1899,11 @@ end;
 
 function TEnumerableBase.EqualsTo(const values: Pointer; high: Integer; equals: TEqualsArray): Boolean;
 var
-  elementType: PTypeInfo;
   comparer: Pointer;
   enumerator: IEnumerator;
   i: NativeInt;
 begin
-  elementType := IEnumerable(this).GetElementType;
-  comparer := _LookupVtableInfo(giEqualityComparer, elementType, GetTypeSize(elementType));
+  comparer := _LookupVtableInfo(giEqualityComparer, fElementType, GetTypeSize(fElementType));
   enumerator := IEnumerable(this).GetEnumerator;
   for i := 0 to high do
     if not enumerator.MoveNext or not equals(enumerator, comparer, values, i) then
@@ -1719,22 +1914,23 @@ end;
 function TEnumerableBase.Exactly(count: Integer): Boolean;
 begin
   if count >= 0 then
-    Result := IsCountInRange(IEnumerable(this), count, count, count + 1)
+    Result := IsCountInRange(count, count, count + 1)
   else
     Result := Boolean(RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum));
 end;
 
 procedure TEnumerableBase.Exclude(const second: IInterface; comparer: Pointer; var result; classType: TClass);
-var
-  elementType: PTypeInfo;
 begin
   if not Assigned(second) then RaiseHelper.ArgumentNil(ExceptionArgument.second);
 
-  if not Assigned(comparer) then
+  if IsEmptyExtension(Self) or IsEmptyExtension(second) then
   begin
-    elementType := IEnumerable(this).GetElementType;
-    comparer := _LookupVtableInfo(giEqualityComparer, elementType, GetTypeSize(elementType));
+    IInterface(result) := IInterface(this);
+    Exit;
   end;
+
+  if not Assigned(comparer) then
+    comparer := _LookupVtableInfo(giEqualityComparer, fElementType, GetTypeSize(fElementType));
 
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Exclude) do
   begin
@@ -1744,12 +1940,23 @@ begin
   end;
 end;
 
+procedure TEnumerableBase.ExtractAll(var result);
+begin
+  {$IFDEF INTERFACE_RVO}
+  IEnumerableInternal(this).ToArray(result);
+  {$ELSE}
+  TArray<Pointer>(result) := IEnumerable<Pointer>(this).ToArray;
+  {$ENDIF}
+  // little hack - we can hardcast here since we are just passing along an open array
+  ICollection<Pointer>(this).ExtractRange(TArray<Pointer>(result));
+end;
+
 procedure TEnumerableBase.ExtractAll(const match: IInterface; var result);
 begin
   if not Assigned(match) then RaiseHelper.ArgumentNil(ExceptionArgument.match);
 
   // little hack - we can hardcast here since we are just passing along a predicate
-  {$IFDEF MSWINDOWS}
+  {$IFDEF INTERFACE_RVO}
   IEnumerableInternal(IEnumerable<Pointer>(this).Where(Predicate<Pointer>(match))).ToArray(result);
   {$ELSE}
   TArray<Pointer>(result) := IEnumerable<Pointer>(this).Where(Predicate<Pointer>(match)).ToArray;
@@ -1799,15 +2006,25 @@ begin
     Result := GetEnumeratedCount(IEnumerable(this));
 end;
 
-function TEnumerableBase.GetIsEmpty: Boolean;
+function TEnumerableBase.GetCount(limit: Integer): Integer;
 var
-  count: Integer;
+  enumerator: IEnumerator;
 begin
-  count := IEnumerable(this).GetNonEnumeratedCount;
-  if count >= 0 then
-    Result := count = 0
-  else
-    Result := not HasAnyItems(IEnumerable(this));
+  Result := 0;
+  enumerator := IEnumerable(this).GetEnumerator;
+  while (Result < limit) and enumerator.MoveNext do
+    Inc(Result);
+end;
+
+function TEnumerableBase.GetElementType: PTypeInfo;
+begin
+  Result := fElementType;
+end;
+
+function TEnumerableBase.GetIsEmpty: Boolean;
+begin
+  Result := IEnumerable<Pointer>(this).Any;
+  Result := not Result;
 end;
 
 function TEnumerableBase.GetNonEnumeratedCount: Integer;
@@ -1819,17 +2036,29 @@ begin
     Result := -1;
 end;
 
+procedure TEnumerableBase.Indexed(start: Integer; var result; vtable: PEnumeratorVtable; getCurrent: Pointer);
+begin
+  IEnumerableIndexed<Pointer>(result) := TEnumerableIndexed.Create(start, IEnumerable(this), vtable, getCurrent);
+end;
+
 procedure TEnumerableBase.Intersect(const second: IInterface; comparer: Pointer; var result; classType: TClass);
-var
-  elementType: PTypeInfo;
 begin
   if not Assigned(second) then RaiseHelper.ArgumentNil(ExceptionArgument.second);
 
-  if not Assigned(comparer) then
+  if IsEmptyExtension(Self) then
   begin
-    elementType := IEnumerable(this).GetElementType;
-    comparer := _LookupVtableInfo(giEqualityComparer, elementType, GetTypeSize(elementType));
+    IInterface(result) := IInterface(this);
+    Exit;
   end;
+
+  if IsEmptyExtension(second) then
+  begin
+    IInterface(result) := second;
+    Exit;
+  end;
+
+  if not Assigned(comparer) then
+    comparer := _LookupVtableInfo(giEqualityComparer, fElementType, GetTypeSize(fElementType));
 
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Intersect) do
   begin
@@ -1837,6 +2066,16 @@ begin
     fEqualityComparer := IInterface(comparer);
     IInterface(result) := IInterface(@IMT);
   end;
+end;
+
+function TEnumerableBase.IsCountInRange(min, max, limit: Integer): Boolean;
+var
+  count: Integer;
+begin
+  count := IEnumerable(this).GetNonEnumeratedCount;
+  if count < 0 then
+    count := GetCount(limit);
+  Result := {$B+}(count >= min) and (count <= max);{$B-}
 end;
 
 function TEnumerableBase.MemoizeCanReturnThis(iteratorClass: TClass): Boolean;
@@ -1956,6 +2195,12 @@ end;
 
 procedure TEnumerableBase.Memoize(var result; classType: TClass);
 begin
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   if MemoizeCanReturnThis(classType) then
     IInterface(Result) := IInterface(this)
   else
@@ -2060,7 +2305,7 @@ begin
   if not Assigned(collection) then RaiseHelper.ArgumentNil(ExceptionArgument.collection);
 
   values := nil;
-  {$IFDEF MSWINDOWS}
+  {$IFDEF INTERFACE_RVO}
   IEnumerableInternal(this).ToArray(values);
   {$ELSE}
   values := Pointer(IEnumerable<Pointer>(this).ToArray);
@@ -2084,7 +2329,7 @@ begin
 
   values := nil;
   // little hack - we can hardcast here since we are just passing along a predicate
-  {$IFDEF MSWINDOWS}
+  {$IFDEF INTERFACE_RVO}
   IEnumerableInternal(IEnumerable<Pointer>(this).Where(Predicate<Pointer>(predicate))).ToArray(values);
   {$ELSE}
   values := Pointer(IEnumerable<Pointer>(this).Where(Predicate<Pointer>(predicate)).ToArray);
@@ -2103,6 +2348,12 @@ procedure TEnumerableBase.Ordered(const comparer: IInterface; var result; classT
 begin
   if not Assigned(comparer) then RaiseHelper.ArgumentNil(ExceptionArgument.comparer);
 
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Ordered) do
   begin
     fPredicate := comparer;
@@ -2118,7 +2369,7 @@ begin
 
   values := nil;
   // little hack - we can hardcast here since we are just passing along a predicate
-  {$IFDEF MSWINDOWS}
+  {$IFDEF INTERFACE_RVO}
   IEnumerableInternal(IEnumerable<Pointer>(this).Where(Predicate<Pointer>(match))).ToArray(values);
   {$ELSE}
   values := Pointer(IEnumerable<Pointer>(this).Where(Predicate<Pointer>(match)).ToArray);
@@ -2131,14 +2382,38 @@ begin
   end;
 end;
 
+function TEnumerableBase.RemoveRange(const values: IInterface;
+  operation: TCollectionOperation): Integer;
+begin
+  if IInterface(this) = values then
+  begin
+    Result := ICollection(this).Count;
+    ICollection(this).Clear;
+  end
+  else
+    Result := ForEach(values, operation);
+end;
+
 procedure TEnumerableBase.Reversed(var result; classType: TClass);
 begin
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Reversed) do
     IInterface(result) := IInterface(@IMT);
 end;
 
 procedure TEnumerableBase.Shuffled(var result; classType: TClass);
 begin
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Shuffled) do
     IInterface(result) := IInterface(@IMT);
 end;
@@ -2147,6 +2422,12 @@ procedure TEnumerableBase.Skip(count: Integer; var result; classType: TClass);
 var
   maxCount: Integer;
 begin
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   if count <= 0 then
     IInterface(result) := IInterface(this)
   else
@@ -2163,6 +2444,12 @@ end;
 
 procedure TEnumerableBase.SkipLast(count: Integer; var result; classType: TClass);
 begin
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   if count <= 0 then
     IInterface(result) := IInterface(this)
   else
@@ -2177,6 +2464,12 @@ procedure TEnumerableBase.SkipWhile(const predicate: IInterface; var result; cla
 begin
   if not Assigned(predicate) then RaiseHelper.ArgumentNil(ExceptionArgument.predicate);
 
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.SkipWhile) do
   begin
     fPredicate := predicate;
@@ -2187,6 +2480,12 @@ end;
 procedure TEnumerableBase.SkipWhileIndex(const predicate: IInterface; var result; classType: TClass);
 begin
   if not Assigned(predicate) then RaiseHelper.ArgumentNil(ExceptionArgument.predicate);
+
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
 
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.SkipWhileIndex) do
   begin
@@ -2256,6 +2555,18 @@ end;
 
 procedure TEnumerableBase.Take(count: Integer; var result; classType: TClass);
 begin
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
+  if count <= 0 then
+  begin
+    TEnumerableExtension.Empty(classType, fElementType, result);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Partition) do
   begin
     if count < 0 then
@@ -2267,6 +2578,12 @@ end;
 
 procedure TEnumerableBase.TakeLast(count: Integer; var result; classType: TClass);
 begin
+  if count <= 0 then
+  begin
+    TEnumerableExtension.Empty(classType, fElementType, result);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.PartitionFromEnd) do
   begin
     fIndex := -1;
@@ -2281,6 +2598,12 @@ procedure TEnumerableBase.TakeWhile(const predicate: IInterface; var result; cla
 begin
   if not Assigned(predicate) then RaiseHelper.ArgumentNil(ExceptionArgument.predicate);
 
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.TakeWhile) do
   begin
     fPredicate := predicate;
@@ -2291,6 +2614,12 @@ end;
 procedure TEnumerableBase.TakeWhileIndex(const predicate: IInterface; var result; classType: TClass);
 begin
   if not Assigned(predicate) then RaiseHelper.ArgumentNil(ExceptionArgument.predicate);
+
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
 
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.TakeWhileIndex) do
   begin
@@ -2306,7 +2635,7 @@ var
 begin
   count := 0;
   capacity := 0;
-  size := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name)).elSize;
+  size := GetTypeInfoData(typeInfo).elSize;
   enumerator := IEnumerable(this).GetEnumerator;
   while enumerator.MoveNext do
   begin
@@ -2476,16 +2805,23 @@ begin
 end;
 
 procedure TEnumerableBase.Union(const second: IInterface; comparer: Pointer; var result; classType: TClass);
-var
-  elementType: PTypeInfo;
 begin
   if not Assigned(second) then RaiseHelper.ArgumentNil(ExceptionArgument.second);
 
-  if not Assigned(comparer) then
+  if IsEmptyExtension(Self) then
   begin
-    elementType := IEnumerable(this).GetElementType;
-    comparer := _LookupVtableInfo(giEqualityComparer, elementType, GetTypeSize(elementType));
+    IInterface(result) := IEnumerable<Pointer>(second).Distinct(IEqualityComparer<Pointer>(comparer));
+    Exit;
   end;
+
+  if IsEmptyExtension(second) then
+  begin
+    Distinct(comparer, result, classType);
+    Exit;
+  end;
+
+  if not Assigned(comparer) then
+    comparer := _LookupVtableInfo(giEqualityComparer, fElementType, GetTypeSize(fElementType));
 
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Union) do
   begin
@@ -2499,6 +2835,12 @@ procedure TEnumerableBase.Where(const predicate: IInterface; var result; classTy
 begin
   if not Assigned(predicate) then RaiseHelper.ArgumentNil(ExceptionArgument.predicate);
 
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.Where) do
   begin
     fPredicate := predicate;
@@ -2510,11 +2852,62 @@ procedure TEnumerableBase.WhereIndex(const predicate: IInterface; var result; cl
 begin
   if not Assigned(predicate) then RaiseHelper.ArgumentNil(ExceptionArgument.predicate);
 
+  if IsEmptyExtension(Self) then
+  begin
+    IInterface(result) := IInterface(this);
+    Exit;
+  end;
+
   with TEnumerableExtension.Create(classType, IEnumerable(this), TExtensionKind.WhereIndex) do
   begin
     fPredicate := predicate;
     IInterface(result) := IInterface(@IMT);
   end;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TEnumerableIndexed'}
+
+constructor TEnumerableIndexed.Create(start: Integer; const source: IEnumerable;
+  vtable: PEnumeratorVtable; getCurrent: Pointer);
+begin
+  fStart := start;
+  fSource := source;
+  fVtable := vtable;
+  fGetCurrent := getCurrent;
+end;
+
+function TEnumerableIndexed.GetEnumerator: IEnumerator<TIndexedItem<Pointer>>;
+begin
+  _AddRef;
+  with PEnumerator(TEnumeratorBlock.Create(@Result, fVtable,
+    TypeInfo(TEnumerator), fGetCurrent, @TEnumerator.MoveNext))^ do
+  begin
+    Parent := Self;
+    {$Q-}
+    fIndex := fStart - 1;
+    {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+    {$IFDEF INTERFACE_RVO}
+    IEnumerableInternal(fSource).GetEnumerator(fEnumerator);
+    {$ELSE}
+    fEnumerator := fSource.GetEnumerator;
+    {$ENDIF}
+  end;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TEnumerableIndexed.TEnumerator'}
+
+function TEnumerableIndexed.TEnumerator.MoveNext: Boolean;
+begin
+  {$Q-}
+  Inc(fIndex);
+  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+  Result := fEnumerator.MoveNext;
 end;
 
 {$ENDREGION}
@@ -2536,8 +2929,10 @@ end;
 procedure TEnumerableBase<T>.AfterConstruction;
 begin
   inherited AfterConstruction;
+  if fElementType = nil then
+    fElementType := TypeInfo(T);
   if not Assigned(fComparer) then
-    fComparer := IComparer<T>(_LookupVtableInfo(giComparer, GetElementType, SizeOf(T)));
+    fComparer := IComparer<T>(_LookupVtableInfo(giComparer, fElementType, SizeOf(T)));
 end;
 
 function TEnumerableBase<T>.Aggregate(const func: Func<T, T, T>): T; //FI:W521
@@ -2748,9 +3143,9 @@ begin
   Result := fComparer;
 end;
 
-function TEnumerableBase<T>.GetElementType: PTypeInfo;
+function TEnumerableBase<T>.Indexed(start: Integer): IEnumerableIndexed<T>;
 begin
-  Result := TypeInfo(T);
+  inherited Indexed(start, Result, @TEnumerator.Enumerator_Vtable, @TEnumerator.GetCurrent);
 end;
 
 function TEnumerableBase<T>.Intersect(const second: IEnumerable<T>): IEnumerable<T>; //FI:W521
@@ -3082,6 +3477,11 @@ begin
   Result := TryGetSingle(value, PInterface(@predicate)^, TCollectionThunks<T>.GetCurrentWithPredicate, TCollectionThunks<T>.GetDefault) = 1;
 end;
 
+function TEnumerableBase<T>.TryGetSpan(var span: Span<T>): Boolean;
+begin
+  Result := False;
+end;
+
 function TEnumerableBase<T>.Union(const second: IEnumerable<T>): IEnumerable<T>; //FI:W521
 begin
   inherited Union(second, nil, Result, TEnumerableExtension<T>);
@@ -3102,6 +3502,30 @@ function TEnumerableBase<T>.Where(
   const predicate: Func<T, Integer, Boolean>): IEnumerable<T>;
 begin
   WhereIndex(PInterface(@predicate)^, Result, TEnumerableExtension<T>);
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TEnumerableBase<T>.TEnumerator'}
+
+function TEnumerableBase<T>.TEnumerator.GetCurrent: TIndexedItem<T>;
+begin
+  Result.Index := fIndex;
+  {$IFDEF MANAGED_TYPE_RVO}
+  if IsManagedType(T) then
+    IEnumeratorInternal(fEnumerator).GetCurrent(Result.Item)
+  else{$ENDIF}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+  if GetTypeKind(T) in [tkInteger, tkChar, tkWChar, tkEnumeration, tkInt64, tkClassRef, tkPointer, tkProcedure] then
+    case SizeOf(T) of
+      1: PInt8(@Result.Item)^ := IEnumerator<Int8>(fEnumerator).Current;
+      2: PInt16(@Result.Item)^ := IEnumerator<Int16>(fEnumerator).Current;
+      4: PInt32(@Result.Item)^ := IEnumerator<Int32>(fEnumerator).Current;
+      8: PInt64(@Result.Item)^ := IEnumerator<Int64>(fEnumerator).Current;
+    end
+  else{$ENDIF}
+  Result.Item := fEnumerator.Current;
 end;
 
 {$ENDREGION}
@@ -3217,14 +3641,10 @@ end;
 {$REGION 'TIterator<T>'}
 
 procedure TIterator<T>.AfterConstruction;
-var
-  method: function (var current: T): Boolean of object;
 begin
   inherited AfterConstruction;
   fState := STATE_INITIAL;
   fThreadId := GetCurrentThreadId;
-  method := TryMoveNext;
-  fTryMoveNext := TMethod(method).Code;
 end;
 
 procedure TIterator<T>.Dispose;
@@ -3249,15 +3669,12 @@ begin
 end;
 
 function TIterator<T>.MoveNext: Boolean;
-label
-  _STATE_RUNNING;
 begin
   repeat
     case fState of
       STATE_RUNNING:
-      _STATE_RUNNING:
       begin
-        Result := fTryMoveNext(Self, fCurrent);
+        Result := TryMoveNext(fCurrent);
         if Result then
           Exit;
 
@@ -3287,13 +3704,9 @@ end;
 
 constructor TSourceIterator<T>.Create(const source: IEnumerable<T>); //FI:W525
 begin
+  fElementType := source.ElementType;
   AssignComparer(fComparer, source);
   fSource := source;
-end;
-
-function TSourceIterator<T>.GetElementType: PTypeInfo;
-begin
-  Result := fSource.ElementType;
 end;
 
 {$ENDREGION}
@@ -3349,8 +3762,13 @@ end;
 
 procedure TCollectionBase<T>.Changed(const item: T; action: TCollectionChangedAction);
 begin
-  if Assigned(fOnChanged) and fOnChanged.CanInvoke then
-    fOnChanged.Invoke(Self, item, action);
+  with fOnChanged do if CanInvoke then
+    Invoke(Self, item, action);
+end;
+
+function TCollectionBase<T>.ExtractAll: TArray<T>; //FI:W521
+begin
+  inherited ExtractAll(Result);
 end;
 
 function TCollectionBase<T>.ExtractAll(const match: Predicate<T>): TArray<T>; //FI:W521
@@ -3360,10 +3778,19 @@ end;
 
 procedure TCollectionBase<T>.ExtractRange(const values: array of T);
 var
-  i: Integer;
+  this: Pointer;
+  i: NativeInt;
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+  res: T;
+  {$ENDIF}
 begin
-  for i := 0 to High(values) do
-    ICollection<T>(this).Extract(values[i]);
+  this := Self.this;
+  for i := 1 to Length(values) do
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+      TCollectionThunks<T>.ICollectionInternal(this).Extract({$IFDEF CPU64BITS}res, {$ENDIF}values[i-1]{$IFDEF CPUX86}, res{$ENDIF})
+    else{$ENDIF}
+      ICollection<T>(this).Extract(values[i-1]);
 end;
 
 procedure TCollectionBase<T>.ExtractRange(const values: IEnumerable<T>);
@@ -3405,7 +3832,7 @@ end;
 
 function TCollectionBase<T>.RemoveRange(const values: IEnumerable<T>): Integer;
 begin
-  Result := inherited ForEach(values, TCollectionThunks<T>.RemoveCurrentFromCollection);
+  Result := inherited RemoveRange(values, TCollectionThunks<T>.RemoveCurrentFromCollection);
 end;
 
 procedure TCollectionBase<T>.Reset;
@@ -3427,7 +3854,7 @@ end;
 class function THashMapInnerCollection.Create(classType: TClass;
   source: TRefCountedObject; hashTable: PHashTable;
   const valueComparer: IInterface; elementType: PTypeInfo;
-  offset: Integer; count: PInteger; contains: TContains): THashMapInnerCollection;
+  offset: Integer; count: PInteger; contains: TContainsThunk): THashMapInnerCollection;
 begin
   Result := THashMapInnerCollection(classType.NewInstance);
   Result.fSource := source;
@@ -3443,7 +3870,7 @@ end;
 class function THashMapInnerCollection.Create_Interface(
   source: TRefCountedObject; hashTable: PHashTable;
   const valueComparer: IInterface; elementType: PTypeInfo; offset: Integer;
-  count: PInteger; contains: TContains): THashMapInnerCollection;
+  count: PInteger; contains: TContainsThunk): THashMapInnerCollection;
 begin
   Result := Create(THashMapInnerCollection<IInterface>,
     source, hashTable, valueComparer, elementType, offset, count, contains);
@@ -3452,55 +3879,57 @@ end;
 class function THashMapInnerCollection.Create_Object(source: TRefCountedObject;
   hashTable: PHashTable; const valueComparer: IInterface;
   elementType: PTypeInfo; offset: Integer; count: PInteger;
-  contains: TContains): THashMapInnerCollection;
+  contains: TContainsThunk): THashMapInnerCollection;
 begin
   Result := Create(THashMapInnerCollection<TObject>,
     source, hashTable, valueComparer, elementType, offset, count, contains);
 end;
 
-function THashMapInnerCollection.Contains(const value; comparer: Pointer; equals: TEqualsMethod): Boolean;
+function THashMapInnerCollection.Contains(const value; comparer: Pointer; equals: TEqualsThunk): Boolean;
 var
   hashTable: PHashTable;
-  item: PByte;
+  foundItem, item: PByte;
   itemCount, itemSize, offset: NativeInt;
+  contains: TContainsThunk;
 begin
-  if fOffset = KeyOffset then // means this is for the key
+  if (fOffset = KeyOffset) // means this is for the key
+    and ((fHashTable.Comparer = IInterface(comparer))
+    or (comparer = nil)) then
   begin
-    item := fHashTable.FindItem(value);
-    Result := Assigned(item);
-  end
-  else if not Assigned(fContains) then
-  begin
-    offset := fOffset;
-    hashTable := fHashTable;
-    item := hashTable.Items;
-    itemCount := hashTable.ItemCount;
-    itemSize := hashTable.ItemSize;
-    if comparer = nil then
-      comparer := Pointer(fValueComparer);
-    while itemCount > 0 do
-    begin
-      if PInteger(item)^ >= 0 then
-        if equals(comparer, item[offset], value) then
-          Exit(True);
-      Inc(item, itemSize);
-      Dec(itemCount);
-    end;
-    Result := False;
+    foundItem := fHashTable.FindItem(value);
+    Result := Assigned(foundItem);
   end
   else
   begin
     hashTable := fHashTable;
     item := hashTable.Items;
-    itemSize := hashTable.ItemSize;
     itemCount := hashTable.ItemCount;
-    while itemCount > 0 do
+    itemSize := hashTable.ItemSize;
+    if not Assigned(fContains) then
     begin
-      if PInteger(item)^ >= 0 then
-        if fContains(PInterface(@item[itemSize - SizeOf(Pointer)])^, value, IInterface(comparer)) then
-          Exit(True);
-      Inc(item, itemSize);
-      Dec(itemCount);
+      offset := fOffset;
+      if comparer = nil then
+        comparer := Pointer(fValueComparer);
+      while itemCount > 0 do
+      begin
+        if PInteger(item)^ >= 0 then
+          if equals(IInterface(comparer), item[offset], value) then
+            Exit(True);
+        Inc(item, itemSize);
+        Dec(itemCount);
+      end;
+    end
+    else
+    begin
+      contains := fContains;
+      while itemCount > 0 do
+      begin
+        if PInteger(item)^ >= 0 then
+          if contains(PInterface(@item[itemSize - SizeOf(Pointer)])^, value, IInterface(comparer)) then
+            Exit(True);
+        Inc(item, itemSize);
+        Dec(itemCount);
+      end;
     end;
     Result := False;
   end;
@@ -3526,7 +3955,7 @@ begin
     offset := fOffset;
     hashTable := fHashTable;
     count := hashTable.Count;
-    elSize := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name)).elSize;
+    elSize := GetTypeInfoData(typeInfo).elSize;
     DynArraySetLength(result, typeInfo, 1, @count);
     target := result;
     if target = nil then Exit;
@@ -3655,7 +4084,7 @@ begin
           begin
             fItem := item;
             values := PPointer(@item[offset])^;
-            {$IFDEF MSWINDOWS}
+            {$IFDEF INTERFACE_RVO}
             IEnumerableInternal(values).GetEnumerator(fEnumerator);
             {$ELSE}
             fEnumerator := IEnumerable(values).GetEnumerator;
@@ -3680,6 +4109,19 @@ end;
 
 {$REGION 'THashMapInnerCollection<T>'}
 
+function THashMapInnerCollection<T>.Contains(const value: T): Boolean;
+var
+  item: Pointer;
+begin
+  if fOffset = KeyOffset then
+  begin
+    item := IHashTable<T>(fHashTable).Find(value);
+    Result := Assigned(item);
+  end
+  else
+    Result := THashMapInnerCollection(Self).Contains(value, nil, TComparerThunks<T>.Equals);
+end;
+
 function THashMapInnerCollection<T>.Contains(const value: T;
   const comparer: IEqualityComparer<T>): Boolean;
 begin
@@ -3689,11 +4131,6 @@ end;
 function THashMapInnerCollection<T>.GetCount: Integer;
 begin
   Result := THashMapInnerCollection(Self).GetCount;
-end;
-
-function THashMapInnerCollection<T>.GetElementType: PTypeInfo;
-begin
-  Result := fElementType;
 end;
 
 function THashMapInnerCollection<T>.GetEnumerator: IEnumerator<T>; //FI:W521
@@ -3748,11 +4185,10 @@ end;
 
 function THashMapInnerCollection<T>.TEnumerator.GetCurrent_Values: T;
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(fEnumerator).GetCurrent(Result)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   Result := fEnumerator.Current;
 end;
 
@@ -3764,7 +4200,7 @@ end;
 class function TTreeMapInnerCollection.Create(classType: TClass;
   source: TRefCountedObject; tree: TBinaryTree; version: PInteger;
   const valueComparer: IInterface; elementType: PTypeInfo;
-  offset: Integer; count: PInteger; contains: TContains): TTreeMapInnerCollection;
+  offset: Integer; count: PInteger; contains: TContainsThunk): TTreeMapInnerCollection;
 begin
   Result := TTreeMapInnerCollection(classType.NewInstance);
   Result.fComparer := tree.Comparer;
@@ -3782,7 +4218,7 @@ end;
 class function TTreeMapInnerCollection.Create_Interface(
   source: TRefCountedObject; tree: TBinaryTree; version: PInteger;
   const valueComparer: IInterface; elementType: PTypeInfo; offset: Integer;
-  count: PInteger; contains: TContains): TTreeMapInnerCollection;
+  count: PInteger; contains: TContainsThunk): TTreeMapInnerCollection;
 begin
   Result := Create(TTreeMapInnerCollection<IInterface>,
     source, tree, version, valueComparer, elementType, offset, count, contains);
@@ -3791,14 +4227,14 @@ end;
 class function TTreeMapInnerCollection.Create_Object(source: TRefCountedObject;
   tree: TBinaryTree; version: PInteger; const valueComparer: IInterface;
   elementType: PTypeInfo; offset: Integer; count: PInteger;
-  contains: TContains): TTreeMapInnerCollection;
+  contains: TContainsThunk): TTreeMapInnerCollection;
 begin
   Result := Create(TTreeMapInnerCollection<TObject>,
     source, tree, version, valueComparer, elementType, offset, count, contains);
 end;
 
 function TTreeMapInnerCollection.Contains(const value; comparer: Pointer;
-  compare: TCompareMethod; equals: TEqualsMethod): Boolean;
+  compare: TCompareThunk; equals: TEqualsThunk): Boolean;
 var
   root, temp, next: Pointer;
   node: PNode;
@@ -3812,7 +4248,7 @@ begin
     if not Assigned(root) then Exit(Boolean(root));
     node := root;
     repeat
-      compareResult := compare(comparer, PNode(node).Key, value);
+      compareResult := compare(IInterface(comparer), PNode(node).Key, value);
       if compareResult = 0 then Break;
       i := compareResult shr 31; // left -> 0, right -> 1
       node := PNode(node).Childs[i];
@@ -3827,7 +4263,7 @@ begin
     if not Assigned(temp) then Exit(Boolean(temp));
     repeat
       node := temp;
-      Result := equals(comparer, PByte(@node.Key)[fOffset], value);
+      Result := equals(IInterface(comparer), PByte(@node.Key)[fOffset], value);
       if Result then
         Exit;
       temp := PBinaryTreeNode(node).Next;
@@ -3869,7 +4305,7 @@ begin
     offset := fOffset;
     tree := fTree;
     count := tree.Count;
-    elSize := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name)).elSize;
+    elSize := GetTypeInfoData(typeInfo).elSize;
     DynArraySetLength(result, typeInfo, 1, @count);
     next := tree.Root.LeftMost;
     if Assigned(next) then
@@ -3968,7 +4404,7 @@ begin
         begin
           fNode := node;
           values := PPointer(@PByte(@PNode(node).Key)[offset])^;
-          {$IFDEF MSWINDOWS}
+          {$IFDEF INTERFACE_RVO}
           IEnumerableInternal(values).GetEnumerator(fEnumerator);
           {$ELSE}
           fEnumerator := IEnumerable(values).GetEnumerator;
@@ -4002,11 +4438,6 @@ end;
 function TTreeMapInnerCollection<T>.GetCount: Integer;
 begin
   Result := TTreeMapInnerCollection(Self).GetCount;
-end;
-
-function TTreeMapInnerCollection<T>.GetElementType: PTypeInfo;
-begin
-  Result := fElementType;
 end;
 
 function TTreeMapInnerCollection<T>.GetEnumerator: IEnumerator<T>; //FI:W521
@@ -4067,14 +4498,12 @@ end;
 
 function TTreeMapInnerCollection<T>.TEnumerator.GetCurrent_Values: T;
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(fEnumerator).GetCurrent(Result)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   Result := fEnumerator.Current;
 end;
-
 
 {$ENDREGION}
 
@@ -4437,11 +4866,11 @@ end;
 
 procedure TMapBase<TKey, TValue>.AfterConstruction;
 begin
+  inherited AfterConstruction;
   TPairComparer.Create(@fComparer,
     @TKeyValuePairComparer.Comparer_Vtable,
     @TKeyValuePairComparer.Compare,
-    GetKeyType, GetValueType);
-  inherited AfterConstruction;
+    fElementType);
   fOnKeyChanged := TCollectionChangedEventImpl<TKey>.Create;
   fOnValueChanged := TCollectionChangedEventImpl<TValue>.Create;
 end;
@@ -4491,7 +4920,7 @@ end;
 
 function TMapBase<TKey, TValue>.GetKeyType: PTypeInfo;
 begin
-  Result := TypeInfo(TKey);
+  Result := GetPairFieldTable(fElementType).KeyType^;
 end;
 
 function TMapBase<TKey, TValue>.GetOnKeyChanged: ICollectionChangedEvent<TKey>;
@@ -4506,7 +4935,7 @@ end;
 
 function TMapBase<TKey, TValue>.GetValueType: PTypeInfo;
 begin
-  Result := TypeInfo(TValue);
+  Result := GetPairFieldTable(fElementType).ValueType^;
 end;
 
 function TMapBase<TKey, TValue>.Remove(const item: TKeyValuePair): Boolean;
@@ -4516,20 +4945,18 @@ end;
 
 class function TMapBase<TKey, TValue>.RemoveCurrentFromCollection(
   const enumerator: IEnumerator<TKey>; const collection: IMap<TKey, TValue>): Boolean;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   key: TKey;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(TKey) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(key);
     Result := IMap<TKey, TValue>(collection).Remove(key);
-  end
-  else
-  {$ENDIF}
-  Result := IMap<TKey, TValue>(collection).Remove(IEnumerator<TKey>(enumerator).Current);
+  end else{$ENDIF}
+  Result := IMap<TKey, TValue>(collection).Remove(enumerator.Current);
 end;
 
 function TMapBase<TKey, TValue>.RemoveRange(const keys: array of TKey): Integer;
@@ -4584,13 +5011,12 @@ begin
 
     Result.RefCount := 1;
     Result.Source := extension.fSource;
-    if extension.fKind = Memoize then
-      Pointer(Result.Predicate) := extension
-    else
+    if extension.fKind <> Memoize then
     begin
       Result.Predicate := extension.fPredicate;
       Result.Items := extension.fItems;
     end;
+    Result.Data := extension.fData;
     Result.Index := extension.fIndex;
     Result.Count := extension.fCount;
     Result.Kind := extension.fKind;
@@ -4604,27 +5030,26 @@ end;
 
 function TIteratorBlock.Finalize(typeInfo: PTypeInfo): Boolean;
 var
-  p: PDynArrayTypeInfo;
+  p: PTypeInfoData;
 begin
   Enumerator := nil;
   Source := nil;
-  if Kind <> Memoize then
-    Predicate := nil
+  Predicate := nil;
+  case Kind of
+    TExtensionKind.DefaultIfEmpty,
+    TExtensionKind.Items: ;
+    TExtensionKind.Distinct..TExtensionKind.Union:
+      if Data <> nil then
+      begin
+        PHashTable(Data).Clear;
+        PHashTable(Data).Comparer := nil;
+        FreeMem(Data);
+        Data := nil;
+      end;
   else
-    Pointer(Predicate) := nil;
-  if Kind in [Distinct..Union] then
-  begin
-    if Items <> nil then
-    begin
-      PHashTable(Items).Clear;
-      PHashTable(Items).Comparer := nil;
-      FreeMem(Items);
-      Items := nil;
-    end;
-  end
-  else if Kind <> DefaultIfEmpty then
     DynArrayClear(Items, typeInfo);
-  p := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name));
+  end;
+  p := GetTypeInfoData(typeInfo);
   if p.elType <> nil then
     System.FinalizeArray(@Current, p.elType^, 1);
   Result := False;
@@ -4668,7 +5093,7 @@ end;
 
 function TIteratorBlock.GetEnumerator: Boolean;
 begin
-{$IFDEF MSWINDOWS}
+{$IFDEF INTERFACE_RVO}
   IEnumerableInternal(Source).GetEnumerator(Enumerator);
 {$ELSE}
   Enumerator := Source.GetEnumerator;
@@ -4679,7 +5104,7 @@ end;
 
 function TIteratorBlock.GetEnumeratorAndSkip: Boolean;
 begin
-{$IFDEF MSWINDOWS}
+{$IFDEF INTERFACE_RVO}
   IEnumerableInternal(Source).GetEnumerator(Enumerator);
 {$ELSE}
   Enumerator := Source.GetEnumerator;
@@ -4696,7 +5121,7 @@ end;
 
 function TIteratorBlock.GetEnumeratorDefaultIfEmpty: Boolean;
 begin
-{$IFDEF MSWINDOWS}
+{$IFDEF INTERFACE_RVO}
   IEnumerableInternal(Source).GetEnumerator(Enumerator);
 {$ELSE}
   Enumerator := Source.GetEnumerator;
@@ -4713,7 +5138,7 @@ function TIteratorBlock.GetEnumeratorHashTable(
 var
   entry: PByte;
 begin
-{$IFDEF MSWINDOWS}
+{$IFDEF INTERFACE_RVO}
   IEnumerableInternal(Predicate).GetEnumerator(Enumerator);
 {$ELSE}
   Enumerator := IEnumerable(Predicate).GetEnumerator;
@@ -4722,7 +5147,7 @@ begin
   while Enumerator.MoveNext do
   begin
     getCurrent(Enumerator, Current);
-    entry := PHashTable(Items).FindItem(Current, IgnoreExisting or InsertNonExisting);
+    entry := PHashTable(Data).FindItem(Current, IgnoreExisting or InsertNonExisting);
     if not Assigned(entry) then Continue;
     assign(entry[KeyOffset], Current);
   end;
@@ -4731,14 +5156,14 @@ end;
 
 function TIteratorBlock.GetEnumeratorMemoize: Boolean;
 begin
-  if TEnumerableExtension(Pointer(Predicate)).fCount = 0 then
+  if TEnumerableExtension(Parent).fCount = 0 then
   begin
-  {$IFDEF MSWINDOWS}
-    IEnumerableInternal(Source).GetEnumerator(IEnumerator(TEnumerableExtension(Pointer(Predicate)).fPredicate));
+  {$IFDEF INTERFACE_RVO}
+    IEnumerableInternal(Source).GetEnumerator(IEnumerator(TEnumerableExtension(Parent).fPredicate));
   {$ELSE}
-    IEnumerator(TEnumerableExtension(Pointer(Predicate)).fPredicate) := Source.GetEnumerator;
+    IEnumerator(TEnumerableExtension(Parent).fPredicate) := Source.GetEnumerator;
   {$ENDIF}
-    TEnumerableExtension(Pointer(Predicate)).fCount := TEnumerableExtension(Pointer(Predicate)).fCount or not CountMask;
+    TEnumerableExtension(Parent).fCount := TEnumerableExtension(Parent).fCount or not CountMask;
   end;
   DoMoveNext := Methods.MoveNext;
   Result := Methods.MoveNext(@Self);
@@ -4775,7 +5200,7 @@ function TIteratorBlock.GetEnumeratorSkipLast(getCurrent: TGetCurrent; typeInfo:
 var
   i, capacity, elSize: NativeInt;
 begin
-{$IFDEF MSWINDOWS}
+{$IFDEF INTERFACE_RVO}
   IEnumerableInternal(Source).GetEnumerator(Enumerator);
 {$ELSE}
   Enumerator := Source.GetEnumerator;
@@ -4783,7 +5208,7 @@ begin
 
   i := 0;
   capacity := 0;
-  elSize := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name)).elSize;
+  elSize := GetTypeInfoData(typeInfo).elSize;
   repeat
     if not Enumerator.MoveNext then Exit(False);
 
@@ -4803,7 +5228,7 @@ var
 begin
   if Self.Count = 0 then Exit(Boolean(Self.Count));
 
-{$IFDEF MSWINDOWS}
+{$IFDEF INTERFACE_RVO}
   IEnumerableInternal(Source).GetEnumerator(Enumerator);
 {$ELSE}
   Enumerator := Source.GetEnumerator;
@@ -4814,7 +5239,7 @@ begin
   i := 0;
   capacity := 0;
   wrapAround := False;
-  elSize := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name)).elSize;
+  elSize := GetTypeInfoData(typeInfo).elSize;
   repeat
     if i >= capacity then
       capacity := DynArrayGrow(Pointer(Items), typeInfo, capacity);
@@ -4837,13 +5262,13 @@ begin
   Result := Methods.MoveNext(@Self);
 end;
 
-procedure TIteratorBlock.InitHashTable(const equals, getHashCode: Pointer;
+procedure TIteratorBlock.InitHashTable(equals: TEqualsThunk; getHashCode: TGetHashCodeThunk;
   itemsInfo: PTypeInfo; const comparer: IInterface);
 begin
-  PHashTable(Items) := AllocMem(SizeOf(THashTable));
-  PHashTable(Items).Comparer := comparer;
-  PHashTable(Items).ItemsInfo := itemsInfo;
-  PHashTable(Items).Initialize(equals, getHashCode, Source.ElementType);
+  PHashTable(Data) := AllocMem(SizeOf(THashTable));
+  PHashTable(Data).Comparer := comparer;
+  PHashTable(Data).ItemsInfo := itemsInfo;
+  PHashTable(Data).Initialize(equals, getHashCode, Source.ElementType);
 end;
 
 function TIteratorBlock.MoveNextEmpty: Boolean;
@@ -4856,9 +5281,9 @@ var
   iterator: TEnumerableExtension;
   count, capacity, elSize: NativeInt;
 begin
-  iterator := Pointer(Predicate);
+  iterator := TEnumerableExtension(Parent);
   count := iterator.fCount and CountMask;
-  elSize := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name)).elSize;
+  elSize := GetTypeInfoData(typeInfo).elSize;
   if Index >= count then
   begin
     if iterator.fPredicate = nil then
@@ -4976,8 +5401,8 @@ begin
   end;
 
   if Kind in [Distinct..Union] then
-    PIteratorBlock(@Self).InitHashTable(@TComparerThunks<T>.Equals,
-      @TComparerThunks<T>.GetHashCode, TypeInfo(TItems), extension.fEqualityComparer);
+    PIteratorBlock(@Self).InitHashTable(TComparerThunks<T>.Equals,
+      TComparerThunks<T>.GetHashCode, TypeInfo(TItems), extension.fEqualityComparer);
 
   if Assigned(Enumerator_Vtable[0]) then
   begin
@@ -5039,7 +5464,7 @@ begin
   repeat
     repeat
       if not Enumerator.MoveNext then Break;
-      {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+      {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
       if IsManagedType(T) then
         IEnumeratorInternal(Enumerator).GetCurrent(Current)
       else
@@ -5048,9 +5473,9 @@ begin
       if Kind <> Concat then
       begin
         {$IF defined(DELPHIXE6) or defined(DELPHIXE7)}
-        entry := HashTableFindItem(PHashTable(Items), Current, IgnoreExisting or InsertNonExisting);
+        entry := HashTableFindItem(PHashTable(Data), Current, IgnoreExisting or InsertNonExisting);
         {$ELSE}
-        entry := PHashTable(Items).FindItem(Current, IgnoreExisting or InsertNonExisting);
+        entry := PHashTable(Data).FindItem(Current, IgnoreExisting or InsertNonExisting);
         {$IFEND}
         if not Assigned(entry) then Continue;
         entry.Item := Current;
@@ -5062,7 +5487,7 @@ begin
     if p = nil then
       Exit(Boolean(p));
 
-    {$IFDEF MSWINDOWS}
+    {$IFDEF INTERFACE_RVO}
     IEnumerableInternal(Predicate).GetEnumerator(Enumerator);
     {$ELSE}
     Enumerator := IEnumerable<T>(Predicate).GetEnumerator;
@@ -5076,7 +5501,7 @@ begin
   Result := Enumerator.MoveNext;
   if Result then
   begin
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5094,7 +5519,7 @@ begin
     Result := Enumerator.MoveNext;
     if Result then
     begin
-      {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+      {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
       if IsManagedType(T) then
         IEnumeratorInternal(Enumerator).GetCurrent(Current)
       else
@@ -5114,7 +5539,7 @@ begin
   repeat
     Result := Enumerator.MoveNext;
     if not Result then Break;
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5125,9 +5550,9 @@ begin
     else
       option := DeleteExisting;
     {$IF defined(DELPHIXE6) or defined(DELPHIXE7)}
-    entry := HashTableFindItem(PHashTable(Items), Current, option);
+    entry := HashTableFindItem(PHashTable(Data), Current, option);
     {$ELSE}
-    entry := PHashTable(Items).FindItem(Current, option);
+    entry := PHashTable(Data).FindItem(Current, option);
     {$IFEND}
     if not Assigned(entry) then Continue;
     if Kind <> Intersect then
@@ -5171,11 +5596,10 @@ begin
       i := 0;
     Index := i + 1;
     Current := Items[i];
-    {$IFDEF RSP31615}
+    {$IFDEF MANAGED_TYPE_RVO}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Items[i])
-    else
-    {$ENDIF}
+    else{$ENDIF}
     Items[i] := Enumerator.Current;
     Result := True;
   end;
@@ -5187,7 +5611,7 @@ begin
     Result := Enumerator.MoveNext;
     if not Result then
       Break;
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5207,7 +5631,7 @@ begin
     Result := Enumerator.MoveNext;
     if not Result then
       Break;
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5227,7 +5651,7 @@ begin
   Result := Enumerator.MoveNext;
   if Result then
   begin
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5242,7 +5666,7 @@ begin
   Result := Enumerator.MoveNext;
   if Result then
   begin
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5259,7 +5683,7 @@ begin
     Result := Enumerator.MoveNext;
     if not Result then
       Break;
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5275,7 +5699,7 @@ begin
     Result := Enumerator.MoveNext;
     if not Result then
       Break;
-    {$IF defined(DELPHIXE7_UP) and defined(MSWINDOWS)}
+    {$IF defined(DELPHIXE7_UP) and defined(INTERFACE_RVO)}
     if IsManagedType(T) then
       IEnumeratorInternal(Enumerator).GetCurrent(Current)
     else
@@ -5288,7 +5712,7 @@ end;
 
 function TIteratorBlock<T>.ToArray: Boolean;
 begin
-  {$IFDEF MSWINDOWS}
+  {$IFDEF INTERFACE_RVO}
   IEnumerableInternal(Source).ToArray(Items);
   {$ELSE}
   Items := Source.ToArray;
@@ -5311,19 +5735,17 @@ end;
 
 class function TCollectionThunks<T>.AddCurrentToCollection(
   const enumerator, collection: IInterface): Boolean;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
     Result := ICollection<T>(collection).Add(item);
-  end
-  else
-  {$ENDIF}
+  end else{$ENDIF}
   Result := ICollection<T>(collection).Add(IEnumerator<T>(enumerator).Current);
 end;
 
@@ -5335,20 +5757,18 @@ end;
 
 class procedure TCollectionThunks<T>.AggregateCurrentWithValue(
   const enumerator, func: IInterface; var result);
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO}
 var
   item, res: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
-    FuncInternal(func)({$IFDEF CPUX64}res, {$ENDIF}T(result), item{$IFDEF CPUX86}, res{$ENDIF});
+    FuncInternal(func)({$IFDEF CPU64BITS}res, {$ENDIF}T(result), item{$IFDEF CPUX86}, res{$ENDIF});
     T(result) := res;
-  end
-  else
-  {$ENDIF}
+  end else{$ENDIF}
   T(result) := Func<T,T,T>(func)(T(result), IEnumerator<T>(enumerator).Current);
 end;
 
@@ -5358,19 +5778,17 @@ begin
 end;
 
 class procedure TCollectionThunks<T>.CallActionOnCurrent(const enumerator, action: IInterface);
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
     Action<T>(action)(item);
-  end
-  else
-  {$ENDIF}
+  end else{$ENDIF}
   Action<T>(action)(IEnumerator<T>(enumerator).Current);
 end;
 
@@ -5382,41 +5800,37 @@ end;
 
 class function TCollectionThunks<T>.EqualsCurrentWithOtherEnumerator(
   const enumerator1, enumerator2, comparer: IInterface): Boolean;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item1, item2: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator1).GetCurrent(item1);
     IEnumeratorInternal(enumerator2).GetCurrent(item2);
     Result := IEqualityComparer<T>(comparer).Equals(item1, item2);
-  end
-  else
-  {$ENDIF}
+  end else{$ENDIF}
   Result := IEqualityComparer<T>(comparer).Equals(
     IEnumerator<T>(enumerator1).Current, IEnumerator<T>(enumerator2).Current);
 end;
 
 class function TCollectionThunks<T>.EqualsCurrentWithArrayElement(
   const enumerator: IInterface; comparer, values: Pointer; index: NativeInt): Boolean;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
     {$R-}
     Result := IEqualityComparer<T>(comparer).Equals(item, TArray<T>(values)[index]);
     {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
-  end
-  else
-  {$ENDIF}
+  end else{$ENDIF}
   {$R-}
   Result := IEqualityComparer<T>(comparer).Equals(
     IEnumerator<T>(enumerator).Current, TArray<T>(values)[index]);
@@ -5425,53 +5839,44 @@ end;
 
 class function TCollectionThunks<T>.EqualsCurrentWithValue(
   const enumerator, comparer: IInterface; const value): Boolean;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
-    {$R-}
     Result := IEqualityComparer<T>(comparer).Equals(item, T(value));
-    {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
-  end
-  else
-  {$ENDIF}
-  {$R-}
+  end else{$ENDIF}
   Result := IEqualityComparer<T>(comparer).Equals(
     IEnumerator<T>(enumerator).Current, T(value));
-  {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
 end;
 
 class function TCollectionThunks<T>.ExtractCurrentFromCollection(
   const enumerator, collection: IInterface): Boolean;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item, res: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
-    ICollectionInternal(collection).Extract({$IFDEF CPUX64}res, {$ENDIF}item{$IFDEF CPUX86}, res{$ENDIF});
-  end
-  else
-  {$ENDIF}
+    ICollectionInternal(collection).Extract({$IFDEF CPU64BITS}res, {$ENDIF}item{$IFDEF CPUX86}, res{$ENDIF});
+  end else{$ENDIF}
   ICollection<T>(collection).Extract(IEnumerator<T>(enumerator).Current);
   Result := True;
 end;
 
 class procedure TCollectionThunks<T>.GetCurrent(const enumerator: IInterface; var value);
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO}
   if IsManagedType(T) then
     IEnumeratorInternal(enumerator).GetCurrent(value)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   T(value) := IEnumerator<T>(enumerator).Current;
 end;
 
@@ -5480,11 +5885,10 @@ class procedure TCollectionThunks<T>.GetCurrentIfGreaterThan(const enumerator,
 var
   item: T;
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(enumerator).GetCurrent(item)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   item := IEnumerator<T>(enumerator).Current;
   if IComparer<T>(comparer).Compare(item, T(result)) > 0 then
     T(result) := item;
@@ -5495,11 +5899,10 @@ class procedure TCollectionThunks<T>.GetCurrentIfLessThan(const enumerator,
 var
   item: T;
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(enumerator).GetCurrent(item)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   item := IEnumerator<T>(enumerator).Current;
   if IComparer<T>(comparer).Compare(item, T(result)) < 0 then
     T(result) := item;
@@ -5509,11 +5912,10 @@ class function TCollectionThunks<T>.GetCurrentWithPredicate(const enumerator, pr
 var
   item: T;
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(enumerator).GetCurrent(item)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   item := IEnumerator<T>(enumerator).Current;
   Result := Predicate<T>(predicate)(item);
   if Result then
@@ -5522,11 +5924,10 @@ end;
 
 class function TCollectionThunks<T>.GetCurrentWithSelector(const enumerator, selector: IInterface): T;
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(enumerator).GetCurrent(Result)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   Result := IEnumerator<T>(enumerator).Current;
 end;
 
@@ -5550,19 +5951,17 @@ end;
 
 class function TCollectionThunks<T>.RemoveCurrentFromCollection(
   const enumerator, collection: IInterface): Boolean;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item: T;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
     Result := ICollection<T>(collection).Remove(item);
-  end
-  else
-  {$ENDIF}
+  end else{$ENDIF}
   Result := ICollection<T>(collection).Remove(IEnumerator<T>(enumerator).Current);
 end;
 
@@ -5573,20 +5972,52 @@ end;
 
 class function TCollectionThunks<T1, T2>.GetCurrentWithSelector(
   const enumerator, selector: IInterface): T2;
-{$IFDEF RSP31615}
+{$IFDEF MANAGED_TYPE_RVO_BROKEN}
 var
   item: T1;
 {$ENDIF}
 begin
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T1) then
   begin
     IEnumeratorInternal(enumerator).GetCurrent(item);
     Result := Func<T1, T2>(selector)(item);
-  end
-  else
-  {$ENDIF}
+  end else{$ENDIF}
   Result := Func<T1, T2>(selector)(IEnumerator<T1>(enumerator).Current);
+  // TODO optimization for T2 RVO
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TPredicateThunk'}
+
+function TPredicateThunk._AddRef: Integer;
+begin
+  Result := AtomicIncrement(RefCount);
+end;
+
+function TPredicateThunk._Release: Integer;
+begin
+  Result := AtomicDecrement(RefCount);
+  if Result = 0 then
+  begin
+    Predicate1 := nil;
+    Predicate2 := nil;
+    FreeMem(@Self);
+  end;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TPredicateThunk<T>'}
+
+function TPredicateThunk<T>.CombinePredicates(const arg: T): Boolean;
+begin
+  Result := Predicate1(arg);
+  if Result then
+    Result := Predicate2(arg);
 end;
 
 {$ENDREGION}
@@ -5594,15 +6025,159 @@ end;
 
 {$REGION 'TEnumerableExtension'}
 
+function TEnumerableExtension.ClassType: TClass;
+begin
+  Result := PPointer(Self)^;
+end;
+
+function TEnumerableExtension.Any(var value; getCurrent: TGetCurrent;
+  default: TGetDefault; assign: TAssign): Boolean;
+var
+  count: Integer;
+begin
+  case fKind of
+    TExtensionKind.Empty,
+    TExtensionKind.DefaultIfEmpty,
+    TExtensionKind.Repeated,
+    TExtensionKind.Items: Result := fKind <> TExtensionKind.Empty;
+  else
+    count := GetNonEnumeratedCount;
+    if count >= 0 then
+      Result := count > 0
+    else
+      if not ((fKind = TExtensionKind.PartitionFromEnd)
+        and (fIndex < 0)) then
+        Result := TryGetFirst(value, getCurrent, default, assign)
+      else
+        Result := TryGetLast(value, getCurrent, default, assign);
+  end;
+end;
+
 class function TEnumerableExtension.Create(classType: TClass;
   const source: IEnumerable; kind: TExtensionKind): TEnumerableExtension;
 begin
   Result := Pointer(classType.NewInstance);
+  Result.fElementType := source.ElementType;
   TObject(Result).AfterConstruction;
   Result.fSource := source;
-  if Assigned(source) then
-    AssignComparer(Result.fComparer, source);
+  AssignComparer(Result.fComparer, source);
   Result.fKind := kind;
+end;
+
+class procedure TEnumerableExtension.Empty(classType: TClass; elementType: PTypeInfo; var result);
+var
+  instance: TEnumerableExtension;
+begin
+  instance := TEnumerableExtension(classType.NewInstance);
+  if Assigned(elementType) then
+    instance.fElementType := elementType;
+  TObject(instance).AfterConstruction;
+  IInterface(result) := IInterface(@instance.IMT);
+end;
+
+class procedure TEnumerableExtension.From(values: PPointer; count: NativeInt;
+  var result; classType: TClass; typeInfo: PTypeInfo);
+var
+  instance: TEnumerableExtension;
+  elType: PPTypeInfo;
+  p: PTypeInfoData;
+begin
+  instance := TEnumerableExtension(classType.NewInstance);
+  elType := typeInfo.TypeData.DynArrElType;
+  if Assigned(elType) then
+    instance.fElementType := elType^;
+  TObject(instance).AfterConstruction;
+  if count > 0 then
+  begin
+    instance.fKind := TExtensionKind.Items;
+    instance.fCount := count;
+    DynArraySetLength(instance.fItems, typeInfo, 1, @count);
+
+    p := GetTypeInfoData(typeInfo);
+    if Assigned(p.elType) then
+      MoveManaged(values, instance.fItems, p.elType^, count)
+    else
+      System.Move(values^, instance.fItems^, p.elSize * count);
+  end
+  else if (count < 0) and Assigned(values) then // negative count indicates dynamic array that only gets assigned
+  begin
+    instance.fKind := TExtensionKind.Items;
+    {$POINTERMATH ON}
+    instance.fCount := PNativeInt(values)[-1];
+    {$POINTERMATH OFF}
+    DynArrayAssign(instance.fItems, values, typeInfo);
+  end;
+  IInterface(result) := IInterface(@instance.IMT);
+end;
+
+class procedure TEnumerableExtension.Repeated(const value; count: Integer;
+  var result; classType: TClass; typeInfo: PTypeInfo);
+const
+  Len: NativeInt = 1;
+var
+  instance: TEnumerableExtension;
+  elType: PPTypeInfo;
+  p: PTypeInfoData;
+begin
+  if count > 0 then
+  begin
+    instance := TEnumerableExtension(classType.NewInstance);
+    elType := typeInfo.TypeData.DynArrElType;
+    if Assigned(elType) then
+      instance.fElementType := elType^;
+    TObject(instance).AfterConstruction;
+    instance.fKind := TExtensionKind.Repeated;
+    instance.fCount := count;
+    DynArraySetLength(instance.fItems, typeInfo, 1, @Len);
+
+    p := GetTypeInfoData(typeInfo);
+    if Assigned(p.elType) then
+      MoveManaged(@value, instance.fItems, p.elType^, 1)
+    else
+      System.Move(value, instance.fItems^, p.elSize);
+    IInterface(result) := IInterface(@instance.IMT);
+  end
+  else if count = 0 then
+  begin
+    elType := typeInfo.TypeData.DynArrElType;
+    if Assigned(elType) then
+      elType := Pointer(elType^);
+    TEnumerableExtension.Empty(classType, Pointer(elType), Result)
+  end
+  else
+    RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+end;
+
+function TEnumerableExtension.GetCount: Integer;
+begin
+  case fKind of //FI:W535
+    TExtensionKind.Ordered, TExtensionKind.Reversed, TExtensionKind.Shuffled:
+      Result := fSource.GetCount;
+    TExtensionKind.Where:
+      Result := GetCount(MaxInt);
+  else
+    Result := inherited GetCount;
+  end;
+end;
+
+procedure TEnumerableExtension.GetEnumerator(var result;
+  var enumeratorVTables: TExtensionEnumeratorVtables; typeInfo, getCurrent: Pointer);
+begin
+  case fKind of
+    TExtensionKind.Repeated,
+    TExtensionKind.Items:
+    begin
+      _AddRef;
+      with PEnumerator(TEnumeratorBlock.Create(@result, @enumeratorVTables[fKind],
+        typeInfo, getCurrent, MoveNext[fKind]))^ do
+      begin
+        Parent := Self;
+        fItems := Pointer(Self.fItems);
+        fCount := Self.fCount;
+        fIndex := Ord(fKind = TExtensionKind.Repeated);
+      end;
+    end;
+  end;
 end;
 
 function TEnumerableExtension.GetNonEnumeratedCount: Integer;
@@ -5611,6 +6186,14 @@ var
 begin
   case fKind of //FI:W535
     TExtensionKind.Empty: Exit(0);
+    TExtensionKind.DefaultIfEmpty:
+    begin
+      Result := fSource.GetNonEnumeratedCount;
+      Exit(Result + Ord(Result = 0));
+    end;
+    TExtensionKind.Repeated,
+    TExtensionKind.Items:
+      Exit(fCount);
     TExtensionKind.Concat:
     begin
       Result := fSource.GetNonEnumeratedCount;
@@ -5678,217 +6261,605 @@ begin
   Result := -1;
 end;
 
-procedure TEnumerableExtension.MemoizeToArray(var values: Pointer; typeInfo: PTypeInfo);
+procedure TEnumerableExtension.ToArray(var values: Pointer; typeInfo: PTypeInfo; getCurrent: TGetCurrent);
 var
   count: Integer;
 begin
-  count := IEnumerable(this).Count;
-  DynArrayCopyRange(values, fItems, typeInfo, 0, count);
-end;
-
-function TEnumerableExtension.PartitionToArray(var values: Pointer; typeInfo: PTypeInfo): Boolean;
-var
-  count, index, i, elSize: NativeInt;
-  source: Pointer;
-begin
-  if Assigned(fSource) then
-  begin
-    Result := SupportsIndexedAccess(fSource);
-    if Result then
+  case fKind of
+    TExtensionKind.Repeated: RepeatedToArray(values, typeInfo);
+    TExtensionKind.Items: DynArrayCopyRange(values, fItems, typeInfo, 0, fCount);
+    TExtensionKind.Memoize:
     begin
-      index := fIndex;
-      count := fSource.Count - index;
-      if count > fCount then
-        count := fCount
-      else if count < 0 then
-        count := 0;
-      DynArraySetLength(values, typeInfo, 1, @count);
-      source := Pointer(fSource);
-      elSize := PDynArrayTypeInfo(PByte(typeInfo) + Byte(PDynArrayTypeInfo(typeInfo).name)).elSize;
-      for i := 0 to count - 1 do
-      begin
-        // little hack - we can hardcast here since we are just passing along a by ref param
-        IEnumerable<Pointer>(source).TryGetElementAt(PPointer(@PByte(values)[i*elSize])^, index);
-        Inc(index);
-      end;
-      Result := True;
+      count := GetCount;
+      DynArrayCopyRange(values, fItems, typeInfo, 0, count);
     end;
-  end
+    TExtensionKind.Partition: PartitionToArray(values, typeInfo, getCurrent);
   else
-  begin
-    DynArrayClear(values, typeInfo);
-    Result := True;
+    inherited ToArray(values, typeInfo, getCurrent);
   end;
 end;
 
-procedure TEnumerableExtension.Skip(count: Integer; var result; classType: TClass);
+procedure TEnumerableExtension.PartitionToArray(var values: Pointer; typeInfo: PTypeInfo; getCurrent: TGetCurrent);
+
+  procedure Fill(const source: IEnumerable<Pointer>; current: PByte; index, count, elSize: NativeInt);
+  var
+    i: NativeInt;
+  begin
+    for i := 1 to count do
+    begin
+      // little hack - we can hardcast here since we are just passing along a by ref param
+      source.TryGetElementAt(PPointer(current)^, index);
+      Inc(current, elSize);
+      Inc(index);
+    end;
+  end;
+
+var
+  count, index, elSize: NativeInt;
+begin
+  if not Assigned(fSource) then
+    DynArrayClear(values, typeInfo)
+  else if SupportsIndexedAccess(fSource) then
+  begin
+    index := fIndex;
+    count := fSource.Count - index;
+    if count > fCount then
+      count := fCount
+    else if count < 0 then
+      count := 0;
+    DynArraySetLength(values, typeInfo, 1, @count);
+    elSize := GetTypeInfoData(typeInfo).elSize;
+    Fill(IEnumerable<Pointer>(fSource), values, index, count, elSize);
+  end
+  else
+    inherited ToArray(values, typeInfo, getCurrent)
+end;
+
+procedure TEnumerableExtension.RepeatedToArray(var values: Pointer; typeInfo: PTypeInfo);
+var
+  count, elSize, i: NativeInt;
+  items, current: PByte;
+  p: PTypeInfoData;
+  elType: PTypeInfo;
+begin
+  count := fCount;
+  DynArraySetLength(values, typeInfo, 1, @count);
+  p := GetTypeInfoData(typeInfo);
+  current := values;
+  elSize := p.elSize;
+  items := fItems;
+  if p.elType <> nil then
+  begin
+    elType := PPTypeInfo(p.elType)^;
+    for i := 1 to count do
+    begin
+      MoveManaged(items, current, elType, 1);
+      Inc(current, elSize);
+    end
+  end
+  else
+    for i := 1 to count do
+    begin
+      Move(items^, current^, elSize);
+      Inc(current, elSize);
+    end
+end;
+
+procedure TEnumerableExtension.Skip(count: Integer; var result; typeInfo: PTypeInfo);
 var
   minIndex: Integer;
   source: Pointer;
 begin
-  if fKind <> TExtensionKind.Partition then
-  begin
-    inherited;
-    Exit;
-  end;
-
-  if count < 0 then
-    count := 0;
-  {$Q-}
-  minIndex := fIndex + count;
-  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
-  if fCount = -1 then
-  begin
-    if minIndex < 0 then
+  case fKind of
+    TExtensionKind.Empty:
     begin
-      // If we don't know our max count and minIndex can no longer fit in a positive int,
-      // then we will need to wrap ourselves in another iterator.
-      // This can happen, for example, during e.Skip(MaxInt).Skip(MaxInt).
-      source := Pointer(this);
-      minIndex := count;
-      count := -1;
-    end
-    else
-    begin
-      source := Pointer(fSource);
-      count := -1;
+      TEnumerableExtension.Empty(ClassType, fElementType, result);
+      Exit;
     end;
-  end
-  else if count >= fCount then
-  begin
-    source := nil;
-    minIndex := 0;
-    count := 0;
-  end
-  else
-  begin
-    source := Pointer(fSource);
-    count := fCount - count;
-  end;
+    TExtensionKind.Repeated:
+      if count > 0 then
+      begin
+        if count >= fCount then
+          TEnumerableExtension.Empty(ClassType, fElementType, result)
+        else
+          TEnumerableExtension.Repeated(fItems^, fCount - count, result, ClassType, typeInfo);
+        Exit;
+      end;
+    TExtensionKind.Partition:
+    begin
+      if count < 0 then
+        count := 0;
+      {$Q-}
+      minIndex := fIndex + count;
+      {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+      if fCount = -1 then
+      begin
+        if minIndex < 0 then
+        begin
+          // If we don't know our max count and minIndex can no longer fit in a positive int,
+          // then we will need to wrap ourselves in another iterator.
+          // This can happen, for example, during e.Skip(MaxInt).Skip(MaxInt).
+          source := Pointer(this);
+          minIndex := count;
+          count := -1;
+        end
+        else
+        begin
+          source := Pointer(fSource);
+          count := -1;
+        end;
+      end
+      else if count < fCount then
+      begin
+        count := fCount - count;
+        source := Pointer(fSource);
+      end
+      else
+      begin
+        TEnumerableExtension.Empty(ClassType, fElementType, result);
+        Exit;
+      end;
 
-  with TEnumerableExtension.Create(classType, IEnumerable(source), TExtensionKind.Partition) do
-  begin
-    fIndex := minIndex;
-    fCount := count;
-    IInterface(result) := IInterface(@IMT);
+      with TEnumerableExtension.Create(ClassType, IEnumerable(source), TExtensionKind.Partition) do
+      begin
+        fIndex := minIndex;
+        fCount := count;
+        IInterface(result) := IInterface(@IMT);
+      end;
+      Exit;
+    end;
   end;
+  inherited Skip(count, result, ClassType);
 end;
 
-procedure TEnumerableExtension.Take(count: Integer; var result; classType: TClass);
+procedure TEnumerableExtension.Take(count: Integer; var result; typeInfo: PTypeInfo);
 var
   maxIndex: Integer;
   source: Pointer;
 begin
-  if fKind <> TExtensionKind.Partition then
-  begin
-    inherited;
-    Exit;
-  end;
+  case fKind of
+    TExtensionKind.Empty: count := 0;
+    TExtensionKind.Repeated:
+      if count > 0 then
+      begin
+        if count >= fCount then
+          IInterface(result) := IInterface(this)
+        else
+          TEnumerableExtension.Repeated(fItems^, count, result, ClassType, typeInfo);
+        Exit;
+      end;
+    TExtensionKind.Partition:
+    begin
+      {$Q-}
+      maxIndex := fIndex + count - 1;
+      {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+      if fCount = -1 then
+      begin
+        if maxIndex < 0 then
+        begin
+          // If we don't know our max count and maxIndex can no longer fit in a positive int,
+          // then we will need to wrap ourselves in another iterator.
+          // Note that although maxIndex may be too large, the difference between it and
+          // fIterator.Index (which is count - 1) must fit in an int.
+          // Example: e.Skip(50).Take(MaxInt).
+          source := Pointer(this);
+          maxIndex := 0;
+        end
+        else
+        begin
+          source := Pointer(fSource);
+          maxIndex := fIndex;
+        end;
+      end
+      else if count >= fCount then
+      begin
+        IInterface(result) := IInterface(this);
+        Exit;
+      end
+      else
+      begin
+        source := Pointer(fSource);
+        maxIndex := fIndex;
+      end;
 
-  {$Q-}
-  maxIndex := fIndex + count - 1;
-  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
-  if fCount = -1 then
-  begin
-    if maxIndex < 0 then
-    begin
-      // If we don't know our max count and maxIndex can no longer fit in a positive int,
-      // then we will need to wrap ourselves in another iterator.
-      // Note that although maxIndex may be too large, the difference between it and
-      // fIterator.Index (which is count - 1) must fit in an int.
-      // Example: e.Skip(50).Take(MaxInt).
-      source := Pointer(this);
-      maxIndex := 0;
-    end
-    else
-    begin
-      source := Pointer(fSource);
-      maxIndex := fIndex;
+      with TEnumerableExtension.Create(ClassType, IEnumerable(source), TExtensionKind.Partition) do
+      begin
+        fIndex := maxIndex;
+        fCount := count;
+        IInterface(result) := IInterface(@IMT);
+      end;
+      Exit;
     end;
-  end
-  else if count >= fCount then
-  begin
-    IInterface(result) := IInterface(this);
-    Exit;
-  end
-  else
-  begin
-    source := Pointer(fSource);
-    maxIndex := fIndex;
   end;
-
-  with TEnumerableExtension.Create(classType, IEnumerable(source), TExtensionKind.Partition) do
-  begin
-    fIndex := maxIndex;
-    fCount := count;
-    IInterface(result) := IInterface(@IMT);
-  end;
+  inherited Take(count, result, ClassType);
 end;
 
 function TEnumerableExtension.TryGetElementAt(var value; index: Integer;
-  getCurrent: TGetCurrent; default: TGetDefault): Boolean;
-begin
-  if fKind <> TExtensionKind.Partition then
-    Exit(inherited);
-  if Cardinal(index) < Cardinal(fCount) then
-    Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), fIndex + index));
-  default(value);
-  Result := False;
-end;
-
-function TEnumerableExtension.TryGetFirst(var value; getCurrent: TGetCurrent; default: TGetDefault): Boolean;
-begin
-  if fKind <> TExtensionKind.Partition then
-    Exit(inherited);
-  if fCount <> 0 then
-    // little hack - we can hardcast here since we are just passing along a by ref param
-    Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), fIndex));
-  default(value);
-  Result := False;
-end;
-
-function TEnumerableExtension.TryGetLast(var value; getCurrent: TGetCurrent; default: TGetDefault): Boolean;
+  getCurrent: TGetCurrent; getCurrentWithPredicate: TGetCurrentWithPredicate;
+  default: TGetDefault; assign: TAssign; typeInfo: PTypeInfo): Boolean;
+type
+  TSources = array[0..1] of Pointer;
+  PSources = ^TSources;
 var
-  count, lastIndex: NativeInt;
-  enumerator: IEnumerator;
+  items: Pointer;
+  count, offset, elSize: NativeInt;
+  source, predicate: Pointer;
+  enumerator: {$IFDEF INTERFACE_RVO}Pointer{$ELSE}IEnumerator{$ENDIF};
 begin
-  if fKind <> TExtensionKind.Partition then
-    Exit(inherited);
-  if fCount <> 0 then
-  begin
-    if SupportsIndexedAccess(fSource) then
+  case fKind of
+    TExtensionKind.DefaultIfEmpty:
     begin
-      count := fSource.GetNonEnumeratedCount;
-      if fIndex < count then
+      Result := IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), index);
+      if Result then Exit;
+      if index = 0 then
       begin
-        {$Q-}
-        lastIndex := fIndex + fCount - 1;
-        {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
-        if lastIndex > count - 1 then
-          lastIndex := count - 1;
-        // little hack - we can hardcast here since we are just passing along a by ref param
-        Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), lastIndex));
-      end;
-    end
-    else
-    begin
-      enumerator := fSource.GetEnumerator;
-      count := 0;
-      while (count < fIndex) and enumerator.MoveNext do
-        Inc(count);
-      if (count = fIndex) and enumerator.MoveNext then
-      begin
-        count := fCount;
-        repeat
-          getCurrent(enumerator, value);
-          Dec(count);
-        until (count = 0) or not enumerator.MoveNext;
+        assign(value, fItems^);
         Exit(True);
       end;
+      default(value);
+      Exit(False);
     end;
+    TExtensionKind.Items:
+    begin
+      if index < fCount then
+      begin
+        elSize := GetTypeInfoData(typeInfo).elSize;
+        assign(value, PByte(fItems)[index*elSize]);
+        Exit(True);
+      end;
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.Partition:
+    begin
+      if Cardinal(index) < Cardinal(fCount) then
+        Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), fIndex + index));
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.PartitionFromEnd:
+    begin
+      if index >= 0 then
+      begin
+        count := IEnumerable(fSource).GetNonEnumeratedCount;
+        if count >= 0 then
+        begin
+          if fIndex = 0 then
+          begin
+            Dec(count, fCount);
+            if Cardinal(index) < Cardinal(count) then
+              Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), index));
+          end
+          else
+          begin
+            offset := 0;
+            if count > fCount then
+            begin
+              offset := count - fCount;
+              count := fCount;
+            end;
+            if Cardinal(index) < Cardinal(count) then
+              Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), offset + index));
+          end;
+        end;
+      end;
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.Concat:
+    begin
+      if index >= 0 then
+        for source in PSources(@fSource)^ do
+        begin
+          count := IEnumerable(source).GetNonEnumeratedCount;
+          if count >= 0 then
+          begin
+            if index < count then
+              Exit(IEnumerable<Pointer>(source).TryGetElementAt(Pointer(value), index));
+            Dec(index, count);
+          end
+          else
+          begin
+            {$IFDEF INTERFACE_RVO}
+            enumerator := nil;
+            IEnumerableInternal(source).GetEnumerator(enumerator);
+            try
+            {$ELSE}
+            enumerator := IEnumerable(source).GetEnumerator;
+            {$ENDIF}
+            while IEnumerator(enumerator).MoveNext do
+            begin
+              if index = 0 then
+              begin
+                getCurrent(IEnumerator(enumerator), value);
+                Exit(True);
+              end;
+              Dec(index);
+            end;
+            {$IFDEF INTERFACE_RVO}
+            finally
+              IEnumerator(enumerator) := nil;
+            end;
+            {$ENDIF}
+          end;
+        end;
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.Memoize:
+      if index < (fCount and CountMask) then
+      begin
+        elSize := GetTypeInfoData(typeInfo).elSize;
+        assign(value, PByte(fItems)[index*elSize]);
+        Exit(True);
+      end;
+    TExtensionKind.Reversed:
+    begin
+      count := fSource.GetNonEnumeratedCount;
+      if count >= 0 then
+      begin
+        if Cardinal(index) < Cardinal(count) then
+          Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), count - index - 1));
+      end else
+      if index >= 0 then
+      begin
+        items := nil;
+        try
+          {$IFDEF INTERFACE_RVO}
+          IEnumerableInternal(fSource).ToArray(items);
+          {$ELSE}
+          items := Pointer(IEnumerable<Pointer>(fSource).ToArray);
+          {$ENDIF}
+          count := DynArrayLength(items);
+          if index < count then
+          begin
+            elSize := GetTypeInfoData(typeInfo).elSize;
+            assign(value, Pointer(PByte(items) + (count - index - 1) * elSize)^);
+            Exit(True);
+          end;
+        finally
+          DynArrayClear(items, typeInfo);
+        end;
+      end;
+    end;
+    TExtensionKind.Where:
+    begin
+      if index >= 0 then
+      begin
+        predicate := Pointer(fPredicate);
+        {$IFDEF INTERFACE_RVO}
+        enumerator := nil;
+        IEnumerableInternal(fSource).GetEnumerator(enumerator);
+        try
+        {$ELSE}
+        enumerator := fSource.GetEnumerator;
+        {$ENDIF}
+        while IEnumerator(enumerator).MoveNext do
+          if getCurrentWithPredicate(IEnumerator(enumerator), IInterface(predicate), value) then
+          begin
+            if index = 0 then
+              Exit(True);
+            Dec(index);
+          end;
+        {$IFDEF INTERFACE_RVO}
+        finally
+          IEnumerator(enumerator) := nil;
+        end;
+        {$ENDIF}
+      end;
+      default(value);
+      Exit(False);
+    end;
+  end;
+  Result := inherited TryGetElementAt(value, index, getCurrent, default);
+end;
+
+function TEnumerableExtension.TryGetFirst(var value; getCurrent: TGetCurrent;
+  default: TGetDefault; assign: TAssign): Boolean;
+begin
+  case fKind of
+    TExtensionKind.Empty:
+    begin
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.DefaultIfEmpty:
+    begin
+      if not IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value)) then
+        default(value);
+      Exit(True);
+    end;
+    TExtensionKind.Items:
+    begin
+      if fCount > 0 then
+      begin
+        assign(value, fItems^);
+        Exit(True);
+      end;
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.Partition:
+    begin
+      if fCount <> 0 then
+        // little hack - we can hardcast here since we are just passing along a by ref param
+        Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), fIndex));
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.PartitionFromEnd:
+      if fIndex = 0 then
+        Exit(IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value)));
+    TExtensionKind.Distinct:
+      Exit(IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value)));
+    TExtensionKind.Union,
+    TExtensionKind.Concat:
+      Exit(IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value))
+        or IEnumerable<Pointer>(fPredicate).TryGetFirst(Pointer(value)));
+    TExtensionKind.Reversed:
+      Exit(IEnumerable<Pointer>(fSource).TryGetLast(Pointer(value)));
+    TExtensionKind.Where:
+      Exit(IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value), Predicate<Pointer>(fPredicate)));
+  end;
+  Result := inherited TryGetFirst(value, getCurrent, default);
+end;
+
+function TEnumerableExtension.TryGetLast(var value; getCurrent: TGetCurrent;
+  default: TGetDefault; assign: TAssign): Boolean;
+var
+  lastIndex, elSize, count: NativeInt;
+begin
+  case fKind of
+    TExtensionKind.Empty:
+    begin
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.DefaultIfEmpty:
+    begin
+      if not IEnumerable<Pointer>(fSource).TryGetLast(Pointer(value)) then
+        default(value);
+      Exit(True);
+    end;
+    TExtensionKind.Items:
+    begin
+      lastIndex := fCount - 1;
+      if lastIndex >= 0 then
+      begin
+        elSize := GetTypeSize(fElementType);
+        assign(value, PByte(fItems)[lastIndex * elSize]);
+        Exit(True);
+      end;
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.Partition:
+    begin
+      if fCount <> 0 then
+        if SupportsIndexedAccess(fSource) then
+        begin
+          count := fSource.GetNonEnumeratedCount;
+          if fIndex < count then
+          begin
+            {$Q-}
+            lastIndex := fIndex + fCount - 1;
+            {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+            if lastIndex > count - 1 then
+              lastIndex := count - 1;
+            // little hack - we can hardcast here since we are just passing along a by ref param
+            Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), lastIndex));
+          end;
+        end
+        else
+          Exit(TryGetLast_PartitionEnumerator(value, getCurrent, default));
+      default(value);
+      Exit(False);
+    end;
+    TExtensionKind.PartitionFromEnd:
+      if fIndex < 0 then
+        Exit(IEnumerable<Pointer>(fSource).TryGetLast(Pointer(value)));
+    TExtensionKind.Concat:
+      Exit(IEnumerable<Pointer>(fPredicate).TryGetLast(Pointer(value))
+        or IEnumerable<Pointer>(fSource).TryGetLast(Pointer(value)));
+    TExtensionKind.Reversed:
+      Exit(IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value)));
+    TExtensionKind.Where:
+      Exit(IEnumerable<Pointer>(fSource).TryGetLast(Pointer(value), Predicate<Pointer>(fPredicate)));
+  end;
+  Result := inherited TryGetLast(value, getCurrent, default);
+end;
+
+function TEnumerableExtension.TryGetLast_PartitionEnumerator(var value;
+  getCurrent: TGetCurrent; default: TGetDefault): Boolean;
+var
+  count: NativeInt;
+  enumerator: IEnumerator;
+begin
+  enumerator := fSource.GetEnumerator;
+  count := 0;
+  while (count < fIndex) and enumerator.MoveNext do
+    Inc(count);
+  if (count = fIndex) and enumerator.MoveNext then
+  begin
+    count := fCount;
+    repeat
+      getCurrent(enumerator, value);
+      Dec(count);
+    until (count = 0) or not enumerator.MoveNext;
+    Exit(True);
   end;
   default(value);
   Result := False;
+end;
+
+function TEnumerableExtension.TryGetSpan(var span: Span<Pointer>): Boolean;
+var
+  index, count: NativeInt;
+begin
+  case fKind of
+    TExtensionKind.Items:
+    begin
+      span.Init(fItems, fCount);
+      Exit(True);
+    end;
+    TExtensionKind.Partition:
+      if IEnumerable<Pointer>(fSource).TryGetSpan(span) then
+      begin
+        index := fIndex;
+        count := span.Length - index;
+        if NativeUInt(fCount) < NativeUInt(count) then
+          count := fCount;
+        span.Init(span[index], count);
+        Exit(True);
+      end;
+  end;
+  Result := False;
+end;
+
+procedure TEnumerableExtension.Where(const predicate: IInterface; var result;
+  combinePredicates: Pointer);
+var
+  predicateThunk: ^TPredicateThunk;
+begin
+  case fKind of
+    TExtensionKind.Where:
+    begin
+      predicateThunk := AllocMem(SizeOf(TPredicateThunk));
+      predicateThunk.VTable := @predicateThunk.QueryInterface;
+      predicateThunk.QueryInterface := @NopQueryInterface;
+      predicateThunk.AddRef := @TPredicateThunk._AddRef;
+      predicateThunk.Release := @TPredicateThunk._Release;
+      predicateThunk.Invoke := combinePredicates;
+      predicateThunk.Predicate1 := fPredicate;
+      predicateThunk.Predicate2 := predicate;
+      IInterface(result) := IEnumerable<Pointer>(fSource).Where(Predicate<Pointer>(predicateThunk));
+    end;
+  else
+    inherited Where(predicate, result, ClassType);
+  end;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TEnumerableExtension.TEnumerator'}
+
+function TEnumerableExtension.TEnumerator.MoveNextCount: Boolean;
+var
+  count: Integer;
+begin
+  count := fCount;
+  fCount := count - 1;
+  Result := count > 0;
+end;
+
+function TEnumerableExtension.TEnumerator.MoveNextIndex: Boolean;
+var
+  index: Integer;
+begin
+  index := fIndex;
+  fIndex := index + 1;
+  Result := index < fCount;
 end;
 
 {$ENDREGION}
@@ -5896,18 +6867,188 @@ end;
 
 {$REGION 'TEnumerableExtension<T>'}
 
-function TEnumerableExtension<T>.GetElementType: PTypeInfo;
+function TEnumerableExtension<T>.Any: Boolean;
+var
+  value: T;
 begin
-  if Assigned(fSource) then
-    Result := fSource.ElementType
+  Result := TEnumerableExtension(Self).Any(value,
+    TCollectionThunks<T>.GetCurrent, TCollectionThunks<T>.GetDefault,
+    TCollectionThunks<T>.Assign);
+end;
+
+function TEnumerableExtension<T>.Contains(const value: T): Boolean;
+var
+  items: Pointer<T>.Idx;
+  span: Span<T>;
+  count, index, foundIndex: Integer;
+  comparer, comparerPtr, predicate: Pointer;
+  item: ^T;
+  i: NativeInt;
+begin
+  case fKind of
+    TExtensionKind.Empty: Exit(False);
+    TExtensionKind.Repeated,
+    TExtensionKind.Items,
+    TExtensionKind.Partition:
+    repeat
+      if not Assigned(fSource) then
+      begin
+        items := Pointer<T>.Idx(fItems);
+        count := fCount;
+        if fKind = TExtensionKind.Repeated then
+          count := 1;
+        index := 0;
+      end
+      else if fSource.TryGetSpan(span) then
+      begin
+        items := Pointer<T>.Idx(span.Data);
+        count := span.Length;
+        index := fIndex;
+        Dec(count, index);
+        // after getting the count from the list and
+        // calculating the remaining range we can possibly already exit
+        if count < 0 then
+          count := 0
+        // limit the range for the IndexOf call
+        else if count > fCount then
+          count := fCount;
+      end else Break; // if TryGetSpan returned False this will lead to inherited
+      foundIndex := TArray.IndexOf<T>(items, value, index, count);
+      Exit(foundIndex >= 0);
+    until True;
+    TExtensionKind.DefaultIfEmpty,
+    TExtensionKind.Distinct,
+    TExtensionKind.Union,
+    TExtensionKind.Concat,
+    TExtensionKind.Ordered,
+    TExtensionKind.Reversed,
+    TExtensionKind.Shuffled:
+    repeat
+      comparer := _LookupVtableInfo(giEqualityComparer, fElementType, SizeOf(T));
+      case fKind of
+        TExtensionKind.Distinct,
+        TExtensionKind.Union:
+          // if the used comparer is not the default one we cannot directly call fSource.Contains
+          if Pointer(fEqualityComparer) <> comparer then Break;
+      end;
+
+      Result := fSource.Contains(value);
+      if Result then Exit;
+
+      case fKind of
+        TExtensionKind.DefaultIfEmpty:
+        begin
+          Result := fSource.IsEmpty;
+          if Result then
+            Result := IEqualityComparer<T>(comparer).Equals(value, fItems[0]);
+        end;
+        TExtensionKind.Union,
+        TExtensionKind.Concat:
+          Result := IEnumerable<T>(fPredicate).Contains(value);
+      end;
+      Exit;
+    until True;
+    TExtensionKind.Where:
+      if fSource.TryGetSpan(span) then
+      begin
+        predicate := Pointer(fPredicate);
+        comparerPtr := _LookupVtableInfo(giEqualityComparer, fElementType, SizeOf(T));
+        item := span.Data;
+        for i := 1 to span.Length do
+        begin
+          if Predicate<T>(predicate)(item^) then
+          begin
+            Result := IEqualityComparer<T>(comparerPtr).Equals(item^, value);
+            if Result then Exit;
+          end;
+          Inc(item);
+        end;
+        Exit(False);
+      end;
+  end;
+  Result := inherited Contains(value);
+end;
+
+function TEnumerableExtension<T>.CopyTo(var values: TArray<T>; index: Integer): Integer;
+var
+  count: Integer;
+begin
+  case fKind of
+    TExtensionKind.Empty,
+    TExtensionKind.Items:
+    begin
+      count := fCount;
+      if count > 0 then
+        if TType.IsManaged<T> then
+          MoveManaged(@fItems[0], @values[index], TypeInfo(T), count)
+        else
+          System.Move(fItems[0], values[index], SizeOf(T) * count);
+      Result := count;
+    end;
   else
-    Result := inherited GetElementType;
+    Result := TEnumerableBase(Self).CopyTo(Pointer(values), index, SizeOf(T), TCollectionThunks<T>.GetCurrent);
+  end;
+end;
+
+function TEnumerableExtension<T>.GetCount: Integer;
+begin
+  Result := TEnumerableExtension(Self).GetCount;
+end;
+
+function TEnumerableExtension<T>.GetCount(limit: Integer): Integer;
+var
+  span: Span<T>;
+  predicate: Pointer;
+  count: Integer;
+  item: ^T;
+  i: NativeInt;
+begin
+  if fKind = TExtensionKind.Where then
+  begin
+    if fSource.TryGetSpan(span) then
+    begin
+      predicate := Pointer(fPredicate);
+      count := 0;
+      item := span.Data;
+      for i := 1 to span.Length do
+      begin
+        Inc(count, Ord(Predicate<T>(predicate)(item^)));
+        Inc(item);
+        if count = limit then Break;        
+      end;
+      Exit(count);
+    end;
+  end;
+  Result := inherited GetCount(limit);
 end;
 
 function TEnumerableExtension<T>.GetEnumerator: IEnumerator<T>; //FI:W521
 begin
-  TIteratorBlock.Create(@Result, TEnumerableExtension(Self), SizeOf(TIteratorBlock<T>),
-    @TIteratorBlock<T>.Finalize, @TIteratorBlock<T>.Initialize);
+  case fKind of
+    TExtensionKind.Repeated,
+    TExtensionKind.Items:
+      TEnumerableExtension(Self).GetEnumerator(Result, TEnumerator.Enumerator_Vtables,
+        TypeInfo(TEnumerator), @TEnumerator.GetCurrent);
+  else
+    TIteratorBlock.Create(@Result, TEnumerableExtension(Self), SizeOf(TIteratorBlock<T>),
+      @TIteratorBlock<T>.Finalize, @TIteratorBlock<T>.Initialize)
+  end;
+end;
+
+function TEnumerableExtension<T>.GetItem(index: Integer): T;
+begin
+  case fKind of
+    TExtensionKind.Repeated,
+    TExtensionKind.Items:
+      if Cardinal(index) < Cardinal(fCount) then
+      begin
+        if fKind = TExtensionKind.Repeated then
+          index := 0;
+        Exit(fItems[index]);
+      end;
+  end;
+  RaiseHelper.ArgumentOutOfRange_Index;
+  __SuppressWarning(Result);
 end;
 
 function TEnumerableExtension<T>.GetNonEnumeratedCount: Integer;
@@ -5915,207 +7056,110 @@ begin
   Result := TEnumerableExtension(Self).GetNonEnumeratedCount;
 end;
 
+function TEnumerableExtension<T>.IndexOf(const item: T): Integer;
+begin
+  Result := IndexOf(item, 0, fCount);
+end;
+
+function TEnumerableExtension<T>.IndexOf(const item: T; index: Integer): Integer;
+begin
+  Result := IndexOf(item, index, fCount - index);
+end;
+
+function TEnumerableExtension<T>.IndexOf(const item: T; index, count: Integer): Integer;
+var
+  itemCount: Integer;
+  offset: Integer;
+begin
+  itemCount := fCount;
+
+  if Cardinal(index) > Cardinal(itemCount) then
+    Exit(RaiseHelper.ArgumentOutOfRange_Index);
+  if (count < 0) or (index > itemCount - count) then
+    Exit(RaiseHelper.ArgumentOutOfRange_Count);
+
+  case fKind of
+    TExtensionKind.Repeated:
+    begin
+      offset := 0;
+      count := 1;
+    end;
+    TExtensionKind.Items:
+      offset := index;
+  else
+    Exit(-1);
+  end;
+  Result := TArray.IndexOf<T>(Pointer<T>.Idx(fItems), item, offset, count);
+  // in case of TExtensionKind.Repeated we only checked that one item
+  // but index could have been > 0 which is why we adjust
+  // for TExtensionKind.Items when Result = 0 then also index was 0
+  if Result = 0 then
+    Result := index;
+end;
+
 function TEnumerableExtension<T>.Skip(count: Integer): IEnumerable<T>;
 begin
-  TEnumerableExtension(Self).Skip(count, Result, TEnumerableExtension<T>);
+  TEnumerableExtension(Self).Skip(count, Result, TypeInfo(TArray<T>));
 end;
 
 function TEnumerableExtension<T>.Take(count: Integer): IEnumerable<T>;
 begin
-  TEnumerableExtension(Self).Take(count, Result, TEnumerableExtension<T>);
+  TEnumerableExtension(Self).Take(count, Result, TypeInfo(TArray<T>));
 end;
 
 function TEnumerableExtension<T>.ToArray: TArray<T>;
 begin
   case fKind of //FI:W535
-    TExtensionKind.Partition:
-      if TEnumerableExtension(Self).PartitionToArray(Pointer(Result), TypeInfo(TArray<T>)) then Exit;
-    TExtensionKind.Memoize:
-    begin
-      TEnumerableExtension(Self).MemoizeToArray(Pointer(Result), TypeInfo(TArray<T>));
-      Exit;
-    end;
     TExtensionKind.Ordered..TExtensionKind.Shuffled:
     begin
       Result := fSource.ToArray;
       TCollectionThunks<T>.ProcessArray(fKind, Result, IComparer<T>(fPredicate));
-      Exit;
     end;
+  else
+    TEnumerableExtension(Self).ToArray(Pointer(Result), TypeInfo(TArray<T>), TCollectionThunks<T>.GetCurrent);
   end;
-  Result := inherited ToArray;
 end;
 
 function TEnumerableExtension<T>.TryGetElementAt(var value: T; index: Integer): Boolean;
 begin
   Result := TEnumerableExtension(Self).TryGetElementAt(value, index,
-    TCollectionThunks<T>.GetCurrent, TCollectionThunks<T>.GetDefault);
+    TCollectionThunks<T>.GetCurrent, TCollectionThunks<T>.GetCurrentWithPredicate,
+    TCollectionThunks<T>.GetDefault, TCollectionThunks<T>.Assign, TypeInfo(TArray<T>));
 end;
 
 function TEnumerableExtension<T>.TryGetFirst(var value: T): Boolean;
 begin
   Result := TEnumerableExtension(Self).TryGetFirst(value,
-    TCollectionThunks<T>.GetCurrent, TCollectionThunks<T>.GetDefault);
+    TCollectionThunks<T>.GetCurrent, TCollectionThunks<T>.GetDefault,
+    TCollectionThunks<T>.Assign);
 end;
 
 function TEnumerableExtension<T>.TryGetLast(var value: T): Boolean;
 begin
   Result := TEnumerableExtension(Self).TryGetLast(value,
-    TCollectionThunks<T>.GetCurrent, TCollectionThunks<T>.GetDefault);
+    TCollectionThunks<T>.GetCurrent, TCollectionThunks<T>.GetDefault,
+    TCollectionThunks<T>.Assign);
+end;
+
+function TEnumerableExtension<T>.TryGetSpan(var span: Span<T>): Boolean;
+begin
+  Result := TEnumerableExtension(Self).TryGetSpan(Span<Pointer>(span));
+end;
+
+function TEnumerableExtension<T>.Where(const predicate: Predicate<T>): IEnumerable<T>;
+begin
+  TEnumerableExtension(Self).Where(PInterface(@predicate)^, Result,
+    @TPredicateThunk<T>.CombinePredicates);
 end;
 
 {$ENDREGION}
 
 
-{$REGION 'TArrayIterator<T>'}
+{$REGION 'TEnumerableExtension<T>.TEnumerator'}
 
-class function TArrayIterator<T>.Create(const values: TArray<T>): IReadOnlyList<T>;
-var
-  iterator: TArrayIterator<T>;
+function TEnumerableExtension<T>.TEnumerator.GetCurrent: T;
 begin
-  iterator := TArrayIterator<T>.Create;
-  iterator.fItems := values;
-  Result := iterator;
-end;
-
-class function TArrayIterator<T>.Create(const values: array of T): IReadOnlyList<T>;
-var
-  iterator: TArrayIterator<T>;
-  count: Integer;
-begin
-  iterator := TArrayIterator<T>.Create;
-  count := Length(values);
-  if count > 0 then
-  begin
-    SetLength(iterator.fItems, count);
-    if TType.IsManaged<T> then
-      MoveManaged(@values[0], @iterator.fItems[0], TypeInfo(T), count)
-    else
-      System.Move(values[0], iterator.fItems[0], SizeOf(T) * count);
-  end;
-  Result := iterator;
-end;
-
-function TArrayIterator<T>.CopyTo(var values: TArray<T>; index: Integer): Integer;
-begin
-  Result := DynArrayLength(fItems);
-  if Result > 0 then
-    if TType.IsManaged<T> then
-      MoveManaged(@fItems[0], @values[index], TypeInfo(T), Result)
-    else
-      System.Move(fItems[0], values[index], SizeOf(T) * Result);
-end;
-
-function TArrayIterator<T>.GetCount: Integer;
-begin
-  Result := DynArrayLength(fItems);
-end;
-
-function TArrayIterator<T>.GetEnumerator: IEnumerator<T>; //FI:W521
-var
-  items: Pointer;
-begin
-  items := Pointer(fItems);
-  with PEnumerator(TEnumeratorBlock.Create(@Result, @TEnumerator.Enumerator_Vtable,
-    TypeInfo(TEnumerator), @TEnumerator.GetCurrent, @TEnumerator.MoveNext))^ do
-  begin
-    fItems := TArray<T>(items);
-    fCount := DynArrayLength(items);
-  end;
-end;
-
-function TArrayIterator<T>.GetItem(index: Integer): T;
-begin
-  CheckIndex(index, DynArrayLength(fItems));
-
-  Result := fItems[index];
-end;
-
-function TArrayIterator<T>.GetNonEnumeratedCount: Integer;
-begin
-  Result := DynArrayLength(fItems);
-end;
-
-function TArrayIterator<T>.IndexOf(const item: T): Integer;
-begin
-  Result := IndexOf(item, 0, DynArrayLength(fItems));
-end;
-
-function TArrayIterator<T>.IndexOf(const item: T; index: Integer): Integer;
-begin
-  Result := IndexOf(item, index, DynArrayLength(fItems) - index);
-end;
-
-function TArrayIterator<T>.IndexOf(const item: T; index, count: Integer): Integer;
-var
-  comparer: Pointer;
-begin
-  CheckRange(index, count, DynArrayLength(fItems));
-
-  comparer := _LookupVtableInfo(giEqualityComparer, GetElementType, SizeOf(T));
-  for Result := index to index + count - 1 do
-    if IEqualityComparer<T>(comparer).Equals(fItems[Result], item) then
-      Exit;
-  Result := -1;
-end;
-
-function TArrayIterator<T>.ToArray: TArray<T>;
-begin
-  Result := Copy(fItems);
-end;
-
-{$ENDREGION}
-
-
-{$REGION 'TArrayIterator<T>.TEnumerator'}
-
-function TArrayIterator<T>.TEnumerator.GetCurrent: T;
-begin
-  Result := fItems[fIndex - 1];
-end;
-
-function TArrayIterator<T>.TEnumerator.MoveNext: Boolean;
-begin
-  Inc(fIndex);
-  Result := fIndex <= fCount;
-end;
-
-{$ENDREGION}
-
-
-{$REGION 'TFoldedArrayIterator<T>'}
-
-class function TFoldedArrayIterator<T>.Create(const values: TArray<T>;
-  elementType: PTypeInfo): IReadOnlyList<T>;
-var
-  iterator: TFoldedArrayIterator<T>;
-begin
-  iterator := TFoldedArrayIterator<T>.Create;
-  iterator.fItems := values;
-  iterator.fElementType := elementType;
-  Result := iterator;
-end;
-
-class function TFoldedArrayIterator<T>.Create(values: PPointer; count: Integer;
-  elementType: PTypeInfo): IReadOnlyList<T>;
-var
-  iterator: TFoldedArrayIterator<T>;
-begin
-  iterator := TFoldedArrayIterator<T>.Create;
-  iterator.fElementType := elementType;
-  if count > 0 then
-  begin
-    SetLength(iterator.fItems, count);
-    if TType.IsManaged<T> then
-      MoveManaged(values, @iterator.fItems[0], TypeInfo(T), count)
-    else
-      System.Move(values^, iterator.fItems[0], SizeOf(T) * count);
-  end;
-  Result := iterator;
-end;
-
-function TFoldedArrayIterator<T>.GetElementType: PTypeInfo;
-begin
-  Result := fElementType;
+  Result := TArray<T>(fItems)[fIndex - 1];
 end;
 
 {$ENDREGION}

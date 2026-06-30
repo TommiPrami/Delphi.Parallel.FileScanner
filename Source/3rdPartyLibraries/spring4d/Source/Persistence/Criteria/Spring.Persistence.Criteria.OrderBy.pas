@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -34,7 +34,7 @@ uses
 
 type
   /// <summary>
-  ///   Implementation of <see cref="Spring.Persistence.Core.Interfaces|IOrderBy" />
+  ///   Implementation of <see cref="Spring.Persistence.Criteria.Interfaces|IOrderBy" />
   ///    interface.
   /// </summary>
   TOrderBy = class(TInterfacedObject, IOrderBy)

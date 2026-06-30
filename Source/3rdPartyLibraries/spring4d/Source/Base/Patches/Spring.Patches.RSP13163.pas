@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -30,7 +30,7 @@ interface
 
 implementation
 
-{$IFDEF DELPHIXE_UP}{$IFDEF MSWINDOWS}
+{$IFDEF DELPHIXE_UP}{$IFDEF MSWINDOWS}{$IFNDEF CPUARM}
 uses
   Rtti,
   SysUtils,
@@ -202,6 +202,6 @@ end;
 
 initialization
   ApplyPatch;
-{$ENDIF}{$ENDIF}
+{$ENDIF}{$ENDIF}{$ENDIF}
 
 end.

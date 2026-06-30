@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -40,6 +40,8 @@ uses
   Spring,
   Spring.Comparers,
   Spring.Span;
+
+{$IFDEF DELPHIXE6_UP}{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS(DefaultFieldRttiVisibility)}{$ENDIF}
 
 const
   doOwnsKeys = Spring.doOwnsKeys;
@@ -158,6 +160,20 @@ type
     procedure Clear;
   end;
 
+  // this type declaration is necessary for the Index field of TIndexedItem<T>
+  // there is a compiler glitch causing weird problems if that field is of type Integer
+  // see https://embt.atlassian.net/servicedesk/customer/portal/1/RSS-3110
+  TIndex = type Integer;
+
+  TIndexedItem<T> = packed record
+    Index: TIndex;
+    Item: T;
+  end;
+
+  IEnumerableIndexed<T> = interface
+    function GetEnumerator: IEnumerator<TIndexedItem<T>>;
+  end;
+
   /// <summary>
   ///   Represents a read-only sequence of elements. Exposes the enumerator,
   ///   which supports a simple iteration over a collection of a specified
@@ -213,6 +229,14 @@ type
     ///   An array that contains the elements from the sequence.
     /// </returns>
     function ToArray: TArray<T>;
+
+    /// <summary>
+    ///   Tries to extract the internal data as a span.
+    /// </summary>
+    /// <remarks>
+    ///   This method is intended for internal use only
+    /// </remarks>
+    function TryGetSpan(var span: Span<T>): Boolean;
 
     /// <summary>
     ///   Returns the specified comparer for this instance.
@@ -341,7 +365,7 @@ type
     /// <exception cref="Spring|EInvalidOperationException">
     ///   The sequence is empty.
     /// </exception>
-    /// <exception cref="Spring|EIntOverflow">
+    /// <exception cref="SysUtils|EIntOverflow">
     ///   The sum of the elements in the sequence is larger than Int64.MaxValue.
     /// </exception>
     function Average(const selector: Func<T, Integer>): Double; overload;
@@ -363,7 +387,7 @@ type
     /// <exception cref="Spring|EInvalidOperationException">
     ///   The sequence is empty.
     /// </exception>
-    /// <exception cref="Spring|EIntOverflow">
+    /// <exception cref="SysUtils|EIntOverflow">
     ///   The sum of the elements in the sequence is larger than Int64.MaxValue.
     /// </exception>
     function Average(const selector: Func<T, Int64>): Double; overload;
@@ -811,6 +835,25 @@ type
     ///   <c>action</c> is <c>nil</c>.
     /// </exception>
     procedure ForEach(const action: Action<T>);
+
+    /// <summary>
+    ///   Returns a sequence that incorporates the element's index into a tuple.
+    /// </summary>
+    /// <param name="start">
+    ///   The start value for the <c>Index</c>.
+    /// </param>
+    /// <returns>
+    ///   A sequence that incorporates each element index into a tuple.
+    /// </returns>
+    /// <remarks>
+    ///   The result is not of type <see
+    ///   cref="Spring.Collections|IEnumerable{T}" /> due to limitations of the
+    ///   Delphi compiler (recursive generic types). This means it does not
+    ///   support all the methods that sequences generally provide but is meant
+    ///   to be used in for-in loops. If you need the full features, please
+    ///   refer to <see cref="Spring.Collections|TEnumerable.Indexed" />.
+    /// </remarks>
+    function Indexed(start: Integer = 0): IEnumerableIndexed<T>;
 
     /// <summary>
     ///   Produces the set intersection of two sequences by using the default
@@ -1478,7 +1521,7 @@ type
     /// <exception cref="Spring|EArgumentNilException">
     ///   <c>selector</c> is <c>nil</c>.
     /// </exception>
-    /// <exception cref="Spring|EIntOverflow">
+    /// <exception cref="SysUtils|EIntOverflow">
     ///   The sum of the elements in the sequence is larger than Int32.MaxValue.
     /// </exception>
     function Sum(const selector: Func<T, Integer>): Integer; overload;
@@ -1497,7 +1540,7 @@ type
     /// <exception cref="Spring|EArgumentNilException">
     ///   <c>selector</c> is <c>nil</c>.
     /// </exception>
-    /// <exception cref="Spring|EIntOverflow">
+    /// <exception cref="SysUtils|EIntOverflow">
     ///   The sum of the elements in the sequence is larger than Int64.MaxValue.
     /// </exception>
     function Sum(const selector: Func<T, Int64>): Int64; overload;
@@ -2015,6 +2058,15 @@ type
     function RemoveRange(const values: IEnumerable<T>): Integer; overload;
 
     /// <summary>
+    ///   Removes all elements without triggering lifetime management for
+    ///   objects.
+    /// </summary>
+    /// <returns>
+    ///   The elements that were removed from the collection.
+    /// </returns>
+    function ExtractAll: TArray<T>; overload;
+
+    /// <summary>
     ///   Removes all the elements that match the conditions defined by the
     ///   specified predicate without triggering lifetime management for
     ///   objects.
@@ -2028,7 +2080,7 @@ type
     /// <exception cref="Spring|EArgumentNilException">
     ///   <c>predicate</c> is <c>nil</c>.
     /// </exception>
-    function ExtractAll(const predicate: Predicate<T>): TArray<T>;
+    function ExtractAll(const predicate: Predicate<T>): TArray<T>; overload;
 
     /// <summary>
     ///   Removes the first occurrence of each element from the collection
@@ -3344,7 +3396,7 @@ type
     ///   Items should not be added to or removed from the dictionary while the
     ///   reference is in use.
     /// </remarks>
-    function GetValueOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
 
     /// <summary>
     ///   Gets a reference to a value in the dictionary, adding a new entry
@@ -3360,7 +3412,28 @@ type
     ///   Items should not be added to or removed from the dictionary while the
     ///   reference is in use.
     /// </remarks>
-    function GetValueOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+
+    /// <summary>
+    ///   Gets a reference to a value in the dictionary, adding a new entry
+    ///   with a specified default value if the key does not exist.
+    /// </summary>
+    /// <param name="key">
+    ///   The key used for lookup.
+    /// </param>
+    /// <param name="exists">
+    ///   When this method returns, contains <c>true</c> if <c>key</c> already
+    ///   existed in the dictionary, and <c>false</c> if a new entry was added.
+    /// </param>
+    /// <returns>
+    ///   A reference to the value in the dictionary.
+    /// </returns>
+    /// <remarks>
+    ///   Items should not be added to or removed from the dictionary while the
+    ///   reference is in use.
+    /// </remarks>
+    function GetValueRefOrAddDefault(const key: TKey;
+      const defaultValue: TValue; out exists: Boolean): Ref<TValue>.PT; overload;
 
     /// <summary>
     ///   Gets the value for a given key if a matching key exists in the
@@ -3699,12 +3772,34 @@ type
     /// <summary>
     ///   Extracts all values accociated with the given key from the multimap.
     /// </summary>
+    /// <param name="key">
+    ///   The key of the elements to extract.
+    /// </param>
     /// <remarks>
     ///   If the multimap has doOwnsValues set the items in the returned list
     ///   are not being owned by the list but have to be freed manually or
     ///   being passed to a collection that takes ownership.
     /// </remarks>
     function Extract(const key: TKey): ICollection<TValue>; overload;
+
+    /// <summary>
+    ///   Removes all values accociated with the given key that match the
+    ///   conditions defined by the specified predicate without triggering
+    ///   lifetime management for objects .
+    /// </summary>
+    /// <param name="key">
+    ///   The key of the elements to extract.
+    /// </param>
+    /// <param name="predicate">
+    ///   The predicate that defines the conditions of the elements to remove.
+    /// </param>
+    /// <returns>
+    ///   The elements that were removed from the collection.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>predicate</c> is <c>nil</c>.
+    /// </exception>
+    function ExtractAll(const key: TKey; const predicate: Predicate<TValue>): TArray<TValue>; overload;
 
     /// <summary>
     ///   Attempts to get the values associated with the specified key.
@@ -4550,640 +4645,640 @@ type
   {$IFDEF DELPHIXE7_UP}
     class procedure CreateDictionary_Int8_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int8_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int8_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int8_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int8_Method(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int8_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int8_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int8_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateDictionary_Int16_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int16_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int16_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int16_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int16_Method(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int16_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int16_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int16_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateDictionary_Int32_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int32_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int32_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int32_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int32_Method(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int32_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int32_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int32_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateDictionary_Int64_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int64_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int64_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int64_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int64_Method(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int64_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int64_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Int64_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateDictionary_Interface_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Interface_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Interface_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Interface_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Interface_Method(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Interface_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Interface_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Interface_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateDictionary_Object_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Object_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Object_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Object_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Object_Method(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Object_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Object_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_Object_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateDictionary_String_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_String_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_String_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_String_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_String_Method(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_String_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_String_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateDictionary_String_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateBidiDictionary_Int8_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int8_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int8_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int8_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int8_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int8_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int8_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateBidiDictionary_Int16_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int16_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int16_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int16_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int16_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int16_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int16_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateBidiDictionary_Int32_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int32_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int32_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int32_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int32_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int32_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int32_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateBidiDictionary_Int64_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int64_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int64_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int64_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int64_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int64_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Int64_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateBidiDictionary_Interface_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Interface_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Interface_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Interface_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Interface_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Interface_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Interface_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateBidiDictionary_Object_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Object_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Object_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Object_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Object_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Object_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_Object_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateBidiDictionary_String_Int8(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_String_Int16(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_String_Int32(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_String_Int64(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_String_Interface(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_String_Object(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateBidiDictionary_String_String(capacity: Integer;
       keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateListMultiMap_Int8_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int8_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int8_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int8_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int8_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int8_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int8_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateListMultiMap_Int16_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int16_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int16_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int16_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int16_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int16_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int16_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateListMultiMap_Int32_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int32_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int32_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int32_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int32_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int32_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int32_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateListMultiMap_Int64_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int64_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int64_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int64_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int64_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int64_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Int64_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateListMultiMap_Interface_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Interface_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Interface_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Interface_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Interface_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Interface_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Interface_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateListMultiMap_Object_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Object_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Object_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Object_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Object_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Object_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_Object_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateListMultiMap_String_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_String_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_String_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_String_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_String_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_String_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateListMultiMap_String_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateSortedListMultiMap_Int8_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int8_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int8_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int8_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int8_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int8_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int8_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateSortedListMultiMap_Int16_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int16_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int16_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int16_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int16_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int16_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int16_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateSortedListMultiMap_Int32_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int32_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int32_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int32_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int32_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int32_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int32_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateSortedListMultiMap_Int64_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int64_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int64_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int64_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int64_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int64_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Int64_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateSortedListMultiMap_Interface_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Interface_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Interface_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Interface_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Interface_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Interface_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Interface_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateSortedListMultiMap_Object_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Object_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Object_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Object_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Object_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Object_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_Object_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
 
     class procedure CreateSortedListMultiMap_String_Int8(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_String_Int16(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_String_Int32(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_String_Int64(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_String_Interface(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_String_Object(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
     class procedure CreateSortedListMultiMap_String_String(
-      keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-      var result; keyType, valueType, elementType: PTypeInfo); static;
+      keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+      var result; elementType: PTypeInfo); static;
   {$ENDIF}
 
     // internal helper record because older Delphi compilers could not cope
@@ -5309,6 +5404,7 @@ type
 
     class function CreateMultiMap<TKey, TValue>(ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
     class function CreateMultiMap<TKey, TValue>(const keyComparer: IEqualityComparer<TKey>; ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
+    class function CreateMultiMap<TKey, TValue>(const keyComparer: IEqualityComparer<TKey>; const valueComparer: IComparer<TValue>; ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
 
     class function CreateHashMultiMap<TKey, TValue>(ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
     class function CreateHashMultiMap<TKey, TValue>(const keyComparer: IEqualityComparer<TKey>; ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
@@ -5320,6 +5416,7 @@ type
 
     class function CreateSortedMultiMap<TKey, TValue>(ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
     class function CreateSortedMultiMap<TKey, TValue>(const keyComparer: IComparer<TKey>; ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
+    class function CreateSortedMultiMap<TKey, TValue>(const keyComparer: IComparer<TKey>; const valueComparer: IComparer<TValue>; ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
 
     class function CreateSortedHashMultiMap<TKey, TValue>(ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
     class function CreateSortedHashMultiMap<TKey, TValue>(const keyComparer: IComparer<TKey>; ownerships: TDictionaryOwnerships = []): IMultiMap<TKey, TValue>; overload; static;
@@ -5393,31 +5490,15 @@ type
   TEnumerable = class
   protected
   {$REGION 'Internal factory methods'}
-    class procedure CreateEmpty_Int8(var result; elementType: Pointer); static;
-    class procedure CreateEmpty_Int16(var result; elementType: Pointer); static;
-    class procedure CreateEmpty_Int32(var result; elementType: Pointer); static;
-    class procedure CreateEmpty_Int64(var result; elementType: Pointer); static;
-    class procedure CreateEmpty_Method(var result; elementType: Pointer); static;
-    class procedure CreateEmpty_Interface(var result; elementType: Pointer); static;
-    class procedure CreateEmpty_Object(var result; elementType: Pointer); static;
-    class procedure CreateEmpty_String(var result; elementType: Pointer); static;
+    class function ExtensionClass_Int8: TClass; static;
+    class function ExtensionClass_Int16: TClass; static;
+    class function ExtensionClass_Int32: TClass; static;
+    class function ExtensionClass_Int64: TClass; static;
+    class function ExtensionClass_Method: TClass; static;
+    class function ExtensionClass_Interface: TClass; static;
+    class function ExtensionClass_Object: TClass; static;
+    class function ExtensionClass_String: TClass; static;
 
-    class procedure InternalFrom_Int8_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Int8_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Int16_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Int16_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Int32_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Int32_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Int64_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Int64_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Method_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Method_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_String_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_String_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Object_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Object_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Interface_DynArray(source: Pointer; var result; elementType: PTypeInfo); static;
-    class procedure InternalFrom_Interface_OpenArray(source: Pointer; count: Integer; var result; elementType: PTypeInfo); static;
     class procedure InternalOfType_Object(const source: IEnumerable<TObject>; var result; resultType: PTypeInfo); static;
   {$ENDREGION}
   public
@@ -5486,6 +5567,154 @@ type
       const seed: TAccumulate; const func: Func<TAccumulate, TSource, TAccumulate>;
       const resultSelector: Func<TAccumulate, TResult>): TResult; overload; static;
 
+    /// <typeparam name="TSource">
+    ///   The type of the elements of <c>source</c>.
+    /// </typeparam>
+    /// <typeparam name="TKey">
+    ///   The type of the key returned by <c>keySelector</c>.
+    /// </typeparam>
+    /// <typeparam name="TAccumulate">
+    ///   The type of the accumulator value.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence to aggregate over.
+    /// </param>
+    /// <param name="keySelector">
+    ///   A function to extract the key for each element.
+    /// </param>
+    /// <param name="seed">
+    ///   The initial accumulator value.
+    /// </param>
+    /// <param name="func">
+    ///   An accumulator function to be invoked on each element.
+    /// </param>
+    /// <returns>
+    ///   A sequence containing the aggregates corresponding to each key
+    ///   deriving from <c>source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> or <c>keySelector</c> or <c>func</c> is <c>nil</c>.
+    /// </exception>
+    class function AggregateBy<TSource, TKey, TAccumulate>(const source: IEnumerable<TSource>;
+      const keySelector: Func<TSource, TKey>; const seed: TAccumulate;
+      const func: Func<TAccumulate, TSource, TAccumulate>): IEnumerable<TPair<TKey, TAccumulate>>; overload; static;
+
+    /// <typeparam name="TSource">
+    ///   The type of the elements of <c>source</c>.
+    /// </typeparam>
+    /// <typeparam name="TKey">
+    ///   The type of the key returned by <c>keySelector</c>.
+    /// </typeparam>
+    /// <typeparam name="TAccumulate">
+    ///   The type of the accumulator value.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence to aggregate over.
+    /// </param>
+    /// <param name="keySelector">
+    ///   A function to extract the key for each element.
+    /// </param>
+    /// <param name="seed">
+    ///   The initial accumulator value.
+    /// </param>
+    /// <param name="func">
+    ///   An accumulator function to be invoked on each element.
+    /// </param>
+    /// <param name="keyComparer">
+    ///   An equality comparer to compare keys with.
+    /// </param>
+    /// <returns>
+    ///   A sequence containing the aggregates corresponding to each key
+    ///   deriving from <c>source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> or <c>keySelector</c> or <c>func</c> is <c>nil</c>.
+    /// </exception>
+    /// <remarks>
+    ///   If <c>keyComparer</c> is <c>nil</c>, the default equality comparer is
+    ///   used to compare keys.
+    /// </remarks>
+    class function AggregateBy<TSource, TKey, TAccumulate>(const source: IEnumerable<TSource>;
+      const keySelector: Func<TSource, TKey>; const seed: TAccumulate;
+      const func: Func<TAccumulate, TSource, TAccumulate>;
+      const keyComparer: IEqualityComparer<TKey>
+      ): IEnumerable<TPair<TKey, TAccumulate>>; overload; static;
+
+    /// <typeparam name="TSource">
+    ///   The type of the elements of <c>source</c>.
+    /// </typeparam>
+    /// <typeparam name="TKey">
+    ///   The type of the key returned by <c>keySelector</c>.
+    /// </typeparam>
+    /// <typeparam name="TAccumulate">
+    ///   The type of the accumulator value.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence to aggregate over.
+    /// </param>
+    /// <param name="keySelector">
+    ///   A function to extract the key for each element.
+    /// </param>
+    /// <param name="seedSelector">
+    ///   A factory for the initial accumulator value.
+    /// </param>
+    /// <param name="func">
+    ///   An accumulator function to be invoked on each element.
+    /// </param>
+    /// <returns>
+    ///   A sequence containing the aggregates corresponding to each key
+    ///   deriving from <c>source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> or <c>keySelector</c> or <c>seedSelector</c> or <c>func
+    ///   </c> is <c>nil</c>.
+    /// </exception>
+    class function AggregateBy<TSource, TKey, TAccumulate>(const source: IEnumerable<TSource>;
+      const keySelector: Func<TSource, TKey>; const seedSelector: Func<TKey, TAccumulate>;
+      const func: Func<TAccumulate, TSource, TAccumulate>): IEnumerable<TPair<TKey, TAccumulate>>; overload; static;
+
+    /// <typeparam name="TSource">
+    ///   The type of the elements of <c>source</c>.
+    /// </typeparam>
+    /// <typeparam name="TKey">
+    ///   The type of the key returned by <c>keySelector</c>.
+    /// </typeparam>
+    /// <typeparam name="TAccumulate">
+    ///   The type of the accumulator value.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence to aggregate over.
+    /// </param>
+    /// <param name="keySelector">
+    ///   A function to extract the key for each element.
+    /// </param>
+    /// <param name="seedSelector">
+    ///   A factory for the initial accumulator value.
+    /// </param>
+    /// <param name="func">
+    ///   An accumulator function to be invoked on each element.
+    /// </param>
+    /// <param name="keyComparer">
+    ///   An equality comparer to compare keys with.
+    /// </param>
+    /// <returns>
+    ///   A sequence containing the aggregates corresponding to each key
+    ///   deriving from <c>source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> or <c>keySelector</c> or <c>seedSelector</c> or <c>func
+    ///   </c> is <c>nil</c>.
+    /// </exception>
+    /// <remarks>
+    ///   If <c>keyComparer</c> is <c>nil</c>, the default equality comparer is
+    ///   used to compare keys.
+    /// </remarks>
+    class function AggregateBy<TSource, TKey, TAccumulate>(const source: IEnumerable<TSource>;
+      const keySelector: Func<TSource, TKey>; const seedSelector: Func<TKey, TAccumulate>;
+      const func: Func<TAccumulate, TSource, TAccumulate>;
+      const keyComparer: IEqualityComparer<TKey>
+      ): IEnumerable<TPair<TKey, TAccumulate>>; overload; static;
+
     /// <summary>
     ///   Splits the elements of a sequence into chunks of size at most <c>size</c>
     ///    .
@@ -5510,6 +5739,108 @@ type
     ///   <c>size</c> is below 1.
     /// </exception>
     class function Chunk<T>(const source: IEnumerable<T>; size: Integer): IEnumerable<TArray<T>>; static;
+
+    /// <summary>
+    ///   Returns the count of elements in the source sequence grouped by key.
+    /// </summary>
+    /// <typeparam name="T">
+    ///   The type of elements of <c>source</c>.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence that contains elements to be counted.
+    /// </param>
+    /// <returns>
+    ///   An enumerable containing the frequencies of each value occurrence in
+    ///   <c>source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> is <c>nil</c>.
+    /// </exception>
+    class function CountBy<T>(const source: IEnumerable<T>): IEnumerable<TPair<T, Integer>>; overload; static;
+
+    /// <summary>
+    ///   Returns the count of elements in the source sequence grouped by key.
+    /// </summary>
+    /// <typeparam name="T">
+    ///   The type of elements of <c>source</c>.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence that contains elements to be counted.
+    /// </param>
+    /// <param name="comparer">
+    ///   An equality comparer to compare values.
+    /// </param>
+    /// <returns>
+    ///   An enumerable containing the frequencies of each key occurrence in <c>
+    ///   source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> is <c>nil</c>.
+    /// </exception>
+    /// <remarks>
+    ///   If <c>comparer</c> is <c>nil</c>, the default equality comparer is
+    ///   used to compare values.
+    /// </remarks>
+    class function CountBy<T>(const source: IEnumerable<T>;
+      const comparer: IEqualityComparer<T>): IEnumerable<TPair<T, Integer>>; overload; static;
+
+    /// <summary>
+    ///   Returns the count of elements in the source sequence grouped by key.
+    /// </summary>
+    /// <typeparam name="T">
+    ///   The type of elements of <c>source</c>.
+    /// </typeparam>
+    /// <typeparam name="TKey">
+    ///   The type of the key returned by <c>keySelector</c>.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence that contains elements to be counted.
+    /// </param>
+    /// <param name="keySelector">
+    ///   A function to extract the key for each element.
+    /// </param>
+    /// <returns>
+    ///   An enumerable containing the frequencies of each key occurrence in <c>
+    ///   source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> or <c>keySelector</c> is <c>nil</c>.
+    /// </exception>
+    class function CountBy<T, TKey>(const source: IEnumerable<T>;
+      const keySelector: Func<T, TKey>): IEnumerable<TPair<TKey, Integer>>; overload; static;
+
+    /// <summary>
+    ///   Returns the count of elements in the source sequence grouped by key.
+    /// </summary>
+    /// <typeparam name="T">
+    ///   The type of elements of <c>source</c>.
+    /// </typeparam>
+    /// <typeparam name="TKey">
+    ///   The type of the key returned by <c>keySelector</c>.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence that contains elements to be counted.
+    /// </param>
+    /// <param name="keySelector">
+    ///   A function to extract the key for each element.
+    /// </param>
+    /// <param name="comparer">
+    ///   An equality comparer to compare keys.
+    /// </param>
+    /// <returns>
+    ///   An enumerable containing the frequencies of each key occurrence in <c>
+    ///   source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> or <c>keySelector</c> is <c>nil</c>.
+    /// </exception>
+    /// <remarks>
+    ///   If <c>comparer</c> is <c>nil</c>, the default equality comparer is
+    ///   used to compare keys.
+    /// </remarks>
+    class function CountBy<T,TKey>(const source: IEnumerable<T>;
+      const keySelector: Func<T, TKey>;
+      const comparer: IEqualityComparer<TKey>): IEnumerable<TPair<TKey, Integer>>; overload; static;
 
     /// <summary>
     ///   Returns the elements of the specified sequence or the type
@@ -5621,7 +5952,7 @@ type
     ///   A sequence that contains distinct elements from the source sequence.
     /// </returns>
     /// <exception cref="Spring|EArgumentNilException">
-    ///   <c>source</c> is <c>nil</c>.
+    ///   <c>source</c> or <c>keySelector</c> is <c>nil</c>.
     /// </exception>
     class function DistinctBy<T, TKey>(const source: IEnumerable<T>;
       const keySelector: Func<T, TKey>): IEnumerable<T>; overload; static;
@@ -5649,7 +5980,7 @@ type
     ///   A sequence that contains distinct elements from the source sequence.
     /// </returns>
     /// <exception cref="Spring|EArgumentNilException">
-    ///   <c>source</c> is <c>nil</c>.
+    ///   <c>source</c> or <c>keySelector</c> is <c>nil</c>.
     /// </exception>
     /// <remarks>
     ///   If <c>comparer</c> is <c>nil</c>, the default equality comparer is
@@ -6067,6 +6398,26 @@ type
       const comparer: IEqualityComparer<TKey>): IEnumerable<TResult>; overload; static;
 
     /// <summary>
+    ///   Returns a sequence that incorporates the element's index into a tuple.
+    /// </summary>
+    /// <typeparam name="T">
+    ///   The type of the elements of <c>source</c>.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence whose elements to return.
+    /// </param>
+    /// <param name="start">
+    ///   The start value for the <c>Index</c>.
+    /// </param>
+    /// <returns>
+    ///   A sequence that incorporates each element index into a tuple.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> is <c>nil</c>.
+    /// </exception>
+    class function Indexed<T>(const source: IEnumerable<T>; start: Integer = 0): IEnumerable<TIndexedItem<T>>; static;
+
+    /// <summary>
     ///   Produces the set intersection of two sequences by using the default
     ///   equality comparer to compare values.
     /// </summary>
@@ -6397,7 +6748,32 @@ type
     /// <exception cref="EArgumentOutOfRangeException">
     ///   <c>count</c> is less than 0.
     /// </exception>
-    class function Repeated<T>(const element: T; count: Integer): IEnumerable<T>; static;
+    class function Repeated<T>(const element: T; count: Integer): IReadOnlyList<T>; static;
+
+    /// <summary>
+    ///   Projects each element of a sequence into a new form.
+    /// </summary>
+    /// <typeparam name="T">
+    ///   The type of the elements of <c>source</c>.
+    /// </typeparam>
+    /// <typeparam name="TResult">
+    ///   The type of the value returned by <c>selector</c>.
+    /// </typeparam>
+    /// <param name="source">
+    ///   A sequence of values to invoke a transform function on.
+    /// </param>
+    /// <param name="selector">
+    ///   A transform function to apply to each element.
+    /// </param>
+    /// <returns>
+    ///   A sequence whose elements are the result of invoking the transform
+    ///   function on each element of <c>source</c>.
+    /// </returns>
+    /// <exception cref="Spring|EArgumentNilException">
+    ///   <c>source</c> or <c>selector</c> is <c>nil</c>.
+    /// </exception>
+    class function Select<T, TResult>(const source: IEnumerable<T>;
+      const selector: Func<T, TResult>): IEnumerable<TResult>; overload; static;
 
     /// <summary>
     ///   Projects each element of a sequence into a new form by incorporating
@@ -6419,31 +6795,6 @@ type
     /// <returns>
     ///   A sequence whose elements are the result of invoking the transform
     ///   function on each element of <c>source</c>.
-    /// </returns>
-    /// <exception cref="Spring|EArgumentNilException">
-    ///   <c>source</c> or <c>selector</c> is <c>nil</c>.
-    /// </exception>
-    class function Select<T, TResult>(const source: IEnumerable<T>;
-      const selector: Func<T, TResult>): IEnumerable<TResult>; overload; static;
-
-    /// <summary>
-    ///   Projects each element of a sequence into a new form.
-    /// </summary>
-    /// <typeparam name="T">
-    ///   The type of the elements of <c>source</c>.
-    /// </typeparam>
-    /// <typeparam name="TResult">
-    ///   The type of the value returned by <c>selector</c>.
-    /// </typeparam>
-    /// <param name="source">
-    ///   A sequence of values to invoke a transform function on.
-    /// </param>
-    /// <param name="selector">
-    ///   A transform function to apply to each element.
-    /// </param>
-    /// <returns>
-    ///   A sequence whose elements are the result of invoking the transform
-    ///   function on each element of source.
     /// </returns>
     /// <exception cref="Spring|EArgumentNilException">
     ///   <c>source</c> or <c>selector</c> is <c>nil</c>.
@@ -7029,6 +7380,11 @@ type
     function AsList<T: TCollectionItem>: IList<T>; overload;
   end;
 
+  {$RTTI INHERIT
+    METHODS(DefaultMethodRttiVisibility)
+    FIELDS(DefaultFieldRttiVisibility)
+    PROPERTIES(DefaultPropertyRttiVisibility)}
+
   AutoInitAttribute = class(ManagedAttribute)
     constructor Create(ownsObjects: Boolean = True);
   end;
@@ -7096,8 +7452,6 @@ type
   private
     fSource: IEnumerable<TObject>;
     fResultClass: TClass;
-  protected
-    function GetElementType: PTypeInfo; override;
   public
     constructor Create(const source: IEnumerable<TObject>; resultClass: TClass);
     function GetEnumerator: IEnumerator<TObject>;
@@ -7120,1619 +7474,1619 @@ end;
 {$IFDEF DELPHIXE7_UP}
 class procedure TCollections.CreateDictionary_Int8_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,Int8>(Result) := TFoldedDictionary<Int8,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,Int8>(Result) := TDictionary<Int8,Int8>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int8_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,Int16>(Result) := TFoldedDictionary<Int8,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,Int16>(Result) := TDictionary<Int8,Int16>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int8_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,Int32>(Result) := TFoldedDictionary<Int8,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,Int32>(Result) := TDictionary<Int8,Int32>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int8_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,Int64>(Result) := TFoldedDictionary<Int8,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,Int64>(Result) := TDictionary<Int8,Int64>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int8_Method(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,TMethodPointer>(Result) := TFoldedDictionary<Int8,TMethodPointer>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,TMethodPointer>(Result) := TDictionary<Int8,TMethodPointer>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int8_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,IInterface>(Result) := TFoldedDictionary<Int8,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,IInterface>(Result) := TDictionary<Int8,IInterface>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int8_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,TObject>(Result) := TFoldedDictionary<Int8,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,TObject>(Result) := TDictionary<Int8,TObject>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int8_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int8,string>(Result) := TFoldedDictionary<Int8,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IOrderedDictionary<Int8,string>(Result) := TDictionary<Int8,string>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,Int8>(Result) := TFoldedDictionary<Int16,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,Int8>(Result) := TDictionary<Int16,Int8>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,Int16>(Result) := TFoldedDictionary<Int16,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,Int16>(Result) := TDictionary<Int16,Int16>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,Int32>(Result) := TFoldedDictionary<Int16,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,Int32>(Result) := TDictionary<Int16,Int32>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,Int64>(Result) := TFoldedDictionary<Int16,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,Int64>(Result) := TDictionary<Int16,Int64>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_Method(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,TMethodPointer>(Result) := TFoldedDictionary<Int16,TMethodPointer>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,TMethodPointer>(Result) := TDictionary<Int16,TMethodPointer>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,IInterface>(Result) := TFoldedDictionary<Int16,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,IInterface>(Result) := TDictionary<Int16,IInterface>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,TObject>(Result) := TFoldedDictionary<Int16,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,TObject>(Result) := TDictionary<Int16,TObject>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int16_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int16,string>(Result) := TFoldedDictionary<Int16,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IOrderedDictionary<Int16,string>(Result) := TDictionary<Int16,string>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,Int8>(Result) := TFoldedDictionary<Int32,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,Int8>(Result) := TDictionary<Int32,Int8>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,Int16>(Result) := TFoldedDictionary<Int32,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,Int16>(Result) := TDictionary<Int32,Int16>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,Int32>(Result) := TFoldedDictionary<Int32,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,Int32>(Result) := TDictionary<Int32,Int32>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,Int64>(Result) := TFoldedDictionary<Int32,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,Int64>(Result) := TDictionary<Int32,Int64>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_Method(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,TMethodPointer>(Result) := TFoldedDictionary<Int32,TMethodPointer>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,TMethodPointer>(Result) := TDictionary<Int32,TMethodPointer>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,IInterface>(Result) := TFoldedDictionary<Int32,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,IInterface>(Result) := TDictionary<Int32,IInterface>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,TObject>(Result) := TFoldedDictionary<Int32,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,TObject>(Result) := TDictionary<Int32,TObject>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int32_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int32,string>(Result) := TFoldedDictionary<Int32,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IOrderedDictionary<Int32,string>(Result) := TDictionary<Int32,string>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,Int8>(Result) := TFoldedDictionary<Int64,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,Int8>(Result) := TDictionary<Int64,Int8>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,Int16>(Result) := TFoldedDictionary<Int64,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,Int16>(Result) := TDictionary<Int64,Int16>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,Int32>(Result) := TFoldedDictionary<Int64,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,Int32>(Result) := TDictionary<Int64,Int32>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,Int64>(Result) := TFoldedDictionary<Int64,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,Int64>(Result) := TDictionary<Int64,Int64>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_Method(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,TMethodPointer>(Result) := TFoldedDictionary<Int64,TMethodPointer>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,TMethodPointer>(Result) := TDictionary<Int64,TMethodPointer>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,IInterface>(Result) := TFoldedDictionary<Int64,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,IInterface>(Result) := TDictionary<Int64,IInterface>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,TObject>(Result) := TFoldedDictionary<Int64,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,TObject>(Result) := TDictionary<Int64,TObject>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Int64_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<Int64,string>(Result) := TFoldedDictionary<Int64,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IOrderedDictionary<Int64,string>(Result) := TDictionary<Int64,string>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<IInterface,Int8>(Result) := TFoldedDictionary<IInterface,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IOrderedDictionary<IInterface,Int8>(Result) := TDictionary<IInterface,Int8>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<IInterface,Int16>(Result) := TFoldedDictionary<IInterface,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IOrderedDictionary<IInterface,Int16>(Result) := TDictionary<IInterface,Int16>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IDictionary<IInterface,Int32>(Result) := TFoldedDictionary<IInterface,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IDictionary<IInterface,Int32>(Result) := TDictionary<IInterface,Int32>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<IInterface,Int64>(Result) := TFoldedDictionary<IInterface,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IOrderedDictionary<IInterface,Int64>(Result) := TDictionary<IInterface,Int64>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_Method(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<IInterface,TMethodPointer>(Result) := TFoldedDictionary<IInterface,TMethodPointer>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
+  IOrderedDictionary<IInterface,TMethodPointer>(Result) := TDictionary<IInterface,TMethodPointer>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<IInterface,IInterface>(Result) := TFoldedDictionary<IInterface,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IOrderedDictionary<IInterface,IInterface>(Result) := TDictionary<IInterface,IInterface>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<IInterface,TObject>(Result) := TFoldedDictionary<IInterface,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IOrderedDictionary<IInterface,TObject>(Result) := TDictionary<IInterface,TObject>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Interface_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<IInterface,string>(Result) := TFoldedDictionary<IInterface,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IOrderedDictionary<IInterface,string>(Result) := TDictionary<IInterface,string>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,Int8>(Result) := TFoldedDictionary<TObject,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,Int8>(Result) := TDictionary<TObject,Int8>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,Int16>(Result) := TFoldedDictionary<TObject,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,Int16>(Result) := TDictionary<TObject,Int16>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,Int32>(Result) := TFoldedDictionary<TObject,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,Int32>(Result) := TDictionary<TObject,Int32>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,Int64>(Result) := TFoldedDictionary<TObject,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,Int64>(Result) := TDictionary<TObject,Int64>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_Method(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,TMethodPointer>(Result) := TFoldedDictionary<TObject,TMethodPointer>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,TMethodPointer>(Result) := TDictionary<TObject,TMethodPointer>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,IInterface>(Result) := TFoldedDictionary<TObject,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,IInterface>(Result) := TDictionary<TObject,IInterface>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,TObject>(Result) := TFoldedDictionary<TObject,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,TObject>(Result) := TDictionary<TObject,TObject>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_Object_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<TObject,string>(Result) := TFoldedDictionary<TObject,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IOrderedDictionary<TObject,string>(Result) := TDictionary<TObject,string>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,Int8>(Result) := TFoldedDictionary<string,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IOrderedDictionary<string,Int8>(Result) := TDictionary<string,Int8>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,Int16>(Result) := TFoldedDictionary<string,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IOrderedDictionary<string,Int16>(Result) := TDictionary<string,Int16>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,Int32>(Result) := TFoldedDictionary<string,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IOrderedDictionary<string,Int32>(Result) := TDictionary<string,Int32>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,Int64>(Result) := TFoldedDictionary<string,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IOrderedDictionary<string,Int64>(Result) := TDictionary<string,Int64>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_Method(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,TMethodPointer>(Result) := TFoldedDictionary<string,TMethodPointer>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
+  IOrderedDictionary<string,TMethodPointer>(Result) := TDictionary<string,TMethodPointer>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<TMethodPointer>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,IInterface>(Result) := TFoldedDictionary<string,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IOrderedDictionary<string,IInterface>(Result) := TDictionary<string,IInterface>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,TObject>(Result) := TFoldedDictionary<string,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IOrderedDictionary<string,TObject>(Result) := TDictionary<string,TObject>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateDictionary_String_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IOrderedDictionary<string,string>(Result) := TFoldedDictionary<string,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IOrderedDictionary<string,string>(Result) := TDictionary<string,string>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int8_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int8,Int8>(Result) := TFoldedBidiDictionary<Int8,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IBidiDictionary<Int8,Int8>(Result) := TBidiDictionary<Int8,Int8>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int8_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int8,Int16>(Result) := TFoldedBidiDictionary<Int8,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IBidiDictionary<Int8,Int16>(Result) := TBidiDictionary<Int8,Int16>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int8_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int8,Int32>(Result) := TFoldedBidiDictionary<Int8,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IBidiDictionary<Int8,Int32>(Result) := TBidiDictionary<Int8,Int32>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int8_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int8,Int64>(Result) := TFoldedBidiDictionary<Int8,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IBidiDictionary<Int8,Int64>(Result) := TBidiDictionary<Int8,Int64>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int8_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int8,IInterface>(Result) := TFoldedBidiDictionary<Int8,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IBidiDictionary<Int8,IInterface>(Result) := TBidiDictionary<Int8,IInterface>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int8_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int8,TObject>(Result) := TFoldedBidiDictionary<Int8,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IBidiDictionary<Int8,TObject>(Result) := TBidiDictionary<Int8,TObject>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int8_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int8,string>(Result) := TFoldedBidiDictionary<Int8,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IBidiDictionary<Int8,string>(Result) := TBidiDictionary<Int8,string>.Create(elementType, capacity, IEqualityComparer<Int8>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int16_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int16,Int8>(Result) := TFoldedBidiDictionary<Int16,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IBidiDictionary<Int16,Int8>(Result) := TBidiDictionary<Int16,Int8>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int16_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int16,Int16>(Result) := TFoldedBidiDictionary<Int16,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IBidiDictionary<Int16,Int16>(Result) := TBidiDictionary<Int16,Int16>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int16_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int16,Int32>(Result) := TFoldedBidiDictionary<Int16,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IBidiDictionary<Int16,Int32>(Result) := TBidiDictionary<Int16,Int32>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int16_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int16,Int64>(Result) := TFoldedBidiDictionary<Int16,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IBidiDictionary<Int16,Int64>(Result) := TBidiDictionary<Int16,Int64>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int16_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int16,IInterface>(Result) := TFoldedBidiDictionary<Int16,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IBidiDictionary<Int16,IInterface>(Result) := TBidiDictionary<Int16,IInterface>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int16_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int16,TObject>(Result) := TFoldedBidiDictionary<Int16,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IBidiDictionary<Int16,TObject>(Result) := TBidiDictionary<Int16,TObject>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int16_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int16,string>(Result) := TFoldedBidiDictionary<Int16,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IBidiDictionary<Int16,string>(Result) := TBidiDictionary<Int16,string>.Create(elementType, capacity, IEqualityComparer<Int16>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int32_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int32,Int8>(Result) := TFoldedBidiDictionary<Int32,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IBidiDictionary<Int32,Int8>(Result) := TBidiDictionary<Int32,Int8>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int32_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int32,Int16>(Result) := TFoldedBidiDictionary<Int32,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IBidiDictionary<Int32,Int16>(Result) := TBidiDictionary<Int32,Int16>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int32_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int32,Int32>(Result) := TFoldedBidiDictionary<Int32,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IBidiDictionary<Int32,Int32>(Result) := TBidiDictionary<Int32,Int32>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int32_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int32,Int64>(Result) := TFoldedBidiDictionary<Int32,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IBidiDictionary<Int32,Int64>(Result) := TBidiDictionary<Int32,Int64>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int32_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int32,IInterface>(Result) := TFoldedBidiDictionary<Int32,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IBidiDictionary<Int32,IInterface>(Result) := TBidiDictionary<Int32,IInterface>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int32_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int32,TObject>(Result) := TFoldedBidiDictionary<Int32,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IBidiDictionary<Int32,TObject>(Result) := TBidiDictionary<Int32,TObject>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int32_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int32,string>(Result) := TFoldedBidiDictionary<Int32,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IBidiDictionary<Int32,string>(Result) := TBidiDictionary<Int32,string>.Create(elementType, capacity, IEqualityComparer<Int32>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int64_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int64,Int8>(Result) := TFoldedBidiDictionary<Int64,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IBidiDictionary<Int64,Int8>(Result) := TBidiDictionary<Int64,Int8>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int64_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int64,Int16>(Result) := TFoldedBidiDictionary<Int64,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IBidiDictionary<Int64,Int16>(Result) := TBidiDictionary<Int64,Int16>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int64_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int64,Int32>(Result) := TFoldedBidiDictionary<Int64,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IBidiDictionary<Int64,Int32>(Result) := TBidiDictionary<Int64,Int32>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int64_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int64,Int64>(Result) := TFoldedBidiDictionary<Int64,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IBidiDictionary<Int64,Int64>(Result) := TBidiDictionary<Int64,Int64>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int64_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int64,IInterface>(Result) := TFoldedBidiDictionary<Int64,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IBidiDictionary<Int64,IInterface>(Result) := TBidiDictionary<Int64,IInterface>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int64_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int64,TObject>(Result) := TFoldedBidiDictionary<Int64,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IBidiDictionary<Int64,TObject>(Result) := TBidiDictionary<Int64,TObject>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Int64_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<Int64,string>(Result) := TFoldedBidiDictionary<Int64,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IBidiDictionary<Int64,string>(Result) := TBidiDictionary<Int64,string>.Create(elementType, capacity, IEqualityComparer<Int64>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Interface_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<IInterface,Int8>(Result) := TFoldedBidiDictionary<IInterface,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IBidiDictionary<IInterface,Int8>(Result) := TBidiDictionary<IInterface,Int8>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Interface_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<IInterface,Int16>(Result) := TFoldedBidiDictionary<IInterface,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IBidiDictionary<IInterface,Int16>(Result) := TBidiDictionary<IInterface,Int16>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Interface_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<IInterface,Int32>(Result) := TFoldedBidiDictionary<IInterface,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IBidiDictionary<IInterface,Int32>(Result) := TBidiDictionary<IInterface,Int32>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Interface_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<IInterface,Int64>(Result) := TFoldedBidiDictionary<IInterface,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IBidiDictionary<IInterface,Int64>(Result) := TBidiDictionary<IInterface,Int64>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Interface_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<IInterface,IInterface>(Result) := TFoldedBidiDictionary<IInterface,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IBidiDictionary<IInterface,IInterface>(Result) := TBidiDictionary<IInterface,IInterface>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Interface_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<IInterface,TObject>(Result) := TFoldedBidiDictionary<IInterface,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IBidiDictionary<IInterface,TObject>(Result) := TBidiDictionary<IInterface,TObject>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Interface_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<IInterface,string>(Result) := TFoldedBidiDictionary<IInterface,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IBidiDictionary<IInterface,string>(Result) := TBidiDictionary<IInterface,string>.Create(elementType, capacity, IEqualityComparer<IInterface>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Object_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<TObject,Int8>(Result) := TFoldedBidiDictionary<TObject,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IBidiDictionary<TObject,Int8>(Result) := TBidiDictionary<TObject,Int8>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Object_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<TObject,Int16>(Result) := TFoldedBidiDictionary<TObject,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IBidiDictionary<TObject,Int16>(Result) := TBidiDictionary<TObject,Int16>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Object_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<TObject,Int32>(Result) := TFoldedBidiDictionary<TObject,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IBidiDictionary<TObject,Int32>(Result) := TBidiDictionary<TObject,Int32>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Object_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<TObject,Int64>(Result) := TFoldedBidiDictionary<TObject,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IBidiDictionary<TObject,Int64>(Result) := TBidiDictionary<TObject,Int64>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Object_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<TObject,IInterface>(Result) := TFoldedBidiDictionary<TObject,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IBidiDictionary<TObject,IInterface>(Result) := TBidiDictionary<TObject,IInterface>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Object_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<TObject,TObject>(Result) := TFoldedBidiDictionary<TObject,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IBidiDictionary<TObject,TObject>(Result) := TBidiDictionary<TObject,TObject>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_Object_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<TObject,string>(Result) := TFoldedBidiDictionary<TObject,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IBidiDictionary<TObject,string>(Result) := TBidiDictionary<TObject,string>.Create(elementType, capacity, IEqualityComparer<TObject>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_String_Int8(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<string,Int8>(Result) := TFoldedBidiDictionary<string,Int8>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
+  IBidiDictionary<string,Int8>(Result) := TBidiDictionary<string,Int8>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int8>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_String_Int16(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<string,Int16>(Result) := TFoldedBidiDictionary<string,Int16>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
+  IBidiDictionary<string,Int16>(Result) := TBidiDictionary<string,Int16>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int16>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_String_Int32(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<string,Int32>(Result) := TFoldedBidiDictionary<string,Int32>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
+  IBidiDictionary<string,Int32>(Result) := TBidiDictionary<string,Int32>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int32>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_String_Int64(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<string,Int64>(Result) := TFoldedBidiDictionary<string,Int64>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
+  IBidiDictionary<string,Int64>(Result) := TBidiDictionary<string,Int64>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<Int64>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_String_Interface(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<string,IInterface>(Result) := TFoldedBidiDictionary<string,IInterface>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
+  IBidiDictionary<string,IInterface>(Result) := TBidiDictionary<string,IInterface>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<IInterface>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_String_Object(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<string,TObject>(Result) := TFoldedBidiDictionary<string,TObject>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
+  IBidiDictionary<string,TObject>(Result) := TBidiDictionary<string,TObject>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<TObject>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateBidiDictionary_String_String(capacity: Integer;
   keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  var result; elementType: PTypeInfo);
 begin
-  IBidiDictionary<string,string>(Result) := TFoldedBidiDictionary<string,string>.Create(keyType, valueType, elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
+  IBidiDictionary<string,string>(Result) := TBidiDictionary<string,string>.Create(elementType, capacity, IEqualityComparer<string>(keyComparer), IEqualityComparer<string>(valueComparer), ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int8_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int8>(Result) := TFoldedMultiMap<Int8,Int8>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int8>(Result) := TMultiMap<Int8,Int8>.Create(
+    elementType, IEqualityComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int8_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int16>(Result) := TFoldedMultiMap<Int8,Int16>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int16>(Result) := TMultiMap<Int8,Int16>.Create(
+    elementType, IEqualityComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int8_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int32>(Result) := TFoldedMultiMap<Int8,Int32>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int32>(Result) := TMultiMap<Int8,Int32>.Create(
+    elementType, IEqualityComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int8_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int64>(Result) := TFoldedMultiMap<Int8,Int64>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int64>(Result) := TMultiMap<Int8,Int64>.Create(
+    elementType, IEqualityComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int8_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,IInterface>(Result) := TFoldedMultiMap<Int8,IInterface>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int8>(keyComparer),
-    nil, Helper<Int8,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int8,IInterface>(Result) := TMultiMap<Int8,IInterface>.Create(
+    elementType, IEqualityComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int8_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,TObject>(Result) := TFoldedMultiMap<Int8,TObject>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int8>(keyComparer),
-    nil, Helper<Int8,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int8,TObject>(Result) := TMultiMap<Int8,TObject>.Create(
+    elementType, IEqualityComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int8_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,string>(Result) := TFoldedMultiMap<Int8,string>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int8>(keyComparer),
-    nil, Helper<Int8,string>.CreateListCollection, ownerships);
+  IMultiMap<Int8,string>(Result) := TMultiMap<Int8,string>.Create(
+    elementType, IEqualityComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int16_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int8>(Result) := TFoldedMultiMap<Int16,Int8>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int8>(Result) := TMultiMap<Int16,Int8>.Create(
+    elementType, IEqualityComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int16_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int16>(Result) := TFoldedMultiMap<Int16,Int16>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int16>(Result) := TMultiMap<Int16,Int16>.Create(
+    elementType, IEqualityComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int16_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int32>(Result) := TFoldedMultiMap<Int16,Int32>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int32>(Result) := TMultiMap<Int16,Int32>.Create(
+    elementType, IEqualityComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int16_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int64>(Result) := TFoldedMultiMap<Int16,Int64>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int64>(Result) := TMultiMap<Int16,Int64>.Create(
+    elementType, IEqualityComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int16_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,IInterface>(Result) := TFoldedMultiMap<Int16,IInterface>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int16>(keyComparer),
-    nil, Helper<Int16,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int16,IInterface>(Result) := TMultiMap<Int16,IInterface>.Create(
+    elementType, IEqualityComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int16_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,TObject>(Result) := TFoldedMultiMap<Int16,TObject>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int16>(keyComparer),
-    nil, Helper<Int16,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int16,TObject>(Result) := TMultiMap<Int16,TObject>.Create(
+    elementType, IEqualityComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int16_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,string>(Result) := TFoldedMultiMap<Int16,string>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int16>(keyComparer),
-    nil, Helper<Int16,string>.CreateListCollection, ownerships);
+  IMultiMap<Int16,string>(Result) := TMultiMap<Int16,string>.Create(
+    elementType, IEqualityComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int32_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int8>(Result) := TFoldedMultiMap<Int32,Int8>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int8>(Result) := TMultiMap<Int32,Int8>.Create(
+    elementType, IEqualityComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int32_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int16>(Result) := TFoldedMultiMap<Int32,Int16>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int16>(Result) := TMultiMap<Int32,Int16>.Create(
+    elementType, IEqualityComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int32_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int32>(Result) := TFoldedMultiMap<Int32,Int32>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int32>(Result) := TMultiMap<Int32,Int32>.Create(
+    elementType, IEqualityComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int32_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int64>(Result) := TFoldedMultiMap<Int32,Int64>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int64>(Result) := TMultiMap<Int32,Int64>.Create(
+    elementType, IEqualityComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int32_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,IInterface>(Result) := TFoldedMultiMap<Int32,IInterface>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int32>(keyComparer),
-    nil, Helper<Int32,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int32,IInterface>(Result) := TMultiMap<Int32,IInterface>.Create(
+    elementType, IEqualityComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int32_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,TObject>(Result) := TFoldedMultiMap<Int32,TObject>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int32>(keyComparer),
-    nil, Helper<Int32,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int32,TObject>(Result) := TMultiMap<Int32,TObject>.Create(
+    elementType, IEqualityComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int32_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,string>(Result) := TFoldedMultiMap<Int32,string>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int32>(keyComparer),
-    nil, Helper<Int32,string>.CreateListCollection, ownerships);
+  IMultiMap<Int32,string>(Result) := TMultiMap<Int32,string>.Create(
+    elementType, IEqualityComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int64_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int8>(Result) := TFoldedMultiMap<Int64,Int8>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int8>(Result) := TMultiMap<Int64,Int8>.Create(
+    elementType, IEqualityComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int64_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int16>(Result) := TFoldedMultiMap<Int64,Int16>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int16>(Result) := TMultiMap<Int64,Int16>.Create(
+    elementType, IEqualityComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int64_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int32>(Result) := TFoldedMultiMap<Int64,Int32>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int32>(Result) := TMultiMap<Int64,Int32>.Create(
+    elementType, IEqualityComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int64_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int64>(Result) := TFoldedMultiMap<Int64,Int64>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int64>(Result) := TMultiMap<Int64,Int64>.Create(
+    elementType, IEqualityComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int64_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,IInterface>(Result) := TFoldedMultiMap<Int64,IInterface>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int64>(keyComparer),
-    nil, Helper<Int64,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int64,IInterface>(Result) := TMultiMap<Int64,IInterface>.Create(
+    elementType, IEqualityComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int64_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,TObject>(Result) := TFoldedMultiMap<Int64,TObject>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int64>(keyComparer),
-    nil, Helper<Int64,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int64,TObject>(Result) := TMultiMap<Int64,TObject>.Create(
+    elementType, IEqualityComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Int64_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,string>(Result) := TFoldedMultiMap<Int64,string>.Create(
-    keyType, valueType, elementType, IEqualityComparer<Int64>(keyComparer),
-    nil, Helper<Int64,string>.CreateListCollection, ownerships);
+  IMultiMap<Int64,string>(Result) := TMultiMap<Int64,string>.Create(
+    elementType, IEqualityComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Interface_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int8>(Result) := TFoldedMultiMap<IInterface,Int8>.Create(
-    keyType, valueType, elementType, IEqualityComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int8>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int8>(Result) := TMultiMap<IInterface,Int8>.Create(
+    elementType, IEqualityComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Interface_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType,valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int16>(Result) := TFoldedMultiMap<IInterface,Int16>.Create(
-    keyType, valueType, elementType, IEqualityComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int16>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int16>(Result) := TMultiMap<IInterface,Int16>.Create(
+    elementType, IEqualityComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Interface_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int32>(Result) := TFoldedMultiMap<IInterface,Int32>.Create(
-    keyType, valueType, elementType, IEqualityComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int32>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int32>(Result) := TMultiMap<IInterface,Int32>.Create(
+    elementType, IEqualityComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Interface_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int64>(Result) := TFoldedMultiMap<IInterface,Int64>.Create(
-    keyType, valueType, elementType, IEqualityComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int64>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int64>(Result) := TMultiMap<IInterface,Int64>.Create(
+    elementType, IEqualityComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Interface_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,IInterface>(Result) := TFoldedMultiMap<IInterface,IInterface>.Create(
-    keyType, valueType, elementType, IEqualityComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,IInterface>(Result) := TMultiMap<IInterface,IInterface>.Create(
+    elementType, IEqualityComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Interface_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,TObject>(Result) := TFoldedMultiMap<IInterface,TObject>.Create(
-    keyType, valueType, elementType, IEqualityComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,TObject>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,TObject>(Result) := TMultiMap<IInterface,TObject>.Create(
+    elementType, IEqualityComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Interface_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,string>(Result) := TFoldedMultiMap<IInterface,string>.Create(
-    keyType, valueType, elementType, IEqualityComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,string>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,string>(Result) := TMultiMap<IInterface,string>.Create(
+    elementType, IEqualityComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Object_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int8>(Result) := TFoldedMultiMap<TObject,Int8>.Create(
-    keyType, valueType, elementType, IEqualityComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int8>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int8>(Result) := TMultiMap<TObject,Int8>.Create(
+    elementType, IEqualityComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Object_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int16>(Result) := TFoldedMultiMap<TObject,Int16>.Create(
-    keyType, valueType, elementType, IEqualityComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int16>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int16>(Result) := TMultiMap<TObject,Int16>.Create(
+    elementType, IEqualityComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Object_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int32>(Result) := TFoldedMultiMap<TObject,Int32>.Create(
-    keyType, valueType, elementType, IEqualityComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int32>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int32>(Result) := TMultiMap<TObject,Int32>.Create(
+    elementType, IEqualityComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Object_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int64>(Result) := TFoldedMultiMap<TObject,Int64>.Create(
-    keyType, valueType, elementType, IEqualityComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int64>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int64>(Result) := TMultiMap<TObject,Int64>.Create(
+    elementType, IEqualityComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Object_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,IInterface>(Result) := TFoldedMultiMap<TObject,IInterface>.Create(
-    keyType, valueType, elementType, IEqualityComparer<TObject>(keyComparer),
-    nil, Helper<TObject,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<TObject,IInterface>(Result) := TMultiMap<TObject,IInterface>.Create(
+    elementType, IEqualityComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Object_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,TObject>(Result) := TFoldedMultiMap<TObject,TObject>.Create(
-    keyType, valueType, elementType, IEqualityComparer<TObject>(keyComparer),
-    nil, Helper<TObject,TObject>.CreateListCollection, ownerships);
+  IMultiMap<TObject,TObject>(Result) := TMultiMap<TObject,TObject>.Create(
+    elementType, IEqualityComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_Object_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,string>(Result) := TFoldedMultiMap<TObject,string>.Create(
-    keyType, valueType, elementType, IEqualityComparer<TObject>(keyComparer),
-    nil, Helper<TObject,string>.CreateListCollection, ownerships);
+  IMultiMap<TObject,string>(Result) := TMultiMap<TObject,string>.Create(
+    elementType, IEqualityComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_String_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int8>(Result) := TFoldedMultiMap<string,Int8>.Create(
-    keyType, valueType, elementType, IEqualityComparer<string>(keyComparer),
-    nil, Helper<string,Int8>.CreateListCollection, ownerships);
+  IMultiMap<string,Int8>(Result) := TMultiMap<string,Int8>.Create(
+    elementType, IEqualityComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_String_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int16>(Result) := TFoldedMultiMap<string,Int16>.Create(
-    keyType, valueType, elementType, IEqualityComparer<string>(keyComparer),
-    nil, Helper<string,Int16>.CreateListCollection, ownerships);
+  IMultiMap<string,Int16>(Result) := TMultiMap<string,Int16>.Create(
+    elementType, IEqualityComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_String_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int32>(Result) := TFoldedMultiMap<string,Int32>.Create(
-    keyType, valueType, elementType, IEqualityComparer<string>(keyComparer),
-    nil, Helper<string,Int32>.CreateListCollection, ownerships);
+  IMultiMap<string,Int32>(Result) := TMultiMap<string,Int32>.Create(
+    elementType, IEqualityComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_String_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int64>(Result) := TFoldedMultiMap<string,Int64>.Create(
-    keyType, valueType, elementType, IEqualityComparer<string>(keyComparer),
-    nil, Helper<string,Int64>.CreateListCollection, ownerships);
+  IMultiMap<string,Int64>(Result) := TMultiMap<string,Int64>.Create(
+    elementType, IEqualityComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_String_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,IInterface>(Result) := TFoldedMultiMap<string,IInterface>.Create(
-    keyType, valueType, elementType, IEqualityComparer<string>(keyComparer),
-    nil, Helper<string,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<string,IInterface>(Result) := TMultiMap<string,IInterface>.Create(
+    elementType, IEqualityComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_String_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,TObject>(Result) := TFoldedMultiMap<string,TObject>.Create(
-    keyType, valueType, elementType, IEqualityComparer<string>(keyComparer),
-    nil, Helper<string,TObject>.CreateListCollection, ownerships);
+  IMultiMap<string,TObject>(Result) := TMultiMap<string,TObject>.Create(
+    elementType, IEqualityComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateListMultiMap_String_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,string>(Result) := TFoldedMultiMap<string,string>.Create(
-    keyType, valueType, elementType, IEqualityComparer<string>(keyComparer),
-    nil, Helper<string,string>.CreateListCollection, ownerships);
+  IMultiMap<string,string>(Result) := TMultiMap<string,string>.Create(
+    elementType, IEqualityComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int8_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int8>(Result) := TFoldedSortedMultiMap<Int8,Int8>.Create(
-    keyType, valueType, elementType, IComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int8>(Result) := TSortedMultiMap<Int8,Int8>.Create(
+    elementType, IComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int8_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int16>(Result) := TFoldedSortedMultiMap<Int8,Int16>.Create(
-    keyType, valueType, elementType, IComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int16>(Result) := TSortedMultiMap<Int8,Int16>.Create(
+    elementType, IComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int8_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int32>(Result) := TFoldedSortedMultiMap<Int8,Int32>.Create(
-    keyType, valueType, elementType, IComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int32>(Result) := TSortedMultiMap<Int8,Int32>.Create(
+    elementType, IComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int8_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,Int64>(Result) := TFoldedSortedMultiMap<Int8,Int64>.Create(
-    keyType, valueType, elementType, IComparer<Int8>(keyComparer),
-    nil, Helper<Int8,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int8,Int64>(Result) := TSortedMultiMap<Int8,Int64>.Create(
+    elementType, IComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int8_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,IInterface>(Result) := TFoldedSortedMultiMap<Int8,IInterface>.Create(
-    keyType, valueType, elementType, IComparer<Int8>(keyComparer),
-    nil, Helper<Int8,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int8,IInterface>(Result) := TSortedMultiMap<Int8,IInterface>.Create(
+    elementType, IComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int8_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,TObject>(Result) := TFoldedSortedMultiMap<Int8,TObject>.Create(
-    keyType, valueType, elementType, IComparer<Int8>(keyComparer),
-    nil, Helper<Int8,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int8,TObject>(Result) := TSortedMultiMap<Int8,TObject>.Create(
+    elementType, IComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int8_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int8,string>(Result) := TFoldedSortedMultiMap<Int8,string>.Create(
-    keyType, valueType, elementType, IComparer<Int8>(keyComparer),
-    nil, Helper<Int8,string>.CreateListCollection, ownerships);
+  IMultiMap<Int8,string>(Result) := TSortedMultiMap<Int8,string>.Create(
+    elementType, IComparer<Int8>(keyComparer),
+    IInterface(valueComparer), Helper<Int8,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int16_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int8>(Result) := TFoldedSortedMultiMap<Int16,Int8>.Create(
-    keyType, valueType, elementType, IComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int8>(Result) := TSortedMultiMap<Int16,Int8>.Create(
+    elementType, IComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int16_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int16>(Result) := TFoldedSortedMultiMap<Int16,Int16>.Create(
-    keyType, valueType, elementType, IComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int16>(Result) := TSortedMultiMap<Int16,Int16>.Create(
+    elementType, IComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int16_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int32>(Result) := TFoldedSortedMultiMap<Int16,Int32>.Create(
-    keyType, valueType, elementType, IComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int32>(Result) := TSortedMultiMap<Int16,Int32>.Create(
+    elementType, IComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int16_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,Int64>(Result) := TFoldedSortedMultiMap<Int16,Int64>.Create(
-    keyType, valueType, elementType, IComparer<Int16>(keyComparer),
-    nil, Helper<Int16,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int16,Int64>(Result) := TSortedMultiMap<Int16,Int64>.Create(
+    elementType, IComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int16_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,IInterface>(Result) := TFoldedSortedMultiMap<Int16,IInterface>.Create(
-    keyType, valueType, elementType, IComparer<Int16>(keyComparer),
-    nil, Helper<Int16,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int16,IInterface>(Result) := TSortedMultiMap<Int16,IInterface>.Create(
+    elementType, IComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int16_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,TObject>(Result) := TFoldedSortedMultiMap<Int16,TObject>.Create(
-    keyType, valueType, elementType, IComparer<Int16>(keyComparer),
-    nil, Helper<Int16,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int16,TObject>(Result) := TSortedMultiMap<Int16,TObject>.Create(
+    elementType, IComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int16_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int16,string>(Result) := TFoldedSortedMultiMap<Int16,string>.Create(
-    keyType, valueType, elementType, IComparer<Int16>(keyComparer),
-    nil, Helper<Int16,string>.CreateListCollection, ownerships);
+  IMultiMap<Int16,string>(Result) := TSortedMultiMap<Int16,string>.Create(
+    elementType, IComparer<Int16>(keyComparer),
+    IInterface(valueComparer), Helper<Int16,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int32_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int8>(Result) := TFoldedSortedMultiMap<Int32,Int8>.Create(
-    keyType, valueType, elementType, IComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int8>(Result) := TSortedMultiMap<Int32,Int8>.Create(
+    elementType, IComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int32_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int16>(Result) := TFoldedSortedMultiMap<Int32,Int16>.Create(
-    keyType, valueType, elementType, IComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int16>(Result) := TSortedMultiMap<Int32,Int16>.Create(
+    elementType, IComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int32_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int32>(Result) := TFoldedSortedMultiMap<Int32,Int32>.Create(
-    keyType, valueType, elementType, IComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int32>(Result) := TSortedMultiMap<Int32,Int32>.Create(
+    elementType, IComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int32_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,Int64>(Result) := TFoldedSortedMultiMap<Int32,Int64>.Create(
-    keyType, valueType, elementType, IComparer<Int32>(keyComparer),
-    nil, Helper<Int32,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int32,Int64>(Result) := TSortedMultiMap<Int32,Int64>.Create(
+    elementType, IComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int32_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,IInterface>(Result) := TFoldedSortedMultiMap<Int32,IInterface>.Create(
-    keyType, valueType, elementType, IComparer<Int32>(keyComparer),
-    nil, Helper<Int32,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int32,IInterface>(Result) := TSortedMultiMap<Int32,IInterface>.Create(
+    elementType, IComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int32_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,TObject>(Result) := TFoldedSortedMultiMap<Int32,TObject>.Create(
-    keyType, valueType, elementType, IComparer<Int32>(keyComparer),
-    nil, Helper<Int32,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int32,TObject>(Result) := TSortedMultiMap<Int32,TObject>.Create(
+    elementType, IComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int32_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int32,string>(Result) := TFoldedSortedMultiMap<Int32,string>.Create(
-    keyType, valueType, elementType, IComparer<Int32>(keyComparer),
-    nil, Helper<Int32,string>.CreateListCollection, ownerships);
+  IMultiMap<Int32,string>(Result) := TSortedMultiMap<Int32,string>.Create(
+    elementType, IComparer<Int32>(keyComparer),
+    IInterface(valueComparer), Helper<Int32,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int64_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int8>(Result) := TFoldedSortedMultiMap<Int64,Int8>.Create(
-    keyType, valueType, elementType, IComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int8>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int8>(Result) := TSortedMultiMap<Int64,Int8>.Create(
+    elementType, IComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int64_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int16>(Result) := TFoldedSortedMultiMap<Int64,Int16>.Create(
-    keyType, valueType, elementType, IComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int16>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int16>(Result) := TSortedMultiMap<Int64,Int16>.Create(
+    elementType, IComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int64_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int32>(Result) := TFoldedSortedMultiMap<Int64,Int32>.Create(
-    keyType, valueType, elementType, IComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int32>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int32>(Result) := TSortedMultiMap<Int64,Int32>.Create(
+    elementType, IComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int64_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,Int64>(Result) := TFoldedSortedMultiMap<Int64,Int64>.Create(
-    keyType, valueType, elementType, IComparer<Int64>(keyComparer),
-    nil, Helper<Int64,Int64>.CreateListCollection, ownerships);
+  IMultiMap<Int64,Int64>(Result) := TSortedMultiMap<Int64,Int64>.Create(
+    elementType, IComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int64_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,IInterface>(Result) := TFoldedSortedMultiMap<Int64,IInterface>.Create(
-    keyType, valueType, elementType, IComparer<Int64>(keyComparer),
-    nil, Helper<Int64,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<Int64,IInterface>(Result) := TSortedMultiMap<Int64,IInterface>.Create(
+    elementType, IComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int64_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,TObject>(Result) := TFoldedSortedMultiMap<Int64,TObject>.Create(
-    keyType, valueType, elementType, IComparer<Int64>(keyComparer),
-    nil, Helper<Int64,TObject>.CreateListCollection, ownerships);
+  IMultiMap<Int64,TObject>(Result) := TSortedMultiMap<Int64,TObject>.Create(
+    elementType, IComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Int64_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<Int64,string>(Result) := TFoldedSortedMultiMap<Int64,string>.Create(
-    keyType, valueType, elementType, IComparer<Int64>(keyComparer),
-    nil, Helper<Int64,string>.CreateListCollection, ownerships);
+  IMultiMap<Int64,string>(Result) := TSortedMultiMap<Int64,string>.Create(
+    elementType, IComparer<Int64>(keyComparer),
+    IInterface(valueComparer), Helper<Int64,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Interface_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int8>(Result) := TFoldedSortedMultiMap<IInterface,Int8>.Create(
-    keyType, valueType, elementType, IComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int8>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int8>(Result) := TSortedMultiMap<IInterface,Int8>.Create(
+    elementType, IComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Interface_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType,valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int16>(Result) := TFoldedSortedMultiMap<IInterface,Int16>.Create(
-    keyType, valueType, elementType, IComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int16>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int16>(Result) := TSortedMultiMap<IInterface,Int16>.Create(
+    elementType, IComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Interface_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int32>(Result) := TFoldedSortedMultiMap<IInterface,Int32>.Create(
-    keyType, valueType, elementType, IComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int32>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int32>(Result) := TSortedMultiMap<IInterface,Int32>.Create(
+    elementType, IComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Interface_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,Int64>(Result) := TFoldedSortedMultiMap<IInterface,Int64>.Create(
-    keyType, valueType, elementType, IComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,Int64>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,Int64>(Result) := TSortedMultiMap<IInterface,Int64>.Create(
+    elementType, IComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Interface_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,IInterface>(Result) := TFoldedSortedMultiMap<IInterface,IInterface>.Create(
-    keyType, valueType, elementType, IComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,IInterface>(Result) := TSortedMultiMap<IInterface,IInterface>.Create(
+    elementType, IComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Interface_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,TObject>(Result) := TFoldedSortedMultiMap<IInterface,TObject>.Create(
-    keyType, valueType, elementType, IComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,TObject>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,TObject>(Result) := TSortedMultiMap<IInterface,TObject>.Create(
+    elementType, IComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Interface_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<IInterface,string>(Result) := TFoldedSortedMultiMap<IInterface,string>.Create(
-    keyType, valueType, elementType, IComparer<IInterface>(keyComparer),
-    nil, Helper<IInterface,string>.CreateListCollection, ownerships);
+  IMultiMap<IInterface,string>(Result) := TSortedMultiMap<IInterface,string>.Create(
+    elementType, IComparer<IInterface>(keyComparer),
+    IInterface(valueComparer), Helper<IInterface,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Object_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int8>(Result) := TFoldedSortedMultiMap<TObject,Int8>.Create(
-    keyType, valueType, elementType, IComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int8>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int8>(Result) := TSortedMultiMap<TObject,Int8>.Create(
+    elementType, IComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Object_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int16>(Result) := TFoldedSortedMultiMap<TObject,Int16>.Create(
-    keyType, valueType, elementType, IComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int16>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int16>(Result) := TSortedMultiMap<TObject,Int16>.Create(
+    elementType, IComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Object_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int32>(Result) := TFoldedSortedMultiMap<TObject,Int32>.Create(
-    keyType, valueType, elementType, IComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int32>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int32>(Result) := TSortedMultiMap<TObject,Int32>.Create(
+    elementType, IComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Object_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,Int64>(Result) := TFoldedSortedMultiMap<TObject,Int64>.Create(
-    keyType, valueType, elementType, IComparer<TObject>(keyComparer),
-    nil, Helper<TObject,Int64>.CreateListCollection, ownerships);
+  IMultiMap<TObject,Int64>(Result) := TSortedMultiMap<TObject,Int64>.Create(
+    elementType, IComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Object_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,IInterface>(Result) := TFoldedSortedMultiMap<TObject,IInterface>.Create(
-    keyType, valueType, elementType, IComparer<TObject>(keyComparer),
-    nil, Helper<TObject,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<TObject,IInterface>(Result) := TSortedMultiMap<TObject,IInterface>.Create(
+    elementType, IComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Object_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,TObject>(Result) := TFoldedSortedMultiMap<TObject,TObject>.Create(
-    keyType, valueType, elementType, IComparer<TObject>(keyComparer),
-    nil, Helper<TObject,TObject>.CreateListCollection, ownerships);
+  IMultiMap<TObject,TObject>(Result) := TSortedMultiMap<TObject,TObject>.Create(
+    elementType, IComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_Object_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<TObject,string>(Result) := TFoldedSortedMultiMap<TObject,string>.Create(
-    keyType, valueType, elementType, IComparer<TObject>(keyComparer),
-    nil, Helper<TObject,string>.CreateListCollection, ownerships);
+  IMultiMap<TObject,string>(Result) := TSortedMultiMap<TObject,string>.Create(
+    elementType, IComparer<TObject>(keyComparer),
+    IInterface(valueComparer), Helper<TObject,string>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_String_Int8(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int8>(Result) := TFoldedSortedMultiMap<string,Int8>.Create(
-    keyType, valueType, elementType, IComparer<string>(keyComparer),
-    nil, Helper<string,Int8>.CreateListCollection, ownerships);
+  IMultiMap<string,Int8>(Result) := TSortedMultiMap<string,Int8>.Create(
+    elementType, IComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int8>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_String_Int16(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int16>(Result) := TFoldedSortedMultiMap<string,Int16>.Create(
-    keyType, valueType, elementType, IComparer<string>(keyComparer),
-    nil, Helper<string,Int16>.CreateListCollection, ownerships);
+  IMultiMap<string,Int16>(Result) := TSortedMultiMap<string,Int16>.Create(
+    elementType, IComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int16>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_String_Int32(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int32>(Result) := TFoldedSortedMultiMap<string,Int32>.Create(
-    keyType, valueType, elementType, IComparer<string>(keyComparer),
-    nil, Helper<string,Int32>.CreateListCollection, ownerships);
+  IMultiMap<string,Int32>(Result) := TSortedMultiMap<string,Int32>.Create(
+    elementType, IComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int32>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_String_Int64(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,Int64>(Result) := TFoldedSortedMultiMap<string,Int64>.Create(
-    keyType, valueType, elementType, IComparer<string>(keyComparer),
-    nil, Helper<string,Int64>.CreateListCollection, ownerships);
+  IMultiMap<string,Int64>(Result) := TSortedMultiMap<string,Int64>.Create(
+    elementType, IComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,Int64>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_String_Interface(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,IInterface>(Result) := TFoldedSortedMultiMap<string,IInterface>.Create(
-    keyType, valueType, elementType, IComparer<string>(keyComparer),
-    nil, Helper<string,IInterface>.CreateListCollection, ownerships);
+  IMultiMap<string,IInterface>(Result) := TSortedMultiMap<string,IInterface>.Create(
+    elementType, IComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,IInterface>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_String_Object(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,TObject>(Result) := TFoldedSortedMultiMap<string,TObject>.Create(
-    keyType, valueType, elementType, IComparer<string>(keyComparer),
-    nil, Helper<string,TObject>.CreateListCollection, ownerships);
+  IMultiMap<string,TObject>(Result) := TSortedMultiMap<string,TObject>.Create(
+    elementType, IComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,TObject>.CreateListCollection, ownerships);
 end;
 
 class procedure TCollections.CreateSortedListMultiMap_String_String(
-  keyComparer: Pointer; ownerships: TDictionaryOwnerships;
-  var result; keyType, valueType, elementType: PTypeInfo);
+  keyComparer, valueComparer: Pointer; ownerships: TDictionaryOwnerships;
+  var result; elementType: PTypeInfo);
 begin
-  IMultiMap<string,string>(Result) := TFoldedSortedMultiMap<string,string>.Create(
-    keyType, valueType, elementType, IComparer<string>(keyComparer),
-    nil, Helper<string,string>.CreateListCollection, ownerships);
+  IMultiMap<string,string>(Result) := TSortedMultiMap<string,string>.Create(
+    elementType, IComparer<string>(keyComparer),
+    IInterface(valueComparer), Helper<string,string>.CreateListCollection, ownerships);
 end;
 {$ENDIF}
 
@@ -8759,150 +9113,150 @@ end;
 
 class procedure TCollections.CreateList_Int8(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int8>(result) := TFoldedList<Int8>.Create(elementType, IComparer<Int8>(comparer));
+  IList<Int8>(result) := TList<Int8>.Create(elementType, IComparer<Int8>(comparer));
 end;
 
 class procedure TCollections.CreateList_Int16(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int16>(result) := TFoldedList<Int16>.Create(elementType, IComparer<Int16>(comparer));
+  IList<Int16>(result) := TList<Int16>.Create(elementType, IComparer<Int16>(comparer));
 end;
 
 class procedure TCollections.CreateList_Int32(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int32>(result) := TFoldedList<Int32>.Create(elementType, IComparer<Int32>(comparer));
+  IList<Int32>(result) := TList<Int32>.Create(elementType, IComparer<Int32>(comparer));
 end;
 
 class procedure TCollections.CreateList_Int64(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int64>(result) := TFoldedList<Int64>.Create(elementType, IComparer<Int64>(comparer));
+  IList<Int64>(result) := TList<Int64>.Create(elementType, IComparer<Int64>(comparer));
 end;
 
 class procedure TCollections.CreateList_Method(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<TMethodPointer>(Result) := TFoldedList<TMethodPointer>.Create(elementType, IComparer<TMethodPointer>(comparer));
+  IList<TMethodPointer>(Result) := TList<TMethodPointer>.Create(elementType, IComparer<TMethodPointer>(comparer));
 end;
 
 class procedure TCollections.CreateList_Interface(var result; elementType: Pointer);
 begin
-  IList<IInterface>(Result) := TFoldedList<IInterface>.Create(elementType, nil);
+  IList<IInterface>(Result) := TList<IInterface>.Create(elementType, nil);
 end;
 
 class procedure TCollections.CreateList_Interface(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<IInterface>(Result) := TFoldedList<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
+  IList<IInterface>(Result) := TList<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
 end;
 
 class procedure TCollections.CreateList_Object(var result; elementType: Pointer);
 begin
-  IList<TObject>(Result) := TFoldedList<TObject>.Create(elementType, nil, True);
+  IList<TObject>(Result) := TList<TObject>.Create(elementType, nil, True);
 end;
 
 class procedure TCollections.CreateList_Object(ownsObjects: Boolean; var result; elementType: Pointer);
 begin
-  IList<TObject>(Result) := TFoldedList<TObject>.Create(elementType, nil, ownsObjects);
+  IList<TObject>(Result) := TList<TObject>.Create(elementType, nil, ownsObjects);
 end;
 
 class procedure TCollections.CreateList_Object(comparer: Pointer; ownsObjects: Boolean; var result; elementType: Pointer);
 begin
-  IList<TObject>(Result) := TFoldedList<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
+  IList<TObject>(Result) := TList<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
 end;
 
 class procedure TCollections.CreateList_String(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<string>(Result) := TFoldedList<string>.Create(elementType, IComparer<string>(comparer));
+  IList<string>(Result) := TList<string>.Create(elementType, IComparer<string>(comparer));
 end;
 
 class procedure TCollections.CreateSortedList_Int8(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int8>(result) := TFoldedSortedList<Int8>.Create(elementType, IComparer<Int8>(comparer));
+  IList<Int8>(result) := TSortedList<Int8>.Create(elementType, IComparer<Int8>(comparer));
 end;
 
 class procedure TCollections.CreateSortedList_Int16(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int16>(result) := TFoldedSortedList<Int16>.Create(elementType, IComparer<Int16>(comparer));
+  IList<Int16>(result) := TSortedList<Int16>.Create(elementType, IComparer<Int16>(comparer));
 end;
 
 class procedure TCollections.CreateSortedList_Int32(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int32>(result) := TFoldedSortedList<Int32>.Create(elementType, IComparer<Int32>(comparer));
+  IList<Int32>(result) := TSortedList<Int32>.Create(elementType, IComparer<Int32>(comparer));
 end;
 
 class procedure TCollections.CreateSortedList_Int64(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<Int64>(result) := TFoldedSortedList<Int64>.Create(elementType, IComparer<Int64>(comparer));
+  IList<Int64>(result) := TSortedList<Int64>.Create(elementType, IComparer<Int64>(comparer));
 end;
 
 class procedure TCollections.CreateSortedList_Interface(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<IInterface>(result) := TFoldedSortedList<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
+  IList<IInterface>(result) := TSortedList<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
 end;
 
 class procedure TCollections.CreateSortedList_Object(comparer: Pointer; ownsObjects: Boolean; var result; elementType: Pointer);
 begin
-  IList<TObject>(result) := TFoldedSortedList<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
+  IList<TObject>(result) := TSortedList<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
 end;
 
 class procedure TCollections.CreateSortedList_String(comparer: Pointer; var result; elementType: Pointer);
 begin
-  IList<string>(result) := TFoldedSortedList<string>.Create(elementType, IComparer<string>(comparer));
+  IList<string>(result) := TSortedList<string>.Create(elementType, IComparer<string>(comparer));
 end;
 
 class procedure TCollections.CreateHashSet_Int8(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IOrderedSet<Int8>(result) := TFoldedHashSet<Int8>.Create(elementType, capacity, IEqualityComparer<Int8>(comparer));
+  IOrderedSet<Int8>(result) := THashSet<Int8>.Create(elementType, capacity, IEqualityComparer<Int8>(comparer));
 end;
 
 class procedure TCollections.CreateHashSet_Int16(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IOrderedSet<Int16>(result) := TFoldedHashSet<Int16>.Create(elementType, capacity, IEqualityComparer<Int16>(comparer));
+  IOrderedSet<Int16>(result) := THashSet<Int16>.Create(elementType, capacity, IEqualityComparer<Int16>(comparer));
 end;
 
 class procedure TCollections.CreateHashSet_Int32(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IOrderedSet<Int32>(result) := TFoldedHashSet<Int32>.Create(elementType, capacity, IEqualityComparer<Int32>(comparer));
+  IOrderedSet<Int32>(result) := THashSet<Int32>.Create(elementType, capacity, IEqualityComparer<Int32>(comparer));
 end;
 
 class procedure TCollections.CreateHashSet_Int64(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IOrderedSet<Int64>(result) := TFoldedHashSet<Int64>.Create(elementType, capacity, IEqualityComparer<Int64>(comparer));
+  IOrderedSet<Int64>(result) := THashSet<Int64>.Create(elementType, capacity, IEqualityComparer<Int64>(comparer));
 end;
 
 class procedure TCollections.CreateHashSet_Interface(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IOrderedSet<IInterface>(result) := TFoldedHashSet<IInterface>.Create(elementType, capacity, IEqualityComparer<IInterface>(comparer));
+  IOrderedSet<IInterface>(result) := THashSet<IInterface>.Create(elementType, capacity, IEqualityComparer<IInterface>(comparer));
 end;
 
 class procedure TCollections.CreateHashSet_Object(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IOrderedSet<TObject>(result) := TFoldedHashSet<TObject>.Create(elementType, capacity, IEqualityComparer<TObject>(comparer));
+  IOrderedSet<TObject>(result) := THashSet<TObject>.Create(elementType, capacity, IEqualityComparer<TObject>(comparer));
 end;
 
 class procedure TCollections.CreateHashSet_String(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IOrderedSet<string>(result) := TFoldedHashSet<string>.Create(elementType, capacity, IEqualityComparer<string>(comparer));
+  IOrderedSet<string>(result) := THashSet<string>.Create(elementType, capacity, IEqualityComparer<string>(comparer));
 end;
 
 class procedure TCollections.CreateQueue_Object(capacity: Integer; comparer: Pointer; ownsObjects: Boolean; var result; elementType: Pointer);
 begin
-  IQueue<TObject>(result) := TFoldedQueue<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
+  IQueue<TObject>(result) := TQueue<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
   IQueue<TObject>(result).Capacity := capacity;
 end;
 
 class procedure TCollections.CreateQueue_Interface(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IQueue<IInterface>(result) := TFoldedQueue<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
+  IQueue<IInterface>(result) := TQueue<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
   IQueue<IInterface>(result).Capacity := capacity;
 end;
 
 class procedure TCollections.CreateStack_Interface(capacity: Integer; comparer: Pointer; var result; elementType: Pointer);
 begin
-  IStack<IInterface>(result) := TFoldedStack<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
+  IStack<IInterface>(result) := TStack<IInterface>.Create(elementType, IComparer<IInterface>(comparer));
   IStack<IInterface>(result).Capacity := capacity;
 end;
 
 class procedure TCollections.CreateStack_Object(capacity: Integer; comparer: Pointer; ownsObjects: Boolean; var result; elementType: Pointer);
 begin
-  IStack<TObject>(result) := TFoldedStack<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
+  IStack<TObject>(result) := TStack<TObject>.Create(elementType, IComparer<TObject>(comparer), ownsObjects);
   IStack<TObject>(result).Capacity := capacity;
 end;
 
@@ -8932,7 +9286,7 @@ begin
         8: CreateList_Int64(nil, Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TList<T>.Create;
+    Result := TList<T>.Create(TypeInfo(T), nil);
   end;
 end;
 
@@ -8952,7 +9306,7 @@ begin
         8: CreateList_Int64(Pointer(comparer), Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TList<T>.Create(comparer);
+    Result := TList<T>.Create(TypeInfo(T), comparer);
   end;
 end;
 
@@ -8973,7 +9327,7 @@ begin
         8: CreateList_Int64(PPointer(@comparer)^, Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TList<T>.Create(IComparer<T>(PPointer(@comparer)^));
+    Result := TList<T>.Create(TypeInfo(T), IComparer<T>(PPointer(@comparer)^));
   end;
 end;
 
@@ -9141,109 +9495,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Object_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Object_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Object_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Object_Method(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Object_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Object_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Object_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Object_Method(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Object_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Object_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Object_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Object_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Object_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Object_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Object_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Object_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Interface_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Interface_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Interface_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Interface_Method(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Interface_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Interface_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Interface_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Interface_Method(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Interface_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Interface_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Interface_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Interface_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Interface_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Interface_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Interface_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Interface_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_String_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_String_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_String_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_String_Method(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_String_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_String_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_String_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_String_Method(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_String_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_String_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_String_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_String_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_String_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_String_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_String_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_String_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int8_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int8_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int8_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int8_Method(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int8_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int8_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int8_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int8_Method(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int8_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int8_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int8_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int8_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int8_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int8_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int8_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int8_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int16_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int16_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int16_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int16_Method(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int16_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int16_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int16_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int16_Method(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int16_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int16_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int16_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int16_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int16_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int16_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int16_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int16_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int32_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int32_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int32_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int32_Method(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int32_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int32_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int32_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int32_Method(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int32_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int32_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int32_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int32_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int32_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int32_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int32_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int32_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int64_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int64_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int64_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int64_Method(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int64_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int64_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int64_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int64_Method(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int64_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int64_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int64_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int64_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int64_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int64_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int64_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int64_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TDictionary<TKey, TValue>.Create(0, nil, nil, ownerships);
+  Result := TDictionary<TKey, TValue>.Create(nil, 0, nil, nil, ownerships);
 end;
 
 class function TCollections.CreateDictionary<TKey, TValue>(capacity: Integer;
@@ -9254,109 +9608,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Object_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Object_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Object_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Object_Method(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Object_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Object_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Object_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Object_Method(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Object_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Object_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Object_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Object_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Object_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Object_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Object_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Object_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Interface_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Interface_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Interface_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Interface_Method(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Interface_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Interface_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Interface_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Interface_Method(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Interface_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Interface_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Interface_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Interface_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Interface_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Interface_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Interface_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Interface_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_String_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_String_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_String_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_String_Method(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_String_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_String_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_String_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_String_Method(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_String_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_String_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_String_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_String_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_String_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_String_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_String_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_String_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int8_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int8_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int8_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int8_Method(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int8_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int8_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int8_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int8_Method(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int8_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int8_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int8_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int8_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int8_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int8_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int8_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int8_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int16_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int16_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int16_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int16_Method(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int16_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int16_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int16_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int16_Method(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int16_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int16_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int16_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int16_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int16_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int16_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int16_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int16_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int32_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int32_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int32_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int32_Method(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int32_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int32_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int32_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int32_Method(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int32_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int32_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int32_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int32_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int32_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int32_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int32_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int32_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int64_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int64_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int64_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int64_Method(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int64_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int64_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int64_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int64_Method(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int64_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int64_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int64_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int64_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int64_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int64_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int64_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int64_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TDictionary<TKey, TValue>.Create(capacity, nil, nil, ownerships);
+  Result := TDictionary<TKey, TValue>.Create(nil, capacity, nil, nil, ownerships);
 end;
 
 class function TCollections.CreateDictionary<TKey, TValue>(
@@ -9368,109 +9722,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Object_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Object_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Object_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Object_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Object_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Object_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Object_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Object_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Object_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Object_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Object_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Object_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Object_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Object_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Object_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Object_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Interface_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Interface_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Interface_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Interface_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Interface_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Interface_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Interface_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Interface_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Interface_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Interface_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Interface_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Interface_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Interface_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Interface_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Interface_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Interface_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_String_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_String_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_String_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_String_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_String_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_String_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_String_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_String_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_String_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_String_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_String_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_String_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_String_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_String_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_String_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_String_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int8_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int8_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int8_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int8_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int8_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int8_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int8_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int8_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int8_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int8_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int8_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int8_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int8_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int8_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int16_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int16_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int16_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int16_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int16_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int16_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int16_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int16_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int16_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int16_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int16_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int16_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int16_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int16_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int16_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int16_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int32_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int32_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int32_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int32_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int32_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int32_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int32_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int32_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int32_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int32_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int32_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int32_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int32_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int32_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int32_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int32_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int64_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int64_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int64_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int64_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int64_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int64_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int64_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int64_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int64_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int64_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int64_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int64_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int64_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int64_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int64_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int64_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TDictionary<TKey, TValue>.Create(0, keyComparer, nil, ownerships);
+  Result := TDictionary<TKey, TValue>.Create(nil, 0, keyComparer, nil, ownerships);
 end;
 
 class function TCollections.CreateDictionary<TKey, TValue>(
@@ -9483,109 +9837,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Object_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Object_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Object_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Object_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Object_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Object_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Object_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Object_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Object_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Object_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Object_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Object_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Object_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Object_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Object_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Object_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Interface_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Interface_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Interface_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Interface_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Interface_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Interface_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Interface_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Interface_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Interface_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Interface_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Interface_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Interface_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Interface_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Interface_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Interface_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Interface_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_String_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_String_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_String_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_String_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_String_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_String_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_String_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_String_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_String_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_String_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_String_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_String_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_String_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_String_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_String_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_String_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int8_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int8_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int8_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int8_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int8_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int8_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int8_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int8_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int8_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int8_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int8_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int8_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int8_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int8_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int16_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int16_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int16_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int16_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int16_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int16_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int16_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int16_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int16_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int16_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int16_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int16_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int16_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int16_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int16_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int16_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int32_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int32_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int32_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int32_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int32_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int32_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int32_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int32_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int32_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int32_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int32_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int32_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int32_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int32_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int32_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int32_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int64_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int64_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int64_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int64_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int64_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int64_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int64_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int64_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int64_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int64_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int64_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int64_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int64_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int64_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int64_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int64_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TDictionary<TKey, TValue>.Create(0, keyComparer, valueComparer, ownerships);
+  Result := TDictionary<TKey, TValue>.Create(nil, 0, keyComparer, valueComparer, ownerships);
 end;
 
 class function TCollections.CreateDictionary<TKey, TValue>(capacity: Integer;
@@ -9597,109 +9951,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Object_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Object_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Object_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Object_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Object_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Object_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Object_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Object_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Object_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Object_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Object_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Object_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Object_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Object_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Object_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Object_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Interface_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Interface_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Interface_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Interface_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Interface_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Interface_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Interface_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Interface_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Interface_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Interface_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Interface_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Interface_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Interface_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Interface_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Interface_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Interface_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_String_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_String_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_String_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_String_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_String_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_String_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_String_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_String_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_String_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_String_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_String_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_String_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_String_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_String_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_String_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_String_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int8_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int8_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int8_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int8_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int8_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int8_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int8_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int8_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int8_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int8_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int8_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int8_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int8_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int8_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int8_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int8_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int16_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int16_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int16_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int16_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int16_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int16_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int16_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int16_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int16_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int16_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int16_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int16_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int16_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int16_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int16_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int16_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int32_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int32_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int32_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int32_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int32_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int32_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int32_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int32_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int32_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int32_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int32_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int32_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int32_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int32_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int32_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int32_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int64_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int64_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int64_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int64_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int64_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int64_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int64_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int64_Method(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int64_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int64_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int64_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int64_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int64_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int64_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int64_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int64_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TDictionary<TKey, TValue>.Create(capacity, keyComparer, nil, ownerships);
+  Result := TDictionary<TKey, TValue>.Create(nil, capacity, keyComparer, nil, ownerships);
 end;
 
 class function TCollections.CreateDictionary<TKey, TValue>(capacity: Integer;
@@ -9712,109 +10066,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Object_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Object_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Object_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Object_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Object_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Object_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Object_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Object_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Object_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Object_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Object_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Object_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Object_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Object_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Object_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Object_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_Interface_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_Interface_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_Interface_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_Interface_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_Interface_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_Interface_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_Interface_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_Interface_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_Interface_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_Interface_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_Interface_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_Interface_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_Interface_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_Interface_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_Interface_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_Interface_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateDictionary_String_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateDictionary_String_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateDictionary_String_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkMethod: CreateDictionary_String_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateDictionary_String_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateDictionary_String_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateDictionary_String_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkMethod: CreateDictionary_String_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateDictionary_String_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateDictionary_String_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateDictionary_String_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateDictionary_String_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateDictionary_String_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateDictionary_String_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateDictionary_String_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateDictionary_String_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int8_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int8_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int8_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int8_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int8_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int8_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int8_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int8_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int8_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int8_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int8_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int8_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int8_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int8_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int8_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int8_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int16_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int16_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int16_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int16_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int16_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int16_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int16_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int16_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int16_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int16_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int16_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int16_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int16_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int16_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int16_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int16_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int32_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int32_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int32_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int32_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int32_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int32_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int32_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int32_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int32_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int32_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int32_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int32_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int32_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int32_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int32_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int32_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateDictionary_Int64_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateDictionary_Int64_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int64_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int64_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateDictionary_Int64_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateDictionary_Int64_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int64_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int64_Method(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateDictionary_Int64_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateDictionary_Int64_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateDictionary_Int64_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateDictionary_Int64_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateDictionary_Int64_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateDictionary_Int64_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateDictionary_Int64_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateDictionary_Int64_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TDictionary<TKey, TValue>.Create(capacity, keyComparer, valueComparer, ownerships);
+  Result := TDictionary<TKey, TValue>.Create(nil, capacity, keyComparer, valueComparer, ownerships);
 end;
 
 class function TCollections.CreateMultiMap<TKey, TValue>(
@@ -9825,109 +10179,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateListMultiMap_Object_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateListMultiMap_Object_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateListMultiMap_Object_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateListMultiMap_Object_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_Object_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_Object_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateListMultiMap_Object_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateListMultiMap_Object_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateListMultiMap_Object_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateListMultiMap_Object_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateListMultiMap_Object_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_Object_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_Object_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_Object_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateListMultiMap_Interface_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateListMultiMap_Interface_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateListMultiMap_Interface_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateListMultiMap_Interface_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_Interface_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_Interface_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateListMultiMap_Interface_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateListMultiMap_Interface_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateListMultiMap_Interface_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateListMultiMap_Interface_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateListMultiMap_Interface_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_Interface_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_Interface_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_Interface_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateListMultiMap_String_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateListMultiMap_String_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateListMultiMap_String_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateListMultiMap_String_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_String_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_String_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateListMultiMap_String_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateListMultiMap_String_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateListMultiMap_String_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateListMultiMap_String_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateListMultiMap_String_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_String_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_String_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_String_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int8_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int8_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int8_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int8_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int8_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int8_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int8_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int8_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int8_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int8_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int8_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int8_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int8_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int8_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int16_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int16_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int16_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int16_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int16_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int16_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int16_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int16_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int16_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int16_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int16_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int16_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int16_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int16_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int32_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int32_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int32_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int32_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int32_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int32_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int32_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int32_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int32_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int32_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int32_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int32_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int32_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int32_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int64_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int64_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int64_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int64_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int64_Interface(nil,nil,  ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int64_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int64_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int64_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int64_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int64_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int64_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int64_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int64_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int64_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end
         end;
     end;
   end
   else
   case GetTypeKind(TValue) of
-    tkClass: IMultiMap<TKey,TObject>(Result) := TFoldedMultiMap<TKey,TObject>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), nil, nil,
+    tkClass: IMultiMap<TKey,TObject>(Result) := TMultiMap<TKey,TObject>.Create(
+      TypeInfo(TPair<TKey,TValue>), nil, nil,
       Helper<TKey,TObject>.CreateListCollection, ownerships);
-    tkInterface: IMultiMap<TKey,IInterface>(Result) := TFoldedMultiMap<TKey,IInterface>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), nil, nil,
+    tkInterface: IMultiMap<TKey,IInterface>(Result) := TMultiMap<TKey,IInterface>.Create(
+      TypeInfo(TPair<TKey,TValue>), nil, nil,
       Helper<TKey,IInterface>.CreateListCollection, ownerships);
   else{$ELSE}begin{$ENDIF}
-    Result := TMultiMap<TKey,TValue>.Create(nil, nil,
+    Result := TMultiMap<TKey,TValue>.Create(nil, nil, nil,
       Helper<TKey,TValue>.CreateListCollection, ownerships);
   end;
 end;
@@ -9941,109 +10295,226 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateListMultiMap_Object_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateListMultiMap_Object_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateListMultiMap_Object_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateListMultiMap_Object_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_Object_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_Object_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateListMultiMap_Object_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateListMultiMap_Object_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateListMultiMap_Object_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateListMultiMap_Object_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateListMultiMap_Object_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_Object_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_Object_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_Object_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateListMultiMap_Interface_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateListMultiMap_Interface_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateListMultiMap_Interface_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateListMultiMap_Interface_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_Interface_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_Interface_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateListMultiMap_Interface_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateListMultiMap_Interface_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateListMultiMap_Interface_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateListMultiMap_Interface_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateListMultiMap_Interface_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_Interface_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_Interface_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_Interface_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateListMultiMap_String_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateListMultiMap_String_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateListMultiMap_String_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateListMultiMap_String_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_String_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_String_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateListMultiMap_String_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateListMultiMap_String_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateListMultiMap_String_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateListMultiMap_String_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateListMultiMap_String_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_String_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_String_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_String_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int8_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int8_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int8_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int8_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int8_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int8_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int8_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int8_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int8_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int8_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int8_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int8_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int8_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int8_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int16_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int16_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int16_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int16_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int16_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int16_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int16_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int16_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int16_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int16_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int16_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int16_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int16_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int16_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int32_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int32_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int32_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int32_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int32_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int32_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int32_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int32_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int32_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int32_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int32_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int32_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int32_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int32_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateListMultiMap_Int64_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateListMultiMap_Int64_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateListMultiMap_Int64_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateListMultiMap_Int64_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int64_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int64_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateListMultiMap_Int64_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateListMultiMap_Int64_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateListMultiMap_Int64_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateListMultiMap_Int64_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateListMultiMap_Int64_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int64_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int64_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int64_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
   case GetTypeKind(TValue) of
-    tkClass: IMultiMap<TKey,TObject>(Result) := TFoldedMultiMap<TKey,TObject>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), keyComparer, nil,
+    tkClass: IMultiMap<TKey,TObject>(Result) := TMultiMap<TKey,TObject>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, nil,
       Helper<TKey,TObject>.CreateListCollection, ownerships);
-    tkInterface: IMultiMap<TKey,IInterface>(Result) := TFoldedMultiMap<TKey,IInterface>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), keyComparer, nil,
+    tkInterface: IMultiMap<TKey,IInterface>(Result) := TMultiMap<TKey,IInterface>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, nil,
       Helper<TKey,IInterface>.CreateListCollection, ownerships);
   else{$ELSE}begin{$ENDIF}
-    Result := TMultiMap<TKey,TValue>.Create(keyComparer, nil,
+    Result := TMultiMap<TKey,TValue>.Create(nil, keyComparer, nil,
+      Helper<TKey,TValue>.CreateListCollection, ownerships);
+  end;
+end;
+
+class function TCollections.CreateMultiMap<TKey, TValue>(
+  const keyComparer: IEqualityComparer<TKey>;
+  const valueComparer: IComparer<TValue>;
+  ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
+begin
+{$IFDEF DELPHIXE7_UP}
+  if (GetTypeKind(TKey) in FoldedTypeKinds) and (GetTypeKind(TValue) in FoldedTypeKinds) then
+  case GetTypeKind(TKey) of
+    tkClass:
+      case GetTypeKind(TValue) of
+        tkClass: CreateListMultiMap_Object_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_Object_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_Object_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+      else
+        case SizeOf(TValue) of
+          1: CreateListMultiMap_Object_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_Object_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_Object_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_Object_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        end;
+      end;
+    tkInterface:
+      case GetTypeKind(TValue) of
+        tkClass: CreateListMultiMap_Interface_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_Interface_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_Interface_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+      else
+        case SizeOf(TValue) of
+          1: CreateListMultiMap_Interface_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_Interface_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_Interface_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_Interface_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        end;
+      end;
+    tkUString:
+      case GetTypeKind(TValue) of
+        tkClass: CreateListMultiMap_String_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateListMultiMap_String_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateListMultiMap_String_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+      else
+        case SizeOf(TValue) of
+          1: CreateListMultiMap_String_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateListMultiMap_String_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateListMultiMap_String_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateListMultiMap_String_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        end;
+      end;
+  else
+    case SizeOf(TKey) of
+      1:
+        case GetTypeKind(TValue) of
+          tkClass: CreateListMultiMap_Int8_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int8_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int8_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateListMultiMap_Int8_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int8_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int8_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int8_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+      2:
+        case GetTypeKind(TValue) of
+          tkClass: CreateListMultiMap_Int16_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int16_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int16_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateListMultiMap_Int16_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int16_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int16_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int16_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+      4:
+        case GetTypeKind(TValue) of
+          tkClass: CreateListMultiMap_Int32_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int32_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int32_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateListMultiMap_Int32_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int32_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int32_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int32_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+      8:
+        case GetTypeKind(TValue) of
+          tkClass: CreateListMultiMap_Int64_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateListMultiMap_Int64_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateListMultiMap_Int64_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateListMultiMap_Int64_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateListMultiMap_Int64_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateListMultiMap_Int64_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateListMultiMap_Int64_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+    end;
+  end
+  else
+  case GetTypeKind(TValue) of
+    tkClass: IMultiMap<TKey,TObject>(Result) := TMultiMap<TKey,TObject>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, valueComparer,
+      Helper<TKey,TObject>.CreateListCollection, ownerships);
+    tkInterface: IMultiMap<TKey,IInterface>(Result) := TMultiMap<TKey,IInterface>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, valueComparer,
+      Helper<TKey,IInterface>.CreateListCollection, ownerships);
+  else{$ELSE}begin{$ENDIF}
+    Result := TMultiMap<TKey,TValue>.Create(nil, keyComparer, valueComparer,
       Helper<TKey,TValue>.CreateListCollection, ownerships);
   end;
 end;
@@ -10051,7 +10522,7 @@ end;
 class function TCollections.CreateHashMultiMap<TKey, TValue>(
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TMultiMap<TKey, TValue>.Create(nil, nil,
+  Result := TMultiMap<TKey, TValue>.Create(nil, nil, nil,
     Helper<TKey, TValue>.CreateHashSetCollection, ownerships);
 end;
 
@@ -10059,7 +10530,7 @@ class function TCollections.CreateHashMultiMap<TKey, TValue>(
   const keyComparer: IEqualityComparer<TKey>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TMultiMap<TKey, TValue>.Create(keyComparer, nil,
+  Result := TMultiMap<TKey, TValue>.Create(nil, keyComparer, nil,
     Helper<TKey, TValue>.CreateHashSetCollection, ownerships);
 end;
 
@@ -10068,14 +10539,14 @@ class function TCollections.CreateHashMultiMap<TKey, TValue>(
   const valueComparer: IEqualityComparer<TValue>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TMultiMap<TKey, TValue>.Create(keyComparer, valueComparer,
+  Result := TMultiMap<TKey, TValue>.Create(nil, keyComparer, valueComparer,
     Helper<TKey, TValue>.CreateHashSetCollection, ownerships);
 end;
 
 class function TCollections.CreateTreeMultiMap<TKey, TValue>(
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TMultiMap<TKey, TValue>.Create(nil, nil,
+  Result := TMultiMap<TKey, TValue>.Create(nil, nil, nil,
     Helper<TKey, TValue>.CreateTreeSetCollection, ownerships);
 end;
 
@@ -10083,7 +10554,7 @@ class function TCollections.CreateTreeMultiMap<TKey, TValue>(
   const keyComparer: IEqualityComparer<TKey>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TMultiMap<TKey, TValue>.Create(keyComparer, nil,
+  Result := TMultiMap<TKey, TValue>.Create(nil, keyComparer, nil,
     Helper<TKey, TValue>.CreateTreeSetCollection, ownerships);
 end;
 
@@ -10092,7 +10563,7 @@ class function TCollections.CreateTreeMultiMap<TKey, TValue>(
   const valueComparer: IComparer<TValue>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TMultiMap<TKey, TValue>.Create(keyComparer, valueComparer,
+  Result := TMultiMap<TKey, TValue>.Create(nil, keyComparer, valueComparer,
     Helper<TKey, TValue>.CreateTreeSetCollection, ownerships);
 end;
 
@@ -10141,102 +10612,102 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Object_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Object_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Object_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Object_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Object_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Object_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Object_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Object_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Object_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Object_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Object_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Object_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Object_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Object_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Interface_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Interface_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Interface_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Interface_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Interface_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Interface_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Interface_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Interface_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Interface_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Interface_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Interface_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Interface_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Interface_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Interface_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_String_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_String_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_String_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_String_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_String_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_String_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_String_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_String_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_String_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_String_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_String_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_String_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_String_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_String_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int8_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int8_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int8_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int8_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int8_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int8_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int8_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int8_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int8_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int8_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int8_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int8_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int8_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int8_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int16_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int16_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int16_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int16_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int16_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int16_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int16_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int16_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int16_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int16_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int16_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int16_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int16_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int16_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int32_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int32_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int32_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int32_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int32_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int32_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int32_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int32_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int32_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int32_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int32_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int32_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int32_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int32_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int64_Object(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int64_Interface(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int64_String(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int64_Object(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int64_Interface(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int64_String(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int64_Int8(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int64_Int16(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int64_Int32(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int64_Int64(0, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int64_Int8(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int64_Int16(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int64_Int32(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int64_Int64(0, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TBidiDictionary<TKey, TValue>.Create(0, nil, nil, ownerships);
+  Result := TBidiDictionary<TKey, TValue>.Create(nil, 0, nil, nil, ownerships);
 end;
 
 class function TCollections.CreateBidiDictionary<TKey, TValue>(capacity: Integer;
@@ -10247,102 +10718,102 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Object_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Object_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Object_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Object_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Object_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Object_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Object_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Object_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Object_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Object_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Object_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Object_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Object_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Object_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Interface_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Interface_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Interface_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Interface_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Interface_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Interface_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Interface_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Interface_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Interface_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Interface_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Interface_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Interface_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Interface_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Interface_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_String_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_String_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_String_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_String_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_String_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_String_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_String_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_String_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_String_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_String_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_String_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_String_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_String_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_String_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int8_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int8_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int8_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int8_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int8_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int8_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int8_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int8_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int8_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int8_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int8_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int8_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int8_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int8_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int16_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int16_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int16_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int16_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int16_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int16_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int16_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int16_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int16_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int16_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int16_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int16_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int16_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int16_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int32_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int32_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int32_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int32_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int32_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int32_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int32_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int32_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int32_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int32_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int32_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int32_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int32_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int32_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int64_Object(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int64_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int64_String(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int64_Object(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int64_Interface(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int64_String(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int64_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int64_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int64_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int64_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int64_Int8(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int64_Int16(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int64_Int32(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int64_Int64(capacity, nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TBidiDictionary<TKey, TValue>.Create(capacity, nil, nil, ownerships);
+  Result := TBidiDictionary<TKey, TValue>.Create(nil, capacity, nil, nil, ownerships);
 end;
 
 class function TCollections.CreateBidiDictionary<TKey, TValue>(
@@ -10354,102 +10825,102 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Object_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Object_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Object_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Object_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Object_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Object_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Object_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Object_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Object_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Object_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Object_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Object_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Object_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Object_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Interface_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Interface_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Interface_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Interface_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Interface_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Interface_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Interface_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Interface_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Interface_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Interface_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Interface_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Interface_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Interface_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Interface_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_String_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_String_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_String_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_String_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_String_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_String_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_String_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_String_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_String_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_String_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_String_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_String_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_String_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_String_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int8_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int8_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int8_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int8_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int8_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int8_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int8_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int8_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int8_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int8_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int8_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int8_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int16_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int16_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int16_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int16_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int16_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int16_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int16_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int16_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int16_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int16_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int16_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int16_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int16_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int16_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int32_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int32_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int32_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int32_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int32_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int32_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int32_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int32_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int32_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int32_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int32_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int32_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int32_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int32_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int64_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int64_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int64_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int64_Object(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int64_Interface(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int64_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int64_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int64_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int64_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int64_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int64_Int8(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int64_Int16(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int64_Int32(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int64_Int64(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TBidiDictionary<TKey, TValue>.Create(0, keyComparer, nil, ownerships);
+  Result := TBidiDictionary<TKey, TValue>.Create(nil, 0, keyComparer, nil, ownerships);
 end;
 
 class function TCollections.CreateBidiDictionary<TKey, TValue>(
@@ -10462,102 +10933,102 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Object_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Object_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Object_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Object_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Object_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Object_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Object_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Object_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Object_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Object_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Object_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Object_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Object_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Object_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Interface_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Interface_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Interface_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Interface_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Interface_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Interface_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Interface_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Interface_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Interface_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Interface_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Interface_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Interface_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Interface_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Interface_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_String_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_String_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_String_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_String_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_String_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_String_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_String_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_String_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_String_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_String_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_String_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_String_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_String_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_String_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int8_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int8_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int8_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int8_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int8_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int8_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int8_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int8_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int8_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int8_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int8_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int8_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int16_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int16_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int16_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int16_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int16_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int16_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int16_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int16_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int16_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int16_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int16_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int16_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int16_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int16_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int32_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int32_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int32_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int32_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int32_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int32_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int32_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int32_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int32_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int32_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int32_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int32_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int32_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int32_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int64_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int64_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int64_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int64_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int64_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int64_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int64_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int64_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int64_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int64_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int64_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int64_Int16(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int64_Int32(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int64_Int64(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TBidiDictionary<TKey, TValue>.Create(0, keyComparer, valueComparer, ownerships);
+  Result := TBidiDictionary<TKey, TValue>.Create(nil, 0, keyComparer, valueComparer, ownerships);
 end;
 
 class function TCollections.CreateBidiDictionary<TKey, TValue>(capacity: Integer;
@@ -10569,102 +11040,102 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Object_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Object_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Object_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Object_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Object_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Object_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Object_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Object_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Object_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Object_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Object_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Object_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Object_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Object_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Interface_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Interface_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Interface_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Interface_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Interface_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Interface_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Interface_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Interface_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Interface_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Interface_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Interface_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Interface_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Interface_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Interface_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_String_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_String_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_String_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_String_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_String_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_String_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_String_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_String_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_String_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_String_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_String_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_String_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_String_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_String_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int8_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int8_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int8_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int8_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int8_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int8_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int8_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int8_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int8_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int8_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int8_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int8_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int8_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int8_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int16_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int16_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int16_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int16_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int16_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int16_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int16_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int16_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int16_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int16_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int16_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int16_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int16_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int16_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int32_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int32_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int32_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int32_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int32_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int32_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int32_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int32_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int32_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int32_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int32_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int32_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int32_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int32_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int64_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int64_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int64_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int64_Object(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int64_Interface(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int64_String(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int64_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int64_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int64_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int64_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int64_Int8(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int64_Int16(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int64_Int32(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int64_Int64(capacity, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TBidiDictionary<TKey, TValue>.Create(capacity, keyComparer, nil, ownerships);
+  Result := TBidiDictionary<TKey, TValue>.Create(nil, capacity, keyComparer, nil, ownerships);
 end;
 
 class function TCollections.CreateBidiDictionary<TKey, TValue>(capacity: Integer;
@@ -10677,102 +11148,102 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Object_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Object_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Object_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Object_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Object_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Object_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Object_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Object_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Object_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Object_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Object_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Object_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Object_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Object_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_Interface_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_Interface_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_Interface_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_Interface_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_Interface_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_Interface_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_Interface_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_Interface_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_Interface_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_Interface_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_Interface_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_Interface_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_Interface_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_Interface_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateBidiDictionary_String_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateBidiDictionary_String_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateBidiDictionary_String_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateBidiDictionary_String_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateBidiDictionary_String_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateBidiDictionary_String_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateBidiDictionary_String_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateBidiDictionary_String_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateBidiDictionary_String_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateBidiDictionary_String_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateBidiDictionary_String_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateBidiDictionary_String_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateBidiDictionary_String_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateBidiDictionary_String_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int8_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int8_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int8_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int8_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int8_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int8_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int8_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int8_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int8_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int8_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int8_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int8_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int8_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int8_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int16_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int16_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int16_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int16_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int16_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int16_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int16_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int16_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int16_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int16_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int16_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int16_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int16_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int16_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int32_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int32_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int32_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int32_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int32_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int32_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int32_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int32_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int32_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int32_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int32_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int32_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int32_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int32_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateBidiDictionary_Int64_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateBidiDictionary_Int64_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int64_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateBidiDictionary_Int64_Object(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateBidiDictionary_Int64_Interface(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int64_String(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateBidiDictionary_Int64_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateBidiDictionary_Int64_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateBidiDictionary_Int64_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateBidiDictionary_Int64_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateBidiDictionary_Int64_Int8(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateBidiDictionary_Int64_Int16(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateBidiDictionary_Int64_Int32(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateBidiDictionary_Int64_Int64(capacity, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
 {$ENDIF}
-  Result := TBidiDictionary<TKey, TValue>.Create(capacity, keyComparer, valueComparer, ownerships);
+  Result := TBidiDictionary<TKey, TValue>.Create(nil, capacity, keyComparer, valueComparer, ownerships);
 end;
 
 class function TCollections.CreateStack<T>: IStack<T>;
@@ -10782,7 +11253,7 @@ begin
     tkClass: CreateStack_Object(0, nil, False, Result, TypeInfo(T));
     tkInterface: CreateStack_Interface(0, nil, Result, TypeInfo(T));
   else{$ELSE}begin{$ENDIF}
-    Result := TStack<T>.Create;
+    Result := TStack<T>.Create(TypeInfo(T), nil);
   end;
 end;
 
@@ -10792,14 +11263,23 @@ begin
 end;
 
 class function TCollections.CreateStack<T>(const values: array of T): IStack<T>;
-begin
-  Result := TStack<T>.Create(values);
+var
+  i: NativeInt;
+begin // TODO: optimization
+  Result := TStack<T>.Create(TypeInfo(T), nil);
+  for i := 0 to High(values) do
+    Result.Push(values[i]);
 end;
 
 class function TCollections.CreateStack<T>(
   const values: IEnumerable<T>): IStack<T>;
-begin
-  Result := TStack<T>.Create(values);
+var
+  enumerator: IEnumerator<T>;
+begin // TODO: optimization
+  Result := TStack<T>.Create(TypeInfo(T), nil);
+  enumerator := values.GetEnumerator;
+  while enumerator.MoveNext do
+    Result.Push(enumerator.Current);
 end;
 
 class function TCollections.CreateBoundedStack<T>(size: Integer): IStack<T>;
@@ -10819,7 +11299,7 @@ begin
     tkClass: CreateQueue_Object(0, nil, False, Result, TypeInfo(T));
     tkInterface: CreateQueue_Interface(0, nil, Result, TypeInfo(T));
   else{$ELSE}begin{$ENDIF}
-    Result := TQueue<T>.Create;
+    Result := TQueue<T>.Create(TypeInfo(T), nil);
   end;
 end;
 
@@ -10829,13 +11309,34 @@ begin
 end;
 
 class function TCollections.CreateQueue<T>(const values: array of T): IQueue<T>;
-begin
-  Result := TQueue<T>.Create(values);
+var
+  i: NativeInt;
+begin // TODO: optimization
+{$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkClass: CreateQueue_Object(0, nil, False, Result, TypeInfo(T));
+    tkInterface: CreateQueue_Interface(0, nil, Result, TypeInfo(T));
+  else{$ELSE}begin{$ENDIF}
+    Result := TQueue<T>.Create(TypeInfo(T), nil);
+  end;
+  for i := 0 to High(values) do
+    Result.Enqueue(values[i]);
 end;
 
 class function TCollections.CreateQueue<T>(const values: IEnumerable<T>): IQueue<T>;
-begin
-  Result := TQueue<T>.Create(values);
+var
+  enumerator: IEnumerator<T>;
+begin // TODO: optimization
+{$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkClass: CreateQueue_Object(0, nil, False, Result, TypeInfo(T));
+    tkInterface: CreateQueue_Interface(0, nil, Result, TypeInfo(T));
+  else{$ELSE}begin{$ENDIF}
+    Result := TQueue<T>.Create(TypeInfo(T), nil);
+  end;
+  enumerator := values.GetEnumerator;
+  while enumerator.MoveNext do
+    Result.Enqueue(enumerator.Current);
 end;
 
 class function TCollections.CreateBoundedQueue<T>(size: Integer): IQueue<T>;
@@ -10917,7 +11418,7 @@ begin
         8: CreateHashSet_Int64(0, nil, Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := THashSet<T>.Create(0, nil);
+    Result := THashSet<T>.Create(TypeInfo(T), 0, nil);
   end;
 end;
 
@@ -10936,7 +11437,7 @@ begin
         8: CreateHashSet_Int64(capacity, nil, Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := THashSet<T>.Create(capacity, nil);
+    Result := THashSet<T>.Create(TypeInfo(T), capacity, nil);
   end;
 end;
 
@@ -10956,7 +11457,7 @@ begin
         8: CreateHashSet_Int64(0, Pointer(comparer), Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := THashSet<T>.Create(0, comparer);
+    Result := THashSet<T>.Create(TypeInfo(T), 0, comparer);
   end;
 end;
 
@@ -10976,7 +11477,7 @@ begin
         8: CreateHashSet_Int64(capacity, Pointer(comparer), Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := THashSet<T>.Create(capacity, comparer);
+    Result := THashSet<T>.Create(TypeInfo(T), capacity, comparer);
   end;
 end;
 
@@ -11021,7 +11522,7 @@ begin
         8: CreateSortedList_Int64(nil, Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TSortedList<T>.Create;
+    Result := TSortedList<T>.Create(TypeInfo(T), nil);
   end;
 end;
 
@@ -11041,7 +11542,7 @@ begin
         8: CreateSortedList_Int64(Pointer(comparer), Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TSortedList<T>.Create(comparer);
+    Result := TSortedList<T>.Create(TypeInfo(T), comparer);
   end;
 end;
 
@@ -11061,7 +11562,7 @@ begin
         8: CreateSortedList_Int64(PPointer(@comparer)^, Result, TypeInfo(T));
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TSortedList<T>.Create(IComparer<T>(PPointer(@comparer)^));
+    Result := TSortedList<T>.Create(TypeInfo(T), IComparer<T>(PPointer(@comparer)^));
   end;
 end;
 
@@ -11162,38 +11663,38 @@ end;
 
 class function TCollections.CreateSortedSet<T>: ISet<T>;
 begin
-  Result := TSortedSet<T>.Create(nil);
+  Result := TSortedSet<T>.Create(TypeInfo(T), nil);
 end;
 
 class function TCollections.CreateSortedSet<T>(
   const comparer: IComparer<T>): ISet<T>;
 begin
-  Result := TSortedSet<T>.Create(comparer);
+  Result := TSortedSet<T>.Create(TypeInfo(T), comparer);
 end;
 
 class function TCollections.CreateSortedSet<T>(const values: array of T): ISet<T>;
 begin
-  Result := TSortedSet<T>.Create(nil);
+  Result := TSortedSet<T>.Create(TypeInfo(T), nil);
   Result.AddRange(values);
 end;
 
 class function TCollections.CreateSortedSet<T>(const values: IEnumerable<T>): ISet<T>;
 begin
-  Result := TSortedSet<T>.Create(nil);
+  Result := TSortedSet<T>.Create(TypeInfo(T), nil);
   Result.AddRange(values);
 end;
 
 class function TCollections.CreateSortedSet<T>(const values: array of T;
   const comparer: IComparer<T>): ISet<T>;
 begin
-  Result := TSortedSet<T>.Create(comparer);
+  Result := TSortedSet<T>.Create(TypeInfo(T), comparer);
   Result.AddRange(values);
 end;
 
 class function TCollections.CreateSortedSet<T>(const values: IEnumerable<T>;
   const comparer: IComparer<T>): ISet<T>;
 begin
-  Result := TSortedSet<T>.Create(comparer);
+  Result := TSortedSet<T>.Create(TypeInfo(T), comparer);
   Result.AddRange(values);
 end;
 
@@ -11244,109 +11745,109 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateSortedListMultiMap_Object_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateSortedListMultiMap_Object_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateSortedListMultiMap_Object_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateSortedListMultiMap_Object_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_Object_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_Object_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateSortedListMultiMap_Object_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateSortedListMultiMap_Object_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateSortedListMultiMap_Object_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateSortedListMultiMap_Object_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateSortedListMultiMap_Object_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_Object_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_Object_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_Object_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateSortedListMultiMap_Interface_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateSortedListMultiMap_Interface_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateSortedListMultiMap_Interface_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateSortedListMultiMap_Interface_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_Interface_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_Interface_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateSortedListMultiMap_Interface_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateSortedListMultiMap_Interface_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateSortedListMultiMap_Interface_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateSortedListMultiMap_Interface_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateSortedListMultiMap_Interface_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_Interface_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_Interface_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_Interface_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateSortedListMultiMap_String_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateSortedListMultiMap_String_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateSortedListMultiMap_String_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateSortedListMultiMap_String_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_String_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_String_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateSortedListMultiMap_String_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateSortedListMultiMap_String_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateSortedListMultiMap_String_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateSortedListMultiMap_String_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateSortedListMultiMap_String_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_String_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_String_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_String_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int8_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int8_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int8_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int8_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int8_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int8_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int8_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int8_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int8_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int8_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int8_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int8_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int8_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int8_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int16_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int16_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int16_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int16_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int16_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int16_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int16_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int16_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int16_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int16_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int16_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int16_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int16_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int16_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int32_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int32_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int32_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int32_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int32_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int32_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int32_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int32_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int32_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int32_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int32_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int32_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int32_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int32_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int64_Object(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int64_Interface(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int64_String(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int64_Object(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int64_Interface(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int64_String(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int64_Int8(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int64_Int16(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int64_Int32(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int64_Int64(nil, ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int64_Int8(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int64_Int16(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int64_Int32(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int64_Int64(nil, nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end
         end;
     end;
   end
   else
   case GetTypeKind(TValue) of
-    tkClass: IMultiMap<TKey,TObject>(Result) := TFoldedSortedMultiMap<TKey,TObject>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), nil, nil,
+    tkClass: IMultiMap<TKey,TObject>(Result) := TSortedMultiMap<TKey,TObject>.Create(
+      TypeInfo(TPair<TKey,TValue>), nil, nil,
       Helper<TKey,TObject>.CreateListCollection, ownerships);
-    tkInterface: IMultiMap<TKey,IInterface>(Result) := TFoldedSortedMultiMap<TKey,IInterface>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), nil, nil,
+    tkInterface: IMultiMap<TKey,IInterface>(Result) := TSortedMultiMap<TKey,IInterface>.Create(
+      TypeInfo(TPair<TKey,TValue>), nil, nil,
       Helper<TKey,IInterface>.CreateListCollection, ownerships);
   else{$ELSE}begin{$ENDIF}
-    Result := TSortedMultiMap<TKey, TValue>.Create(nil, nil,
+    Result := TSortedMultiMap<TKey, TValue>.Create(nil, nil, nil,
       Helper<TKey,TValue>.CreateListCollection, ownerships);
   end;
 end;
@@ -11360,109 +11861,225 @@ begin
   case GetTypeKind(TKey) of
     tkClass:
       case GetTypeKind(TValue) of
-        tkClass: CreateSortedListMultiMap_Object_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateSortedListMultiMap_Object_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateSortedListMultiMap_Object_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateSortedListMultiMap_Object_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_Object_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_Object_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateSortedListMultiMap_Object_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateSortedListMultiMap_Object_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateSortedListMultiMap_Object_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateSortedListMultiMap_Object_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateSortedListMultiMap_Object_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_Object_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_Object_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_Object_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkInterface:
       case GetTypeKind(TValue) of
-        tkClass: CreateSortedListMultiMap_Interface_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateSortedListMultiMap_Interface_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateSortedListMultiMap_Interface_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateSortedListMultiMap_Interface_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_Interface_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_Interface_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateSortedListMultiMap_Interface_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateSortedListMultiMap_Interface_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateSortedListMultiMap_Interface_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateSortedListMultiMap_Interface_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateSortedListMultiMap_Interface_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_Interface_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_Interface_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_Interface_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
     tkUString:
       case GetTypeKind(TValue) of
-        tkClass: CreateSortedListMultiMap_String_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkInterface: CreateSortedListMultiMap_String_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-        tkUString: CreateSortedListMultiMap_String_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+        tkClass: CreateSortedListMultiMap_String_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_String_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_String_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
       else
         case SizeOf(TValue) of
-          1: CreateSortedListMultiMap_String_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          2: CreateSortedListMultiMap_String_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          4: CreateSortedListMultiMap_String_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          8: CreateSortedListMultiMap_String_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          1: CreateSortedListMultiMap_String_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_String_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_String_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_String_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         end;
       end;
   else
     case SizeOf(TKey) of
       1:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int8_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int8_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int8_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int8_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int8_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int8_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int8_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int8_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int8_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int8_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int8_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int8_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int8_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int8_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       2:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int16_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int16_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int16_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int16_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int16_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int16_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int16_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int16_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int16_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int16_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int16_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int16_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int16_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int16_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       4:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int32_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int32_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int32_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int32_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int32_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int32_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int32_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int32_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int32_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int32_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int32_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int32_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int32_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int32_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
       8:
         case GetTypeKind(TValue) of
-          tkClass: CreateSortedListMultiMap_Int64_Object(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkInterface: CreateSortedListMultiMap_Int64_Interface(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateSortedListMultiMap_Int64_String(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+          tkClass: CreateSortedListMultiMap_Int64_Object(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int64_Interface(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int64_String(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
-            1: CreateSortedListMultiMap_Int64_Int8(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            2: CreateSortedListMultiMap_Int64_Int16(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            4: CreateSortedListMultiMap_Int64_Int32(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
-            8: CreateSortedListMultiMap_Int64_Int64(Pointer(keyComparer), ownerships, result, TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>));
+            1: CreateSortedListMultiMap_Int64_Int8(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int64_Int16(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int64_Int32(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int64_Int64(Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
           end;
         end;
     end;
   end
   else
   case GetTypeKind(TValue) of
-    tkClass: IMultiMap<TKey,TObject>(Result) := TFoldedSortedMultiMap<TKey,TObject>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), nil, nil,
+    tkClass: IMultiMap<TKey,TObject>(Result) := TSortedMultiMap<TKey,TObject>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, nil,
       Helper<TKey,TObject>.CreateListCollection, ownerships);
-    tkInterface: IMultiMap<TKey,IInterface>(Result) := TFoldedSortedMultiMap<TKey,IInterface>.Create(
-      TypeInfo(TKey), TypeInfo(TValue), TypeInfo(TPair<TKey,TValue>), nil, nil,
+    tkInterface: IMultiMap<TKey,IInterface>(Result) := TSortedMultiMap<TKey,IInterface>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, nil,
       Helper<TKey,IInterface>.CreateListCollection, ownerships);
   else{$ELSE}begin{$ENDIF}
-    Result := TSortedMultiMap<TKey, TValue>.Create(keyComparer, nil,
+    Result := TSortedMultiMap<TKey, TValue>.Create(nil, keyComparer, nil,
+      Helper<TKey, TValue>.CreateListCollection, ownerships);
+  end;
+end;
+
+class function TCollections.CreateSortedMultiMap<TKey, TValue>(
+  const keyComparer: IComparer<TKey>; const valueComparer: IComparer<TValue>;
+  ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
+begin
+{$IFDEF DELPHIXE7_UP}
+  if (GetTypeKind(TKey) in FoldedTypeKinds) and (GetTypeKind(TValue) in FoldedTypeKinds) then
+  case GetTypeKind(TKey) of
+    tkClass:
+      case GetTypeKind(TValue) of
+        tkClass: CreateSortedListMultiMap_Object_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_Object_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_Object_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+      else
+        case SizeOf(TValue) of
+          1: CreateSortedListMultiMap_Object_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_Object_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_Object_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_Object_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        end;
+      end;
+    tkInterface:
+      case GetTypeKind(TValue) of
+        tkClass: CreateSortedListMultiMap_Interface_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_Interface_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_Interface_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+      else
+        case SizeOf(TValue) of
+          1: CreateSortedListMultiMap_Interface_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_Interface_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_Interface_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_Interface_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        end;
+      end;
+    tkUString:
+      case GetTypeKind(TValue) of
+        tkClass: CreateSortedListMultiMap_String_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkInterface: CreateSortedListMultiMap_String_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        tkUString: CreateSortedListMultiMap_String_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+      else
+        case SizeOf(TValue) of
+          1: CreateSortedListMultiMap_String_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          2: CreateSortedListMultiMap_String_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          4: CreateSortedListMultiMap_String_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          8: CreateSortedListMultiMap_String_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        end;
+      end;
+  else
+    case SizeOf(TKey) of
+      1:
+        case GetTypeKind(TValue) of
+          tkClass: CreateSortedListMultiMap_Int8_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int8_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int8_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateSortedListMultiMap_Int8_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int8_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int8_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int8_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+      2:
+        case GetTypeKind(TValue) of
+          tkClass: CreateSortedListMultiMap_Int16_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int16_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int16_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateSortedListMultiMap_Int16_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int16_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int16_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int16_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+      4:
+        case GetTypeKind(TValue) of
+          tkClass: CreateSortedListMultiMap_Int32_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int32_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int32_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateSortedListMultiMap_Int32_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int32_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int32_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int32_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+      8:
+        case GetTypeKind(TValue) of
+          tkClass: CreateSortedListMultiMap_Int64_Object(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkInterface: CreateSortedListMultiMap_Int64_Interface(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateSortedListMultiMap_Int64_String(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+        else
+          case SizeOf(TValue) of
+            1: CreateSortedListMultiMap_Int64_Int8(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            2: CreateSortedListMultiMap_Int64_Int16(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            4: CreateSortedListMultiMap_Int64_Int32(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+            8: CreateSortedListMultiMap_Int64_Int64(Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          end;
+        end;
+    end;
+  end
+  else
+  case GetTypeKind(TValue) of
+    tkClass: IMultiMap<TKey,TObject>(Result) := TSortedMultiMap<TKey,TObject>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, valueComparer,
+      Helper<TKey,TObject>.CreateListCollection, ownerships);
+    tkInterface: IMultiMap<TKey,IInterface>(Result) := TSortedMultiMap<TKey,IInterface>.Create(
+      TypeInfo(TPair<TKey,TValue>), keyComparer, valueComparer,
+      Helper<TKey,IInterface>.CreateListCollection, ownerships);
+  else{$ELSE}begin{$ENDIF}
+    Result := TSortedMultiMap<TKey, TValue>.Create(nil, keyComparer, valueComparer,
       Helper<TKey, TValue>.CreateListCollection, ownerships);
   end;
 end;
@@ -11470,7 +12087,7 @@ end;
 class function TCollections.CreateSortedHashMultiMap<TKey, TValue>(
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TSortedMultiMap<TKey, TValue>.Create(nil, nil,
+  Result := TSortedMultiMap<TKey, TValue>.Create(nil, nil, nil,
     Helper<TKey, TValue>.CreateHashSetCollection, ownerships);
 end;
 
@@ -11478,7 +12095,7 @@ class function TCollections.CreateSortedHashMultiMap<TKey, TValue>(
   const keyComparer: IComparer<TKey>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TSortedMultiMap<TKey, TValue>.Create(keyComparer, nil,
+  Result := TSortedMultiMap<TKey, TValue>.Create(nil, keyComparer, nil,
     Helper<TKey, TValue>.CreateHashSetCollection, ownerships);
 end;
 
@@ -11487,14 +12104,14 @@ class function TCollections.CreateSortedHashMultiMap<TKey, TValue>(
   const valueComparer: IEqualityComparer<TValue>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TSortedMultiMap<TKey, TValue>.Create(keyComparer, valueComparer,
+  Result := TSortedMultiMap<TKey, TValue>.Create(nil, keyComparer, valueComparer,
     Helper<TKey, TValue>.CreateHashSetCollection, ownerships);
 end;
 
 class function TCollections.CreateSortedTreeMultiMap<TKey, TValue>(
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TSortedMultiMap<TKey, TValue>.Create(nil, nil,
+  Result := TSortedMultiMap<TKey, TValue>.Create(nil, nil, nil,
     Helper<TKey, TValue>.CreateTreeSetCollection, ownerships);
 end;
 
@@ -11502,7 +12119,7 @@ class function TCollections.CreateSortedTreeMultiMap<TKey, TValue>(
   const keyComparer: IComparer<TKey>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TSortedMultiMap<TKey, TValue>.Create(keyComparer, nil,
+  Result := TSortedMultiMap<TKey, TValue>.Create(nil, keyComparer, nil,
     Helper<TKey, TValue>.CreateTreeSetCollection, ownerships);
 end;
 
@@ -11511,7 +12128,7 @@ class function TCollections.CreateSortedTreeMultiMap<TKey, TValue>(
   const valueComparer: IComparer<TValue>;
   ownerships: TDictionaryOwnerships): IMultiMap<TKey, TValue>;
 begin
-  Result := TSortedMultiMap<TKey, TValue>.Create(keyComparer, valueComparer,
+  Result := TSortedMultiMap<TKey, TValue>.Create(nil, keyComparer, valueComparer,
     Helper<TKey, TValue>.CreateTreeSetCollection, ownerships);
 end;
 
@@ -11549,52 +12166,44 @@ end;
 
 {$REGION 'TEnumerable'}
 
-class procedure TEnumerable.CreateEmpty_Int8(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_Int8: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<Int8>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<Int8>;
 end;
 
-class procedure TEnumerable.CreateEmpty_Int16(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_Int16: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<Int16>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<Int16>;
 end;
 
-class procedure TEnumerable.CreateEmpty_Int32(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_Int32: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<Int32>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<Int32>;
 end;
 
-class procedure TEnumerable.CreateEmpty_Int64(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_Int64: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<Int64>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<Int64>;
 end;
 
-class procedure TEnumerable.CreateEmpty_Interface(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_Interface: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<IInterface>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<IInterface>;
 end;
 
-class procedure TEnumerable.CreateEmpty_Method(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_Method: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<TMethodPointer>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<TMethodPointer>;
 end;
 
-class procedure TEnumerable.CreateEmpty_Object(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_Object: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<TObject>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<TObject>;
 end;
 
-class procedure TEnumerable.CreateEmpty_String(var result; elementType: Pointer);
+class function TEnumerable.ExtensionClass_String: TClass;
 begin
-  with TEnumerableExtension.Create(TEnumerableExtension<string>, nil, TExtensionKind.Empty) do
-    IInterface(result) := IInterface(@IMT);
+  Result := TEnumerableExtension<string>;
 end;
 
 class function TEnumerable.Aggregate<TSource, TAccumulate>(
@@ -11631,10 +12240,72 @@ begin
   Result := resultSelector(res);
 end;
 
+class function TEnumerable.AggregateBy<TSource, TKey, TAccumulate>(
+  const source: IEnumerable<TSource>; const keySelector: Func<TSource, TKey>;
+  const seed: TAccumulate;
+  const func: Func<TAccumulate, TSource, TAccumulate>): IEnumerable<TPair<TKey, TAccumulate>>;
+begin
+  Result := TAggregateByIterator<TSource, TKey, TAccumulate>.Create(
+    source, keySelector, function(const key: TKey): TAccumulate begin Result := seed; end, func, nil);
+end;
+
+class function TEnumerable.AggregateBy<TSource, TKey, TAccumulate>(
+  const source: IEnumerable<TSource>; const keySelector: Func<TSource, TKey>;
+  const seed: TAccumulate; const func: Func<TAccumulate, TSource, TAccumulate>;
+  const keyComparer: IEqualityComparer<TKey>): IEnumerable<TPair<TKey, TAccumulate>>;
+begin
+  Result := TAggregateByIterator<TSource, TKey, TAccumulate>.Create(
+    source, keySelector, function(const key: TKey): TAccumulate begin Result := seed; end, func, keyComparer);
+end;
+
+class function TEnumerable.AggregateBy<TSource, TKey, TAccumulate>(
+  const source: IEnumerable<TSource>; const keySelector: Func<TSource, TKey>;
+  const seedSelector: Func<TKey, TAccumulate>;
+  const func: Func<TAccumulate, TSource, TAccumulate>): IEnumerable<TPair<TKey, TAccumulate>>;
+begin
+  Result := TAggregateByIterator<TSource, TKey, TAccumulate>.Create(
+    source, keySelector, seedSelector, func, nil);
+end;
+
+class function TEnumerable.AggregateBy<TSource, TKey, TAccumulate>(
+  const source: IEnumerable<TSource>; const keySelector: Func<TSource, TKey>;
+  const seedSelector: Func<TKey, TAccumulate>;
+  const func: Func<TAccumulate, TSource, TAccumulate>;
+  const keyComparer: IEqualityComparer<TKey>): IEnumerable<TPair<TKey, TAccumulate>>;
+begin
+  Result := TAggregateByIterator<TSource, TKey, TAccumulate>.Create(
+    source, keySelector, seedSelector, func, keyComparer);
+end;
+
 class function TEnumerable.Chunk<T>(const source: IEnumerable<T>;
   size: Integer): IEnumerable<TArray<T>>;
 begin
   Result := TChunkIterator<T>.Create(source, size);
+end;
+
+class function TEnumerable.CountBy<T>(
+  const source: IEnumerable<T>): IEnumerable<TPair<T, Integer>>;
+begin
+  Result := TCountByIterator<T>.Create(source, nil);
+end;
+
+class function TEnumerable.CountBy<T>(const source: IEnumerable<T>;
+  const comparer: IEqualityComparer<T>): IEnumerable<TPair<T, Integer>>;
+begin
+  Result := TCountByIterator<T>.Create(source, comparer);
+end;
+
+class function TEnumerable.CountBy<T, TKey>(const source: IEnumerable<T>;
+  const keySelector: Func<T, TKey>): IEnumerable<TPair<TKey, Integer>>;
+begin
+  Result := TCountByIterator<T, TKey>.Create(source, keySelector, nil);
+end;
+
+class function TEnumerable.CountBy<T, TKey>(const source: IEnumerable<T>;
+  const keySelector: Func<T, TKey>;
+  const comparer: IEqualityComparer<TKey>): IEnumerable<TPair<TKey, Integer>>;
+begin
+  Result := TCountByIterator<T, TKey>.Create(source, keySelector, comparer);
 end;
 
 class function TEnumerable.DefaultIfEmpty<T>(
@@ -11678,24 +12349,29 @@ begin
 end;
 
 class function TEnumerable.Empty<T>: IReadOnlyList<T>;
+var
+  classType: TClass;
 begin
 {$IFDEF DELPHIXE7_UP}
   case GetTypeKind(T) of
-    tkClass: CreateEmpty_Object(Result, TypeInfo(T));
-    tkInterface: CreateEmpty_Interface(Result, TypeInfo(T));
-    tkUString: CreateEmpty_String(Result, TypeInfo(T));
-    tkMethod: CreateEmpty_Method(Result, TypeInfo(T));
+    tkClass: classType := ExtensionClass_Object;
+    tkInterface: classType := ExtensionClass_Interface;
+    tkUString: classType := ExtensionClass_String;
+    tkMethod: classType := ExtensionClass_Method;
     tkInteger, tkChar, tkWChar, tkEnumeration, tkInt64, tkClassRef, tkPointer, tkProcedure:
       case SizeOf(T) of
-        1: CreateEmpty_Int8(Result, TypeInfo(T));
-        2: CreateEmpty_Int16(Result, TypeInfo(T));
-        4: CreateEmpty_Int32(Result, TypeInfo(T));
-        8: CreateEmpty_Int64(Result, TypeInfo(T));
+        1: classType := ExtensionClass_Int8;
+        2: classType := ExtensionClass_Int16;
+        4: classType := ExtensionClass_Int32;
+        8: classType := ExtensionClass_Int64;
+      else
+        classType := nil;
       end;
   else{$ELSE}begin{$ENDIF}
-    with TEnumerableExtension.Create(TEnumerableExtension<T>, nil, TExtensionKind.Empty) do
-      IInterface(result) := IInterface(@IMT);
+    classType := TEnumerableExtension<T>;
   end;
+
+  TEnumerableExtension.Empty(classType, TypeInfo(T), Result);
 end;
 
 class function TEnumerable.&Except<T>(const first,
@@ -11710,162 +12386,62 @@ begin
   Result := first.Exclude(second, comparer);
 end;
 
-class procedure TEnumerable.InternalFrom_Object_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<TObject>(Result) :=
-    TFoldedArrayIterator<TObject>.Create(TArray<TObject>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Object_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<TObject>(Result) :=
-    TFoldedArrayIterator<TObject>.Create(source, count, elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_String_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<string>(Result) :=
-    TFoldedArrayIterator<string>.Create(TArray<string>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_String_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<string>(Result) :=
-    TFoldedArrayIterator<string>.Create(source, count, elementType);
-end;
-
 class procedure TEnumerable.InternalOfType_Object(const source: IEnumerable<TObject>;
   var result; resultType: PTypeInfo);
 begin
-  IEnumerable<TObject>(Result) := TOfTypeIterator.Create(source, GetTypeData(resultType).ClassType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int8_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int8>(Result) :=
-    TFoldedArrayIterator<Int8>.Create(TArray<Int8>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int8_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int8>(Result) :=
-    TFoldedArrayIterator<Int8>.Create(source, count, elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int16_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int16>(Result) :=
-    TFoldedArrayIterator<Int16>.Create(TArray<Int16>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int16_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int16>(Result) :=
-    TFoldedArrayIterator<Int16>.Create(source, count, elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int32_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int32>(Result) :=
-    TFoldedArrayIterator<Int32>.Create(TArray<Int32>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int32_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int32>(Result) :=
-    TFoldedArrayIterator<Int32>.Create(source, count, elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int64_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int64>(Result) :=
-    TFoldedArrayIterator<Int64>.Create(TArray<Int64>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Int64_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<Int64>(Result) :=
-    TFoldedArrayIterator<Int64>.Create(source, count, elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Interface_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<IInterface>(Result) :=
-    TFoldedArrayIterator<IInterface>.Create(TArray<IInterface>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Interface_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<IInterface>(Result) :=
-    TFoldedArrayIterator<IInterface>.Create(source, count, elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Method_DynArray(source: Pointer;
-  var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<TMethodPointer>(Result) :=
-    TFoldedArrayIterator<TMethodPointer>.Create(TArray<TMethodPointer>(source), elementType);
-end;
-
-class procedure TEnumerable.InternalFrom_Method_OpenArray(source: Pointer;
-  count: Integer; var result; elementType: PTypeInfo);
-begin
-  IReadOnlyList<TMethodPointer>(Result) :=
-    TFoldedArrayIterator<TMethodPointer>.Create(source, count, elementType);
+  IEnumerable<TObject>(Result) := TOfTypeIterator.Create(source, GetTypeInfoData(resultType).ClassType);
 end;
 
 class function TEnumerable.From<T>(const values: array of T): IReadOnlyList<T>;
+var
+  classType: TClass;
 begin
 {$IFDEF DELPHIXE7_UP}
   case GetTypeKind(T) of
-    tkClass: InternalFrom_Object_OpenArray(@values, Length(values), Result, TypeInfo(T));
-    tkInterface: InternalFrom_Interface_OpenArray(@values, Length(values), Result, TypeInfo(T));
-    tkUString: InternalFrom_String_OpenArray(@values, Length(values), Result, TypeInfo(T));
-    tkMethod: InternalFrom_Method_OpenArray(@values, Length(values), Result, TypeInfo(T));
+    tkClass: classType := ExtensionClass_Object;
+    tkInterface: classType := ExtensionClass_Interface;
+    tkUString: classType := ExtensionClass_String;
+    tkMethod: classType := ExtensionClass_Method;
     tkInteger, tkChar, tkWChar, tkEnumeration, tkInt64, tkClassRef, tkPointer, tkProcedure:
       case SizeOf(T) of
-        1: InternalFrom_Int8_OpenArray(@values, Length(values), Result, TypeInfo(T));
-        2: InternalFrom_Int16_OpenArray(@values, Length(values), Result, TypeInfo(T));
-        4: InternalFrom_Int32_OpenArray(@values, Length(values), Result, TypeInfo(T));
-        8: InternalFrom_Int64_OpenArray(@values, Length(values), Result, TypeInfo(T));
+        1: classType := ExtensionClass_Int8;
+        2: classType := ExtensionClass_Int16;
+        4: classType := ExtensionClass_Int32;
+        8: classType := ExtensionClass_Int64;
+      else
+        classType := nil;
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TArrayIterator<T>.Create(values);
+    classType := TEnumerableExtension<T>;
   end;
+
+  TEnumerableExtension.From(@values, Length(values), result, classType, TypeInfo(TArray<T>));
 end;
 
 class function TEnumerable.From<T>(const values: TArray<T>): IReadOnlyList<T>;
+var
+  classType: TClass;
 begin
 {$IFDEF DELPHIXE7_UP}
   case GetTypeKind(T) of
-    tkClass: InternalFrom_Object_DynArray(values, Result, TypeInfo(T));
-    tkInterface: InternalFrom_Interface_DynArray(values, Result, TypeInfo(T));
-    tkUString: InternalFrom_String_DynArray(values, Result, TypeInfo(T));
-    tkMethod: InternalFrom_Method_DynArray(values, Result, TypeInfo(T));
+    tkClass: classType := ExtensionClass_Object;
+    tkInterface: classType := ExtensionClass_Interface;
+    tkUString: classType := ExtensionClass_String;
+    tkMethod: classType := ExtensionClass_Method;
     tkInteger, tkChar, tkWChar, tkEnumeration, tkInt64, tkClassRef, tkPointer, tkProcedure:
       case SizeOf(T) of
-        1: InternalFrom_Int8_DynArray(values, Result, TypeInfo(T));
-        2: InternalFrom_Int16_DynArray(values, Result, TypeInfo(T));
-        4: InternalFrom_Int32_DynArray(values, Result, TypeInfo(T));
-        8: InternalFrom_Int64_DynArray(values, Result, TypeInfo(T));
+        1: classType := ExtensionClass_Int8;
+        2: classType := ExtensionClass_Int16;
+        4: classType := ExtensionClass_Int32;
+        8: classType := ExtensionClass_Int64;
+      else
+        classType := nil;
       end;
   else{$ELSE}begin{$ENDIF}
-    Result := TArrayIterator<T>.Create(values);
+    classType := TEnumerableExtension<T>;
   end;
+
+  TEnumerableExtension.From(Pointer(values), -1, result, classType, TypeInfo(TArray<T>));
 end;
 
 class function TEnumerable.GroupBy<T, TKey>(const source: IEnumerable<T>;
@@ -11936,6 +12512,12 @@ begin
     source, keySelector, elementSelector, resultSelector, comparer);
 end;
 
+class function TEnumerable.Indexed<T>(const source: IEnumerable<T>;
+  start: Integer): IEnumerable<TIndexedItem<T>>;
+begin
+  Result := TIndexedIterator<T>.Create(source, start);
+end;
+
 class function TEnumerable.Intersect<T>(const first,
   second: IEnumerable<T>): IEnumerable<T>;
 begin
@@ -11953,7 +12535,7 @@ class function TEnumerable.MaxBy<T, TKey>(const source: IEnumerable<T>;
 var
   keyComparer: Pointer;
 begin
-  keyComparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+  keyComparer := _LookupVtableInfo(giComparer, TypeInfo(TKey), SizeOf(TKey));
   Result := MaxBy<T, TKey>(source, keySelector, IComparer<TKey>(keyComparer));
 end;
 
@@ -11972,20 +12554,18 @@ begin
   if not enumerator.MoveNext then
     RaiseHelper.NoElements;
 
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(enumerator).GetCurrent(Result)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   Result := enumerator.Current;
   maxKey := keySelector(Result);
   while enumerator.MoveNext do
   begin
-    {$IFDEF RSP31615}
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
     if IsManagedType(T) then
       IEnumeratorInternal(enumerator).GetCurrent(item)
-    else
-    {$ENDIF}
+    else{$ENDIF}
     item := enumerator.Current;
     key := keySelector(item);
     if comparer.Compare(key, maxKey) > 0 then
@@ -12001,7 +12581,7 @@ class function TEnumerable.MinBy<T, TKey>(const source: IEnumerable<T>;
 var
   keyComparer: Pointer;
 begin
-  keyComparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+  keyComparer := _LookupVtableInfo(giComparer, TypeInfo(TKey), SizeOf(TKey));
   Result := MinBy<T, TKey>(source, keySelector, IComparer<TKey>(keyComparer));
 end;
 
@@ -12020,20 +12600,18 @@ begin
   if not enumerator.MoveNext then
     RaiseHelper.NoElements;
 
-  {$IFDEF RSP31615}
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
   if IsManagedType(T) then
     IEnumeratorInternal(enumerator).GetCurrent(Result)
-  else
-  {$ENDIF}
+  else{$ENDIF}
   Result := enumerator.Current;
   minKey := keySelector(Result);
   while enumerator.MoveNext do
   begin
-    {$IFDEF RSP31615}
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
     if IsManagedType(T) then
       IEnumeratorInternal(enumerator).GetCurrent(item)
-    else
-    {$ENDIF}
+    else{$ENDIF}
     item := enumerator.Current;
     key := keySelector(item);
     if comparer.Compare(key, minKey) < 0 then
@@ -12086,21 +12664,37 @@ class function TEnumerable.Range(start, count: Integer): IReadOnlyList<Integer>;
 begin
   if (count >= 0) and (Int64(start) + count <= Cardinal(MaxInt) + 1) then
     if count = 0 then
-      Result := TEnumerable.Empty<Integer>
+      TEnumerableExtension.Empty(TEnumerableExtension<Integer>, TypeInfo(Integer), Result)
     else
       Result := TRangeIterator.Create(start, count)
   else
     RaiseHelper.ArgumentOutOfRange_Count;
 end;
 
-class function TEnumerable.Repeated<T>(const element: T; count: Integer): IEnumerable<T>; //FI:W521
+class function TEnumerable.Repeated<T>(const element: T; count: Integer): IReadOnlyList<T>; //FI:W521
+var
+  classType: TClass;
 begin
-  if count = 0 then
-    Result := TEnumerable.Empty<T>
-  else if count > 0 then
-    Result := TRepeatIterator<T>.Create(element, count)
-  else
-    RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
+{$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkClass: classType := ExtensionClass_Object;
+    tkInterface: classType := ExtensionClass_Interface;
+    tkUString: classType := ExtensionClass_String;
+    tkMethod: classType := ExtensionClass_Method;
+    tkInteger, tkChar, tkWChar, tkEnumeration, tkInt64, tkClassRef, tkPointer, tkProcedure:
+      case SizeOf(T) of
+        1: classType := ExtensionClass_Int8;
+        2: classType := ExtensionClass_Int16;
+        4: classType := ExtensionClass_Int32;
+        8: classType := ExtensionClass_Int64;
+      else
+        classType := nil;
+      end;
+  else{$ELSE}begin{$ENDIF}
+    classType := TEnumerableExtension<T>;
+  end;
+
+  TEnumerableExtension.Repeated(element, count, Result, classType, TypeInfo(TArray<T>));
 end;
 
 class function TEnumerable.Select<T, TResult>(const source: IEnumerable<T>;
@@ -12347,13 +12941,9 @@ end;
 
 constructor TOfTypeIterator.Create(const source: IEnumerable<TObject>; resultClass: TClass);
 begin
+  fElementType := resultClass.ClassInfo;
   fSource := source;
   fResultClass := resultClass;
-end;
-
-function TOfTypeIterator.GetElementType: PTypeInfo;
-begin
-  Result := fResultClass.ClassInfo;
 end;
 
 function TOfTypeIterator.GetEnumerator: IEnumerator<TObject>; //FI:W521
@@ -12397,7 +12987,7 @@ begin
       until False;
       Exit;
     end;
-  {$IFDEF MSWINDOWS}
+  {$IFDEF INTERFACE_RVO}
     IEnumerableInternal(Parent.fSource).GetEnumerator(IEnumerator(fEnumerator));
   {$ELSE}
     fEnumerator := Parent.fSource.GetEnumerator;

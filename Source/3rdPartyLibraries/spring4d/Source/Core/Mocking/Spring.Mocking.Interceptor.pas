@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -77,7 +77,7 @@ type
     class function CreateArgMatch(const arguments: TArray<TValue>;
       const parameters: TArray<TRttiParameter>): TArgMatch; static;
     function CreateMethodCalls(const method: TRttiMethod): TArray<TMethodCall>;
-    class function CreateEvent(const returnType: PTypeInfo): TMockAction; static;
+    class function CreateEvent(const returnType: PTypeInfo; eventKind: TTypeKind): TMockAction; static;
     class function CreateMock(const returnType: PTypeInfo): TMockAction; static;
     procedure InterceptArrange(const invocation: IInvocation);
     procedure InterceptAct(const invocation: IInvocation);
@@ -122,6 +122,7 @@ resourcestring
   SUnexpectedMethodCall = 'unexpected call of %s';
   SUnexpectedMethodCallArgs = 'unexpected call of %s with arguments: %s';
   SUnexpectedCallCount = 'unexpected call count: %s';
+  SUnsupportedEventType = 'unsupported event type: %s';
 
 function ArgsToString(const values: TArray<TValue>): string;
 var
@@ -246,6 +247,14 @@ procedure SetMethodPointer(inst: Pointer; const value: TMethodPointer);
 begin //FI:W519
 end;
 
+procedure SetMethodRecord(inst: Pointer; const value: TMethod);
+begin //FI:W519
+end;
+
+procedure SetMethodReference(inst: Pointer; const value: IInterface);
+begin //FI:W519
+end;
+
 procedure RemoveAll(inst: Pointer; instance: Pointer);
 begin //FI:W519
 end;
@@ -254,47 +263,84 @@ procedure Clear(inst: Pointer);
 begin //FI:W519
 end;
 
-function GetInvoke(inst: Pointer): TMethodPointer; //FI:O804
+function GetInvokeMethodPointer(inst: Pointer): TMethodPointer; //FI:O804
 begin
   raise ENotSupportedException.Create('');
 end;
 
-class function TMockInterceptor.CreateEvent(const returnType: PTypeInfo): TMockAction;
+function GetInvokeMethodReference(inst: Pointer): IInterface; //FI:O804
+begin
+  raise ENotSupportedException.Create('');
+end;
+
+class function TMockInterceptor.CreateEvent(const returnType: PTypeInfo; eventKind: TTypeKind): TMockAction;
 const
-  EventMock_Vtable: array[0..16] of Pointer =
+  EventMock_MethodPointer_Vtable: array[0..16] of Pointer =
   (
     @NopQueryInterface,
     @NopRef,
     @NopRef,
     // IEvent
-    @GetBoolean,            // GetCanInvoke
-    @GetBoolean,            // GetEnabled
-    @GetMethodPointer,      // GetOnChanged
-    @GetBoolean,            // GetUseFreeNotification
-    @SetBoolean,            // SetEnabled
-    @SetMethodPointer,      // SetOnChanged
-    @SetBoolean,            // SetUseFreeNotification
-    @SetMethodPointer,      // Add
-    @SetMethodPointer,      // Remove
-    @RemoveAll,             // RemoveAll
-    @Clear,                 // Clear
+    @GetBoolean,              // GetCanInvoke
+    @GetBoolean,              // GetEnabled
+    @GetMethodPointer,        // GetOnChanged
+    @GetBoolean,              // GetUseFreeNotification
+    @SetBoolean,              // SetEnabled
+    @SetMethodPointer,        // SetOnChanged
+    @SetBoolean,              // SetUseFreeNotification
+    @SetMethodRecord,         // Add
+    @SetMethodRecord,         // Remove
+    @RemoveAll,               // RemoveAll
+    @Clear,                   // Clear
     // IEvent<T>
-    @SetMethodPointer,      // Add
-    @SetMethodPointer,      // Remove
+    @SetMethodPointer,        // Add
+    @SetMethodPointer,        // Remove
     // IInvokableEvent<T>
-    @GetInvoke              // GetInvoke
+    @GetInvokeMethodPointer   // GetInvoke
   );
+  EventMock_MethodPointer_Instance: Pointer = @EventMock_MethodPointer_Vtable;
+  EventMock_MethodPointer: Pointer = @EventMock_MethodPointer_Instance;
 
-  EventMock_Instance: Pointer = @EventMock_Vtable;
-
-const
-  event: Pointer = @EventMock_Instance;
+  EventMock_MethodReference_Vtable: array[0..16] of Pointer =
+  (
+    @NopQueryInterface,
+    @NopRef,
+    @NopRef,
+    // IEvent
+    @GetBoolean,              // GetCanInvoke
+    @GetBoolean,              // GetEnabled
+    @GetMethodPointer,        // GetOnChanged
+    @GetBoolean,              // GetUseFreeNotification
+    @SetBoolean,              // SetEnabled
+    @SetMethodPointer,        // SetOnChanged
+    @SetBoolean,              // SetUseFreeNotification
+    @SetMethodRecord,         // Add
+    @SetMethodRecord,         // Remove
+    @RemoveAll,               // RemoveAll
+    @Clear,                   // Clear
+    // IEvent<T>
+    @SetMethodReference,      // Add
+    @SetMethodReference,      // Remove
+    // IInvokableEvent<T>
+    @GetInvokeMethodReference // GetInvoke
+  );
+  EventMock_MethodReference_Instance: Pointer = @EventMock_MethodReference_Vtable;
+  EventMock_MethodReference: Pointer = @EventMock_MethodReference_Instance;
 begin
-  Result :=
-    function(const callInfo: TCallInfo): TValue
-    begin
-      Result := TValue.From(event, returnType);
-    end;
+  case eventKind of
+    tkMethod:
+      Result :=
+        function(const callInfo: TCallInfo): TValue
+        begin
+          Result := TValue.From(returnType, EventMock_MethodPointer);
+        end;
+    tkInterface:
+      Result :=
+        function(const callInfo: TCallInfo): TValue
+        begin
+          Result := TValue.From(returnType, EventMock_MethodReference);
+        end;
+  end;
 end;
 
 class function TMockInterceptor.CreateMock(const returnType: PTypeInfo): TMockAction;
@@ -352,7 +398,8 @@ procedure TMockInterceptor.InterceptAct(const invocation: IInvocation);
 var
   methodCall: TMethodCall;
   method: TRttiMethod;
-  returnType: TRttiType;
+  returnType, eventType: TRttiType;
+  eventKind: TTypeKind;
   action: TMockAction;
 begin
   methodCall := fExpectedCalls[invocation.Method].LastOrDefault(
@@ -382,9 +429,46 @@ begin
           returnType := method.ReturnType;
           if HasMethodInfo(returnType.Handle) then
             action := CreateMock(returnType.Handle)
-          else if returnType.IsGenericTypeOf('Spring.IEvent<>')
-            or Assigned(returnType.BaseType) and returnType.BaseType.IsGenericTypeOf('Spring.IEvent<>') then
-            action := CreateEvent(returnType.Handle);
+          else if returnType.IsGenericTypeOf('Spring.IEvent<>') then
+          begin
+            eventKind := tkUnknown;
+
+            if returnType.IsGenericTypeOf('Spring.Collections.ICollectionChangedEvent<>')
+              or returnType.IsGenericTypeOf('Spring.INotifyEvent<>') then
+              eventKind := tkMethod
+            else
+            begin
+              eventType := returnType.GetGenericArguments[0];
+              if Assigned(eventType) and (eventType.TypeKind in [tkMethod, tkInterface]) then
+                eventKind := eventType.TypeKind;
+            end;
+
+            if eventKind = tkUnknown then
+              raise EMockException.CreateResFmt(@SUnsupportedEventType, [returnType.Name]);
+              (*
+                if you get this exception it was not possible to figure out the
+                event type provided to one of the generic event types such as IEvent<T>
+                the reason for this is the lack of typeinfo for type parameters
+                in generic types - we already tried some hacks to figure it out
+                by looking it up by name but did not succeed
+
+                POSSIBLE SOLUTION:
+                try forcing the typeinfo for your event type into your binary
+
+                this can look as follows:
+
+                if Assigned(TypeInfo(TMyEventType)) then;
+
+                By doing so the binary now contains the typeinfo for TMyEventType
+                and thus can be looked up by name when encountering IEvent<TMyEventType> or alike
+
+                IMPORTANT:
+                The event type must not be declared in the dpr of the program
+                because that makes the lookup by name impossible
+              *)
+
+            action := CreateEvent(returnType.Handle, eventKind);
+          end;
 
           if Assigned(action) then
           begin

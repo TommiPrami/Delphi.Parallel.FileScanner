@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -445,8 +445,11 @@ end;
 
 function TBaseVirtualDataSet.BookmarkValid(Bookmark: TBookmark): Boolean;
 begin
-  Result := Assigned(Bookmark) and Assigned(PObject(Bookmark)^)
-    and fIndexList.Contains(PObject(Bookmark)^);
+  if Assigned(fIndexList.DataList) then
+    Result := Assigned(Bookmark) and Assigned(PObject(Bookmark)^)
+      and fIndexList.Contains(PObject(Bookmark)^)
+  else
+    Result := Assigned(Bookmark) and (PInteger(Bookmark)^ < RecordCount);
 end;
 
 function TBaseVirtualDataSet.CompareBookmarks(Bookmark1, Bookmark2: TBookmark): Integer;
@@ -520,7 +523,11 @@ begin
         fOnUpdateRecord(Self, Index);
     dsInsert:
       if Assigned(fOnInsertRecord) then
+      begin
+        if Append then
+          Index := RecordCount;
         fOnInsertRecord(Self, Index);
+      end;
   end
 end;
 
@@ -558,13 +565,19 @@ end;
 {$IFDEF DELPHIXE4_UP}
 procedure TBaseVirtualDataSet.GetBookmarkData(Buffer: TRecBuf; Data: TBookmark);
 begin
-  PObject(Data)^ := fIndexList[PRecordBufferData(Buffer).Index];
+  if Assigned(fIndexList.DataList) then
+    PObject(Data)^ := fIndexList[PRecordBufferData(Buffer).Index]
+  else
+    PInteger(Data)^ := PRecordBufferData(Buffer).Index;
 end;
 
 procedure TBaseVirtualDataSet.SetBookmarkData(Buffer: TRecBuf; Data: TBookmark);
 begin
   if PRecordBufferData(Buffer).BookmarkFlag in [bfCurrent, bfInserted] then
-    PRecordBufferData(Buffer).Index := fIndexList.IndexOf(PObject(@Data[0])^)
+    if Assigned(fIndexList.DataList) then
+      PRecordBufferData(Buffer).Index := fIndexList.IndexOf(PObject(@Data[0])^)
+    else
+      PRecordBufferData(Buffer).Index := PInteger(@Data[0])^
   else
     PRecordBufferData(Buffer).Index := -1;
 end;
@@ -573,13 +586,19 @@ end;
 {$IFDEF DELPHIXE3_UP}
 procedure TBaseVirtualDataSet.GetBookmarkData(Buffer: TRecordBuffer; Data: TBookmark);
 begin
-  PObject(Data)^ := fIndexList[PRecordBufferData(Buffer).Index];
+  if Assigned(fIndexList.DataList) then
+    PObject(Data)^ := fIndexList[PRecordBufferData(Buffer).Index]
+  else
+    PInteger(Data)^ := PRecordBufferData(Buffer).Index;
 end;
 
 procedure TBaseVirtualDataSet.SetBookmarkData(Buffer: TRecordBuffer; Data: TBookmark);
 begin
   if PRecordBufferData(Buffer).BookmarkFlag in [bfCurrent, bfInserted] then
-    PRecordBufferData(Buffer).Index := fIndexList.IndexOf(PObject(@Data[0])^)
+    if Assigned(fIndexList.DataList) then
+      PRecordBufferData(Buffer).Index := fIndexList.IndexOf(PObject(@Data[0])^)
+    else
+      PRecordBufferData(Buffer).Index := PInteger(@Data[0])^
   else
     PRecordBufferData(Buffer).Index := -1;
 end;
@@ -587,13 +606,19 @@ end;
 
 procedure TBaseVirtualDataSet.GetBookmarkData(Buffer: TRecordBuffer; Data: Pointer);
 begin
-  PObject(Data)^ := fIndexList[PRecordBufferData(Buffer).Index];
+  if Assigned(fIndexList.DataList) then
+    PObject(Data)^ := fIndexList[PRecordBufferData(Buffer).Index]
+  else
+    PInteger(Data)^ := PRecordBufferData(Buffer).Index;
 end;
 
 procedure TBaseVirtualDataSet.SetBookmarkData(Buffer: TRecordBuffer; Data: Pointer);
 begin
   if PRecordBufferData(Buffer).BookmarkFlag in [bfCurrent, bfInserted] then
-    PRecordBufferData(Buffer).Index := fIndexList.IndexOf(PObject(Data)^)
+    if Assigned(fIndexList.DataList) then
+      PRecordBufferData(Buffer).Index := fIndexList.IndexOf(PObject(Data)^)
+    else
+      PRecordBufferData(Buffer).Index := PInteger(Data)^
   else
     PRecordBufferData(Buffer).Index := -1;
 end;
@@ -649,7 +674,10 @@ var
       ftGuid, ftFixedChar, ftString:
       begin
         PAnsiChar(Buffer)[Field.Size] := #0;
-        TempBuff := TEncoding.Default.GetBytes(string(tagVariant(Data).bStrVal));
+        if tagVariant(Data).vt = varString then
+          TempBuff := TEncoding.Default.GetBytes(string(tagVariant(Data).pcVal))
+        else
+          TempBuff := TEncoding.Default.GetBytes(string(tagVariant(Data).bStrVal));
         Move(TempBuff[0], Buffer[0], Length(TempBuff));
         PAnsiChar(Buffer)[Min(Field.Size, Length(TempBuff))] := #0;
       end;
@@ -923,21 +951,24 @@ begin
   fFilterBuffer := Buffer;
   tmp := SetTempState(dsFilter);
   try
-    Accept := True;
-    repeat
-      Result := InternalGetRecord(Buffer, GetMode, DoCheck);
-      if Result = grOK then
-      begin
-        DoFilterRecord(Accept);
-        if not Accept and (GetMode = gmCurrent) then
-          Result := grError;
-      end;
-    until Accept or (Result <> grOK);
-  except
-    ApplicationHandleException(Self);
-    Result := grError;
+    try
+      Accept := True;
+      repeat
+        Result := InternalGetRecord(Buffer, GetMode, DoCheck);
+        if Result = grOK then
+        begin
+          DoFilterRecord(Accept);
+          if not Accept and (GetMode = gmCurrent) then
+            Result := grError;
+        end;
+      until Accept or (Result <> grOK);
+    except
+      ApplicationHandleException(Self);
+      Result := grError;
+    end;
+  finally
+    RestoreState(tmp);
   end;
-  RestoreState(tmp);
 end;
 
 function TBaseVirtualDataSet.GetRecordCount: Integer;
@@ -1054,7 +1085,10 @@ end;
 procedure TBaseVirtualDataSet.InternalGotoBookmark(
   Bookmark: {$IFDEF DELPHIXE3_UP}TBookmark{$ELSE}Pointer{$ENDIF});
 begin
-  fCurrent := fIndexList.IndexOf(PObject(Bookmark)^);
+  if Assigned(fIndexList.DataList) then
+    fCurrent := fIndexList.IndexOf(PObject(Bookmark)^)
+  else
+    fCurrent := PInteger(Bookmark)^;
 end;
 
 procedure TBaseVirtualDataSet.InternalHandleException;

@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -30,7 +30,6 @@ interface
 
 uses
   TestFramework,
-  Classes,
   Rtti,
   Spring;
 
@@ -134,6 +133,8 @@ type
     constructor Create(const method: TRttiMethod; const args: TArray<TValue>); reintroduce;
     function GetName: string; override;
 
+    procedure CheckEqualsString(const expected, actual: string; const msg: string = '');
+
     property Name: string read fName write fName;
     class function Suite: ITestSuite; override;
 
@@ -170,6 +171,7 @@ type
 implementation
 
 uses
+  Math,
   StrUtils,
   SysUtils,
   TypInfo,
@@ -406,6 +408,33 @@ begin
     fUserMessage := attribute.fUserMessage;
   end;
   fArgs := Copy(args);
+end;
+
+procedure TTestCase.CheckEqualsString(const expected, actual, msg: string);
+
+  procedure EqualsFail(index: Integer; msg: string);
+  const
+    ContextCharCount = 20;
+  begin
+    if (msg <> '') and not EndsText(sLineBreak, msg) then
+      msg := msg + sLineBreak;
+    msg := msg +
+      'Strings differ at position ' + IntToStr(index) + sLineBreak +
+      'Expected: ' + ReplaceStr(Copy(expected, Max(1, index - ContextCharCount), ContextCharCount * 2), sLineBreak, '  ') + sLineBreak +
+      'But was:  ' + ReplaceStr(Copy(actual, Max(1, index - ContextCharCount), ContextCharCount * 2), sLineBreak, '  ') + sLineBreak +
+      '----------' + DupeString('-', Min(ContextCharCount, index - 1)) + '^';
+    Fail(msg);
+  end;
+
+var
+  i: Integer;
+begin
+  FCheckCalled := True;
+  for i := 1 to Min(Length(expected), Length(actual)) do
+    if expected[i] <> actual[i] then
+      EqualsFail(i, msg);
+  if Length(expected) <> Length(actual) then
+    EqualsFail(Min(Length(expected), Length(actual)) + 1, msg);
 end;
 
 function TTestCase.GetName: string;

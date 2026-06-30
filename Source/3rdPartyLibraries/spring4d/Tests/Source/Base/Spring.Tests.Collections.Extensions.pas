@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -39,7 +39,8 @@ uses
   Spring.Collections,
   Spring.Collections.Base,
   Spring.Collections.Lists,
-  Spring.TestUtils;
+  Spring.TestUtils,
+  Spring.Tests.Collections;
 
 type
   TThrowingEnumerable = class sealed(TEnumerableBase<Integer>, IEnumerable<Integer>)
@@ -197,7 +198,6 @@ type
     procedure EarlyOutWithPredicate;
 
     procedure ListWithoutPredicateDoesntIterate;
-    procedure ListWithPredicateStillIterates;
   end;
 
   TTestSingle = class(TTestCase)
@@ -243,7 +243,6 @@ type
     procedure MultipleElementSequenceWithMultiplePredicateMatches;
 
     procedure ListWithoutPredicateDoesntIterate;
-    procedure ListWithPredicateStillIterates;
   end;
 
   TTestFirstOrDefault = class(TTestCase)
@@ -269,7 +268,6 @@ type
     procedure EarlyOutWithPredicate;
 
     procedure ListWithoutPredicateDoesntIterate;
-    procedure ListWithPredicateStillIterates;
   end;
 
   TTestSingleOrDefault = class(TTestCase)
@@ -318,22 +316,8 @@ type
     procedure MultipleElementSequenceWithMultiplePredicateMatches;
 
     procedure ListWithoutPredicateDoesntIterate;
-    procedure ListWithPredicateStillIterates;
   end;
 
-  TTestDefaultIfEmpty = class(TTestCase)
-  published
-    procedure NilSourceNoDefaultValue;
-    procedure NilSourceWithDefaultValue;
-
-    procedure EmptySequenceNoDefaultValue;
-    procedure EmptySequenceWithDefaultValue;
-
-    procedure NonEmptySequenceNoDefaultValue;
-    procedure NonEmptySequenceWithDefaultValue;
-
-    procedure ExecutionIsDeferred;
-  end;
 (*
   TTestAggregate = class(TTestCase)
   published
@@ -703,6 +687,16 @@ type
   TTestMaxBy = class(TTestCase)
   published
     procedure SimpleMaxBy;
+  end;
+
+  TTestCountBy = class(TEnumerableTestCase)
+  published
+    procedure HasExpectedResult;
+  end;
+
+  TAggregateByTests = class(TEnumerableTestCase)
+  published
+    procedure HasExpectedResult;
   end;
 
 implementation
@@ -1361,7 +1355,7 @@ begin
   SetLength(values, Length(s));
   for i := 0 to Length(s) - 1 do
     values[i] := s[i + 1];
-  Result := TArrayIterator<Char>.Create(values);
+  Result := TEnumerable.From<Char>(values);
 end;
 
 { TTestAny }
@@ -1644,22 +1638,6 @@ var
 begin
   source := TNonEnumerableList<Integer>.Create([1, 5, 10, 3]);
   CheckEquals(1, source.First);
-end;
-
-procedure TTestFirst.ListWithPredicateStillIterates;
-var
-  source: IEnumerable<Integer>;
-begin
-  source := TNonEnumerableList<Integer>.Create([1, 5, 10, 3]);
-  CheckException(ENotSupportedException,
-    procedure
-    begin
-      source.First(
-        function(const x: Integer): Boolean
-        begin
-          Result := x > 3;
-        end);
-    end);
 end;
 
 procedure TTestFirst.MultipleElementSequenceWithMultiplePredicateMatches;
@@ -2056,22 +2034,6 @@ begin
   CheckEquals(3, source.Last);
 end;
 
-procedure TTestLast.ListWithPredicateStillIterates;
-var
-  source: IEnumerable<Integer>;
-begin
-  source := TNonEnumerableList<Integer>.Create([1, 5, 10, 3]);
-  CheckException(ENotSupportedException,
-    procedure
-    begin
-      source.Last(
-        function(const x: Integer): Boolean
-        begin
-          Result := x > 3;
-        end);
-    end);
-end;
-
 procedure TTestLast.MultipleElementSequenceWithMultiplePredicateMatches;
 var
   source: IEnumerable<Integer>;
@@ -2230,22 +2192,6 @@ var
 begin
   source := TNonEnumerableList<Integer>.Create([1, 5, 10, 3]);
   CheckEquals(1, source.FirstOrDefault);
-end;
-
-procedure TTestFirstOrDefault.ListWithPredicateStillIterates;
-var
-  source: IEnumerable<Integer>;
-begin
-  source := TNonEnumerableList<Integer>.Create([1, 5, 10, 3]);
-  CheckException(ENotSupportedException,
-    procedure
-    begin
-      source.FirstOrDefault(
-        function(const x: Integer): Boolean
-        begin
-          Result := x > 3;
-        end);
-    end);
 end;
 
 procedure TTestFirstOrDefault.MultipleElementSequenceWithMultiplePredicateMatches;
@@ -2610,22 +2556,6 @@ begin
   CheckEquals(3, source.LastOrDefault);
 end;
 
-procedure TTestLastOrDefault.ListWithPredicateStillIterates;
-var
-  source: IEnumerable<Integer>;
-begin
-  source := TNonEnumerableList<Integer>.Create([1, 5, 10, 3]);
-  CheckException(ENotSupportedException,
-    procedure
-    begin
-      source.LastOrDefault(
-        function(const x: Integer): Boolean
-        begin
-          Result := x > 3;
-        end);
-    end);
-end;
-
 procedure TTestLastOrDefault.MultipleElementSequenceWithMultiplePredicateMatches;
 var
   source: IEnumerable<Integer>;
@@ -2746,81 +2676,6 @@ var
 begin
   source := TCollections.CreateList<Integer>([5]);
   CheckEquals(5, source.LastOrDefault);
-end;
-
-{ TTestDefaultIfEmpty }
-
-procedure TTestDefaultIfEmpty.NilSourceWithDefaultValue;
-var
-  source: IEnumerable<Integer>;
-begin
-  source := nil;
-  CheckException(EArgumentNilException,
-    procedure
-    begin
-      TDefaultIfEmptyIterator<Integer>.Create(source, 5);
-    end);
-end;
-
-procedure TTestDefaultIfEmpty.EmptySequenceNoDefaultValue;
-var
-  source: IEnumerable<Integer>;
-  query: IEnumerable<Integer>;
-begin
-  source := TCollections.CreateList<Integer>;
-  query := source.DefaultIfEmpty;
-  CheckTrue(query.EqualsTo([0]));
-end;
-
-procedure TTestDefaultIfEmpty.EmptySequenceWithDefaultValue;
-var
-  source: IEnumerable<Integer>;
-  query: IEnumerable<Integer>;
-begin
-  source := TCollections.CreateList<Integer>;
-  query := source.DefaultIfEmpty(5);
-  CheckTrue(query.EqualsTo([5]));
-end;
-
-procedure TTestDefaultIfEmpty.ExecutionIsDeferred;
-begin
-  CheckExceptionDeferred(
-    function(const source: IEnumerable<Integer>): IEnumerable<Integer>
-    begin
-      Result := source.DefaultIfEmpty;
-    end);
-end;
-
-procedure TTestDefaultIfEmpty.NonEmptySequenceNoDefaultValue;
-var
-  source: IEnumerable<Integer>;
-  query: IEnumerable<Integer>;
-begin
-  source := TCollections.CreateList<Integer>([3, 1, 4]);
-  query := source.DefaultIfEmpty;
-  CheckTrue(query.EqualsTo(source));
-end;
-
-procedure TTestDefaultIfEmpty.NonEmptySequenceWithDefaultValue;
-var
-  source: IEnumerable<Integer>;
-  query: IEnumerable<Integer>;
-begin
-  source := TCollections.CreateList<Integer>([3, 1, 4]);
-  query := source.DefaultIfEmpty(5);
-  CheckTrue(query.EqualsTo(source));
-end;
-
-procedure TTestDefaultIfEmpty.NilSourceNoDefaultValue;
-var
-  source: IEnumerable<Integer>;
-begin
-  source := nil;
-  CheckException(EArgumentNilException,
-    procedure
-    begin
-      TDefaultIfEmptyIterator<Integer>.Create(source, Default(Integer));
-    end);
 end;
 
 { TTestAggregate }
@@ -3748,7 +3603,8 @@ begin
         function(const x: Integer): Integer
         begin
           Result := x;
-        end);
+        end,
+        nil);
     end);
 end;
 
@@ -4985,7 +4841,7 @@ var
   iterator: IEnumerator<Integer>;
 begin
   source := TArray<Integer>.Create(0, 1, 2, 3);
-  query := TArrayIterator<Integer>.Create(source);
+  query := TEnumerable.From<Integer>(source);
   query := query.Reversed;
   source[1] := 99;
   iterator := query.GetEnumerator;
@@ -5777,6 +5633,188 @@ begin
       Result := TComparer<Integer>.Default.Compare(key, minValue);
     end);
   CheckTrue(query.EqualsTo([2, 5, 2]));
+end;
+
+{ TTestCountBy }
+
+procedure TTestCountBy.HasExpectedResult;
+var
+  source: IInterface;
+  expected: IInterface;
+begin
+  source := TEnumerable.Empty<Integer>;
+  expected := TEnumerable.Empty<TPair<Integer,Integer>>;
+  CheckEquals(expected, TEnumerable.CountBy<Integer>(
+    IEnumerable<Integer>(source)));
+
+  source := TEnumerable.Range(0, 10);
+  expected := TEnumerable.Select<Integer,TPair<Integer,Integer>>(
+    IEnumerable<Integer>(source),
+    function(const x: Integer): TPair<Integer,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := 1;
+    end);
+  CheckEquals(expected, TEnumerable.CountBy<Integer>(
+    IEnumerable<Integer>(source)));
+
+  source := TEnumerable.Range(5, 10);
+  expected := TEnumerable.Select<Boolean,TPair<Boolean,Integer>>(
+    TEnumerable.Repeated(True, 1),
+    function(const x: Boolean): TPair<Boolean,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := 10;
+    end);
+  CheckEquals(expected, TEnumerable.CountBy<Integer,Boolean>(
+    IEnumerable<Integer>(source),
+    function(const x: Integer): Boolean begin Result := True end));
+
+  source := TEnumerable.Range(0, 20);
+  expected := TEnumerable.Select<Integer,TPair<Integer,Integer>>(
+    TEnumerable.Range(0, 5),
+    function(const x: Integer): TPair<Integer,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := 4;
+    end);
+  CheckEquals(expected, TEnumerable.CountBy<Integer,Integer>(
+    IEnumerable<Integer>(source),
+    function(const x: Integer): Integer begin Result := x mod 5 end));
+
+  source := TEnumerable.Repeated<Integer>(5, 20);
+  expected := TEnumerable.Select<Integer,TPair<Integer,Integer>>(
+    TEnumerable.Repeated<Integer>(5, 1),
+    function(const x: Integer): TPair<Integer,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := 20;
+    end);
+  CheckEquals(expected, TEnumerable.CountBy<Integer>(
+    IEnumerable<Integer>(source)));
+
+  source := TEnumerable.From<string>(['Bob', 'bob', 'tim', 'Bob', 'Tim']);
+  expected := TEnumerable.From<TPair<string,Integer>>([
+    TPair<string,Integer>.Create('Bob', 2),
+    TPair<string,Integer>.Create('bob', 1),
+    TPair<string,Integer>.Create('tim', 1),
+    TPair<string,Integer>.Create('Tim', 1)
+  ]);
+  CheckEquals(expected, TEnumerable.CountBy<string>(IEnumerable<string>(source)));
+
+  expected := TEnumerable.From<TPair<string,Integer>>([
+    TPair<string,Integer>.Create('Bob', 3),
+    TPair<string,Integer>.Create('tim', 2)
+  ]);
+  CheckEquals(expected, TEnumerable.CountBy<string,string>(
+    IEnumerable<string>(source),
+    TIdentityFunction<string>.Instance,
+    TStringComparer.OrdinalIgnoreCase
+  ));
+end;
+
+{ TAggregateByTests }
+
+procedure TAggregateByTests.HasExpectedResult;
+var
+  source: IInterface;
+  expected: IInterface;
+begin
+  source := TEnumerable.Empty<Integer>;
+  expected := TEnumerable.Empty<TPair<Integer,Integer>>;
+  CheckEquals(expected, TEnumerable.AggregateBy<Integer,Integer,Integer>(
+    IEnumerable<Integer>(source),
+    TIdentityFunction<Integer>.Instance,
+    0,
+    function(const x, y: Integer): Integer begin Result := x + y end
+  ));
+
+  source := TEnumerable.Range(0, 10);
+  expected := TEnumerable.Select<Integer,TPair<Integer,Integer>>(
+    IEnumerable<Integer>(source),
+    function(const x: Integer): TPair<Integer,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := x;
+    end);
+  CheckEquals(expected, TEnumerable.AggregateBy<Integer,Integer,Integer>(
+    IEnumerable<Integer>(source),
+    TIdentityFunction<Integer>.Instance,
+    0,
+    function(const x, y: Integer): Integer begin Result := x + y end
+  ));
+
+  source := TEnumerable.Range(5, 10);
+  expected := TEnumerable.Select<Boolean,TPair<Boolean,Integer>>(
+    TEnumerable.Repeated(True, 1),
+    function(const x: Boolean): TPair<Boolean,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := 95;
+    end);
+  CheckEquals(expected, TEnumerable.AggregateBy<Integer,Boolean,Integer>(
+    IEnumerable<Integer>(source),
+    function(const x: Integer): Boolean begin Result := True end,
+    0,
+    function(const x, y: Integer): Integer begin Result := x + y end
+  ));
+
+  source := TEnumerable.Range(0, 20);
+  expected := TEnumerable.Select<Integer,TPair<Integer,Integer>>(
+    TEnumerable.Range(0, 5),
+    function(const x: Integer): TPair<Integer,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := 30 + 4 * x;
+    end);
+  CheckEquals(expected, TEnumerable.AggregateBy<Integer,Integer,Integer>(
+    IEnumerable<Integer>(source),
+    function(const x: Integer): Integer begin Result := x mod 5 end,
+    0,
+    function(const x, y: Integer): Integer begin Result := x + y end
+  ));
+
+  source := TEnumerable.Repeated<Integer>(5, 20);
+  expected := TEnumerable.Select<Integer,TPair<Integer,Integer>>(
+    TEnumerable.Repeated<Integer>(5, 1),
+    function(const x: Integer): TPair<Integer,Integer>
+    begin
+      Result.Key := x;
+      Result.Value := 100;
+    end);
+  CheckEquals(expected, TEnumerable.AggregateBy<Integer,Integer,Integer>(
+    IEnumerable<Integer>(source),
+    TIdentityFunction<Integer>.Instance,
+    0,
+    function(const x, y: Integer): Integer begin Result := x + y end
+  ));
+
+  source := TEnumerable.From<string>(['Bob', 'bob', 'tim', 'Bob', 'Tim']);
+  expected := TEnumerable.From<TPair<string,string>>([
+    TPair<string,string>.Create('Bob', 'BobBob'),
+    TPair<string,string>.Create('bob', 'bob'),
+    TPair<string,string>.Create('tim', 'tim'),
+    TPair<string,string>.Create('Tim', 'Tim')
+  ]);
+  CheckEquals(expected, TEnumerable.AggregateBy<string,string,string>(
+    IEnumerable<string>(source),
+    TIdentityFunction<string>.Instance,
+    '',
+    function(const x, y: string): string begin Result := x + y end
+  ));
+
+  source := TEnumerable.From<string>(['Bob', 'bob', 'tim', 'Bob', 'Tim']);
+  expected := TEnumerable.From<TPair<string,string>>([
+    TPair<string,string>.Create('Bob', 'BobbobBob'),
+    TPair<string,string>.Create('tim', 'timTim')
+  ]);
+  CheckEquals(expected, TEnumerable.AggregateBy<string,string,string>(
+    IEnumerable<string>(source),
+    TIdentityFunction<string>.Instance,
+    '',
+    function(const x, y: string): string begin Result := x + y end,
+    TStringComparer.OrdinalIgnoreCase
+  ));
 end;
 
 end.

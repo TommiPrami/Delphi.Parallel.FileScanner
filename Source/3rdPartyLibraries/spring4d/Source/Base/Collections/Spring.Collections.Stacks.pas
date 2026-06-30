@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -45,20 +45,19 @@ type
   ///   Specifies the type of elements in the stack.
   /// </typeparam>
   TAbstractStack<T> = class(TEnumerableBase<T>)
-  private
+  private type
   {$REGION 'Nested Types'}
-    type
-      PEnumerator = ^TEnumerator;
-      TEnumerator = record
-        Vtable: Pointer;
-        RefCount: Integer;
-        TypeInfo: PTypeInfo;
-        fSource: TAbstractStack<T>;
-        fIndex, fVersion: Integer;
-        function GetCurrent: T;
-        function MoveNext: Boolean;
-        class var Enumerator_Vtable: TEnumeratorVtable;
-      end;
+    PEnumerator = ^TEnumerator;
+    TEnumerator = record
+      Vtable: Pointer;
+      RefCount: Integer;
+      TypeInfo: PTypeInfo;
+      fSource: TAbstractStack<T>;
+      fIndex, fVersion: Integer;
+      function GetCurrent: T;
+      function MoveNext: Boolean;
+      class var Enumerator_Vtable: TEnumeratorVtable;
+    end;
   {$ENDREGION}
   private
     fOnChanged: TCollectionChangedEventImpl<T>;
@@ -108,8 +107,8 @@ type
   private
     procedure Grow;
   public
-    constructor Create(const values: array of T); overload;
-    constructor Create(const values: IEnumerable<T>); overload;
+    constructor Create(const elementType: PTypeInfo;
+      const comparer: IComparer<T>; ownsObjects: Boolean = False);
     procedure Clear;
     function Push(const item: T): Boolean;
   end;
@@ -119,16 +118,6 @@ type
     function Push(const item: T): Boolean;
   end;
 
-  TFoldedStack<T> = class(TStack<T>)
-  private
-    fElementType: PTypeInfo;
-  protected
-    function GetElementType: PTypeInfo; override;
-  public
-    constructor Create(const elementType: PTypeInfo;
-      const comparer: IComparer<T>; ownsObjects: Boolean = False);
-  end;
-
 implementation
 
 uses
@@ -136,8 +125,7 @@ uses
   Rtti, // suppress hint about inlining
 {$ENDIF}
   TypInfo,
-  Spring.Events.Base,
-  Spring.ResourceStrings;
+  Spring.Events.Base;
 
 
 {$REGION 'TAbstractStack<T>'}
@@ -394,27 +382,12 @@ end;
 
 {$REGION 'TStack<T>'}
 
-constructor TStack<T>.Create(const values: array of T);
-var
-  i: Integer;
+constructor TStack<T>.Create(const elementType: PTypeInfo;
+  const comparer: IComparer<T>; ownsObjects: Boolean);
 begin
-  inherited Create(Length(values));
-  for i := 0 to High(values) do
-    Push(values[i]);
-end;
-
-constructor TStack<T>.Create(const values: IEnumerable<T>);
-var
-  enumerator: IEnumerator<T>;
-  item: T;
-begin
-  inherited Create;
-  enumerator := values.GetEnumerator;
-  while enumerator.MoveNext do
-  begin
-    item := enumerator.Current;
-    Push(item);
-  end;
+  fElementType := elementType;
+  fComparer := comparer;
+  inherited Create(0, ownsObjects);
 end;
 
 procedure TStack<T>.Clear;
@@ -449,25 +422,6 @@ begin
     Exit(False);
   PushInternal(item);
   Result := True;
-end;
-
-{$ENDREGION}
-
-
-{$REGION 'TFoldedStack<T>'}
-
-constructor TFoldedStack<T>.Create(const elementType: PTypeInfo;
-  const comparer: IComparer<T>; ownsObjects: Boolean);
-begin
-  fElementType := elementType;
-  fComparer := comparer;
-  inherited Create;
-  SetOwnsObjects(ownsObjects);
-end;
-
-function TFoldedStack<T>.GetElementType: PTypeInfo;
-begin
-  Result := fElementType;
 end;
 
 {$ENDREGION}

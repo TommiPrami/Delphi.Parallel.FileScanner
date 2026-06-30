@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -193,6 +193,8 @@ type
     procedure TestDeleteRange;
     procedure TestDeleteRangeEmptyList;
 
+    procedure TestDeleteRangeLarge;
+
     procedure EqualsToArray;
     procedure EqualsToEnumerable;
   end;
@@ -200,6 +202,8 @@ type
   TTestStringList = class(TTestCase)
   private
     SUT: IList<string>;
+    ChangeCount: Integer;
+    procedure HandleChange(Sender: TObject; const item: string; action: TCollectionChangedAction);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -211,6 +215,8 @@ type
     procedure TestExtractRange;
     procedure TestListInsertRangeIEnumerableSelf;
     procedure TestGetRange_SomeItems;
+
+    procedure TestDeleteRangeLarge;
   end;
 
   TTestSortedList = class(TTestCase)
@@ -520,6 +526,31 @@ type
     procedure TestDeleteRangeFront;
   end;
 
+  TTestWeakRefRecList = class(TTestCase)
+  {$IFDEF WEAKINTFREF}
+  private type
+    TWeakRefRec = record
+      [weak]
+      intf: IInterface;
+      i: Integer;
+    end;
+  private
+    SUT: IList<TWeakRefRec>;
+    Intf: IInterface;
+    procedure FillList;
+    procedure HandleChange(Sender: TObject; const item: TWeakRefRec; action: TCollectionChangedAction);
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
+  published
+    procedure TestListCreate;
+    procedure TestGetElementType;
+    procedure TestCopyTo;
+    procedure TestDelete;
+    procedure TestDeleteRangeFront;
+  {$ENDIF}
+  end;
+
   TMyCollectionItem = class(TCollectionItem);
   TMyOtherCollectionItem = class(TCollectionItem);
 
@@ -711,6 +742,7 @@ type
     procedure TestAdd;
     procedure TestRemove;
     procedure TestEnumerate;
+    procedure TestSetItemCount;
 
     procedure TestOrderedByCount;
     procedure TestSetEquals;
@@ -781,6 +813,29 @@ type
     procedure TestExtractPair;
     procedure TestRemove;
     procedure TestRemovePair;
+  end;
+
+  TTestSetChangedEventBase = class(TTestCollectionChangedEventBase)
+  private
+    procedure AddEventHandlers;
+  protected
+    SUT: ISet<Integer>;
+    procedure TearDown; override;
+  published
+    procedure TestAdd;
+    procedure TestClear;
+    procedure TestDestroy;
+    procedure TestRemove;
+  end;
+
+  TTestHashSetChangedEvent = class(TTestSetChangedEventBase)
+  protected
+    procedure SetUp; override;
+  end;
+
+  TTestTreeSetChangedEvent = class(TTestSetChangedEventBase)
+  protected
+    procedure SetUp; override;
   end;
 
   TTestMultiSetChangedEventBase = class(TTestCollectionChangedEventBase)
@@ -1143,6 +1198,20 @@ type
     procedure RemovingFromSourceBeforeIterating;
     procedure AddingToSourceBeforeIterating;
     procedure DoesNotPrematurelyAllocateHugeArray;
+  end;
+
+  TTestDefaultIfEmpty = class(TEnumerableTestCase)
+  public
+    class function TestData: TArray<TArray<TValue>>; static;
+  published
+    procedure SameResultsRepeatCallsNonEmptyQuery;
+    procedure SameResultsRepeatCallsEmptyQuery;
+    [TestCaseSource('TestData')]
+    procedure DefaultIfEmpty(const source: IEnumerable<Integer>; defaultValue: Integer; const expected: TArray<Integer>);
+    [TestCaseSource('TestData')]
+    procedure DefaultIfEmptyRunOnce(const source: IEnumerable<Integer>; defaultValue: Integer; const expected: TArray<Integer>);
+    procedure ElementAtOrDefault_OutOfBounds_ReturnsTypeDefault;
+    procedure LastShouldReturnLastItem;
   end;
 
 implementation
@@ -1599,6 +1668,30 @@ begin
     begin
       SUT.DeleteRange(1, 0);
     end);
+end;
+
+procedure TTestIntegerList.TestDeleteRangeLarge;
+var
+  source: IEnumerable<Integer>;
+  items: TArray<Integer>;
+begin
+  source := TEnumerable.Range(0, 1024);
+  SUT.AddRange(source);
+  SUT.OnChanged.Add(HandleChange);
+  SUT.DeleteRange(256, 512);
+  CheckEquals(512, ChangeCount);
+  CheckEquals(768, SUT[256]);
+  CheckEquals(512, SUT.Count);
+  SUT.DeleteRange(256, 128);
+  CheckEquals(640, ChangeCount);
+  items := SUT.ExtractRange(64, 128);
+  Check(source.Skip(64).Take(128).EqualsTo(items));
+  CheckEquals(768, ChangeCount);
+  items := SUT.ExtractRange(64, 64);
+  Check(source.Skip(192).Take(64).EqualsTo(items));
+  SUT.Clear;
+  CheckEquals(1025, ChangeCount);
+  CheckEquals(0, SUT.Count);
 end;
 
 procedure TTestIntegerList.TestEnumeratorMoveNext_VersionMismatch;
@@ -2128,6 +2221,12 @@ begin
     SUT.Add(IntToStr(i));
 end;
 
+procedure TTestStringList.HandleChange(Sender: TObject; const item: string;
+  action: TCollectionChangedAction);
+begin
+  Inc(ChangeCount);
+end;
+
 procedure TTestStringList.SetUp;
 begin
   inherited;
@@ -2181,7 +2280,34 @@ begin
   for i := 0 to 5 do
     CheckEquals(IntToStr(i + 1), SUT[i]);
   CheckEquals('8', SUT[6]);
+end;
 
+procedure TTestStringList.TestDeleteRangeLarge;
+var
+  source: IEnumerable<string>;
+  items: TArray<string>;
+begin
+  source := TEnumerable.Select<Integer,string>(TEnumerable.Range(0, 1024),
+    function(const i: Integer): string
+    begin
+      Result := IntToStr(i);
+    end);
+  SUT.AddRange(source);
+  SUT.OnChanged.Add(HandleChange);
+  SUT.DeleteRange(256, 512);
+  CheckEquals(512, ChangeCount);
+  CheckEquals('768', SUT[256]);
+  CheckEquals(512, SUT.Count);
+  SUT.DeleteRange(256, 128);
+  CheckEquals(640, ChangeCount);
+  items := SUT.ExtractRange(64, 128);
+  Check(source.Skip(64).Take(128).EqualsTo(items));
+  CheckEquals(768, ChangeCount);
+  items := SUT.ExtractRange(64, 64);
+  Check(source.Skip(192).Take(64).EqualsTo(items));
+  SUT.Clear;
+  CheckEquals(1025, ChangeCount);
+  CheckEquals(0, SUT.Count);
 end;
 
 procedure TTestStringList.TestExtractRange;
@@ -3866,9 +3992,98 @@ end;
 
 procedure TTestInterfaceList.TestInterfaceListCreate;
 begin
-  SUT := TCollections.CreateList<IInvokable>;
   CheckNotNull(SUT.Comparer);
 end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestWeakRefRecList'}
+
+{$IFDEF WEAKINTFREF}
+procedure TTestWeakRefRecList.FillList;
+var
+  i: Integer;
+  r: TWeakRefRec;
+begin
+  r.Intf := Intf;
+  for i := 1 to 4 do
+  begin
+    r.i := i;
+    SUT.Add(r);
+  end;
+end;
+
+procedure TTestWeakRefRecList.HandleChange(Sender: TObject;
+  const item: TWeakRefRec; action: TCollectionChangedAction);
+begin
+
+end;
+
+procedure TTestWeakRefRecList.SetUp;
+begin
+  SUT := TCollections.CreateList<TWeakRefRec>;
+  SUT.OnChanged.Add(HandleChange);
+  Intf := TInterfacedObject.Create;
+end;
+
+procedure TTestWeakRefRecList.TearDown;
+begin
+  SUT := nil;
+  Intf := nil;
+end;
+
+procedure TTestWeakRefRecList.TestCopyTo;
+var
+  values: TArray<TWeakRefRec>;
+  i: Integer;
+  r: TWeakRefRec;
+begin
+  r.Intf := Intf;
+  for i := 0 to MaxItems - 1 do
+    SUT.Add(r);
+  SetLength(values, MaxItems);
+  SUT.CopyTo(values, 0);
+  CheckEquals(MaxItems, Length(values));
+  CheckSame(SUT.First.Intf, values[0].Intf);
+  CheckSame(SUT.Last.Intf, values[MaxItems-1].Intf);
+end;
+
+procedure TTestWeakRefRecList.TestDelete;
+begin
+  FillList;
+  SUT.Delete(3);
+  SUT.Delete(1);
+  Pass;
+end;
+
+procedure TTestWeakRefRecList.TestDeleteRangeFront;
+var
+  i: Integer;
+  r: TWeakRefRec;
+begin
+  FillList;
+  SUT.DeleteRange(0, 2);
+  CheckSame(SUT[0].Intf, Intf);
+  CheckSame(SUT[1].Intf, Intf);
+  SUT.DeleteRange(0, 2);
+  r.Intf := Intf;
+  for i := 1 to 4 do
+    SUT.Add(r);
+  SUT.Clear;
+  Pass;
+end;
+
+procedure TTestWeakRefRecList.TestGetElementType;
+begin
+  Check(TypeInfo(TWeakRefRec) = SUT.ElementType);
+end;
+
+procedure TTestWeakRefRecList.TestListCreate;
+begin
+  CheckNotNull(SUT.Comparer);
+end;
+{$ENDIF}
 
 {$ENDREGION}
 
@@ -5450,6 +5665,7 @@ end;
 
 {$ENDREGION}
 
+
 {$REGION 'TTestSortedListMultiMapChangedEvent'}
 
 procedure TTestSortedListMultiMapChangedEvent.SetUp;
@@ -5567,6 +5783,19 @@ begin
   CheckFalse(SUT.SetEquals(TEnumerable.From<string>(['a', 'b', 'c'])));
 end;
 
+procedure TTestMultiSetBase.TestSetItemCount;
+begin
+  SUT['a'] := 3;
+  CheckEquals(3, SUT.Count);
+  CheckEquals(3, SUT['a']);
+  SUT['a'] := 2;
+  CheckEquals(2, SUT.Count);
+  CheckEquals(2, SUT['a']);
+  SUT['a'] := 0;
+  CheckEquals(0, SUT.Count);
+  CheckEquals(0, SUT['a']);
+end;
+
 {$ENDREGION}
 
 
@@ -5673,6 +5902,108 @@ begin
   CheckEquals('a', items[1]);
   CheckEquals('b', items[2]);
   CheckEquals('c', items[3]);
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestSetChangedEventBase'}
+
+procedure TTestSetChangedEventBase.AddEventHandlers;
+begin
+  SUT.OnChanged.Add(Changed);
+end;
+
+procedure TTestSetChangedEventBase.TearDown;
+begin
+  SUT := nil;
+  inherited;
+end;
+
+procedure TTestSetChangedEventBase.TestAdd;
+begin
+  AddEventHandlers;
+  SUT.Add(1);
+  SUT.Add(2);
+  SUT.Add(3);
+
+  CheckEquals(3, fChangedEvents.Count);
+  CheckChanged(0, 1, caAdded);
+  CheckChanged(1, 2, caAdded);
+  CheckChanged(2, 3, caAdded);
+end;
+
+procedure TTestSetChangedEventBase.TestClear;
+begin
+  SUT.Add(1);
+  SUT.Add(2);
+  SUT.Add(3);
+  SUT.Add(4);
+  SUT.Remove(3);
+  AddEventHandlers;
+  SUT.Clear;
+
+  CheckEquals(4, fChangedEvents.Count);
+  CheckChanged(0, 0, caReset);
+  CheckChanged(1, 1, caRemoved);
+  CheckChanged(2, 2, caRemoved);
+  CheckChanged(3, 4, caRemoved);
+end;
+
+procedure TTestSetChangedEventBase.TestDestroy;
+begin
+  SUT.Add(1);
+  SUT.Add(2);
+  SUT.Add(3);
+  AddEventHandlers;
+  SUT := nil;
+
+  CheckEquals(4, fChangedEvents.Count);
+  CheckChanged(0, 0, caReset);
+  CheckChanged(1, 1, caRemoved);
+  CheckChanged(2, 2, caRemoved);
+  CheckChanged(3, 3, caRemoved);
+end;
+
+procedure TTestSetChangedEventBase.TestRemove;
+begin
+  SUT.Add(1);
+  SUT.Add(2);
+  SUT.Add(3);
+  AddEventHandlers;
+  Check(not SUT.Remove(4));
+  Check(SUT.Remove(2));
+  Check(SUT.Remove(1));
+  Check(SUT.Remove(3));
+
+  CheckEquals(3, fChangedEvents.Count);
+  CheckChanged(0, 2, caRemoved);
+  CheckChanged(1, 1, caRemoved);
+  CheckChanged(2, 3, caRemoved);
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestHashSetChangedEvent'}
+
+procedure TTestHashSetChangedEvent.SetUp;
+begin
+  inherited;
+  SUT := TCollections.CreateSet<Integer>;
+  Sender := SUT.AsObject;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestTreeSetChangedEvent'}
+
+procedure TTestTreeSetChangedEvent.SetUp;
+begin
+  inherited;
+  SUT := TCollections.CreateSortedSet<Integer>;
+  Sender := SUT.AsObject;
 end;
 
 {$ENDREGION}
@@ -7585,6 +7916,134 @@ var
 begin
   chunks := TEnumerable.Chunk<Integer>(TEnumerable.Range(0, 10), MaxInt).ToArray;
   CheckEquals(TEnumerable.Range(0, 10).ToArray, chunks[0]);
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestDefaultIfEmpty'}
+
+procedure TTestDefaultIfEmpty.SameResultsRepeatCallsNonEmptyQuery;
+var
+  q: IEnumerable<Integer>;
+begin
+  q := TEnumerable.From<Integer>([9999, 0, 888, -1, 66, -777, 1, 2, -12345])
+    .Where(function(const x: Integer): Boolean begin Result := x > Low(Integer) end);
+
+  CheckEquals(q.DefaultIfEmpty(5), q.DefaultIfEmpty(5));
+end;
+
+procedure TTestDefaultIfEmpty.SameResultsRepeatCallsEmptyQuery;
+var
+  q: IEnumerable<Integer>;
+begin
+  q := NumberRangeGuaranteedNotCollectionType(0, 0);
+
+  CheckEquals(q.DefaultIfEmpty(88), q.DefaultIfEmpty(88));
+end;
+
+class function TTestDefaultIfEmpty.TestData: TArray<TArray<TValue>>;
+begin
+  Result := TArray<TArray<TValue>>.Create(
+    TArray<TValue>.Create(
+      TValue.From(TEnumerable.Empty<Integer>),
+      TValue.From<Integer>(0),
+      TValue.From<TArray<Integer>>(TArray<Integer>.Create(0))
+    ),
+    TArray<TValue>.Create(
+      TValue.From(TEnumerable.From<Integer>([3])),
+      TValue.From<Integer>(0),
+      TValue.From<TArray<Integer>>(TArray<Integer>.Create(3))
+    ),
+    TArray<TValue>.Create(
+      TValue.From(TEnumerable.From<Integer>([3, -1, 0, 10, 15])),
+      TValue.From<Integer>(0),
+      TValue.From<TArray<Integer>>(TArray<Integer>.Create(3, -1, 0, 10, 15))
+    ),
+
+    TArray<TValue>.Create(
+      TValue.From(TEnumerable.Empty<Integer>),
+      TValue.From<Integer>(-10),
+      TValue.From<TArray<Integer>>(TArray<Integer>.Create(-10))
+    ),
+    TArray<TValue>.Create(
+      TValue.From(TEnumerable.From<Integer>([3])),
+      TValue.From<Integer>(9),
+      TValue.From<TArray<Integer>>(TArray<Integer>.Create(3))
+    ),
+    TArray<TValue>.Create(
+      TValue.From(TEnumerable.From<Integer>([3, -1, 0, 10, 15])),
+      TValue.From<Integer>(9),
+      TValue.From<TArray<Integer>>(TArray<Integer>.Create(3, -1, 0, 10, 15))
+    ),
+    TArray<TValue>.Create(
+      TValue.From(TEnumerable.Empty<Integer>),
+      TValue.From<Integer>(0),
+      TValue.From<TArray<Integer>>(TArray<Integer>.Create(0))
+    )
+  );
+end;
+
+procedure TTestDefaultIfEmpty.DefaultIfEmpty(const source: IEnumerable<Integer>;
+  defaultValue: Integer; const expected: TArray<Integer>);
+var
+  result: IEnumerable<Integer>;
+begin
+  if defaultValue = 0 then
+  begin
+    result := source.DefaultIfEmpty;
+    CheckEquals(result, result);
+    CheckEquals(expected, result);
+    CheckEquals(Length(expected), result.Count);
+    CheckEquals(expected, TCollections.CreateList<Integer>(result));
+    CheckEquals(expected, result.ToArray);
+  end;
+  result := source.DefaultIfEmpty(defaultValue);
+  CheckEquals(result, result);
+  CheckEquals(expected, result);
+  CheckEquals(Length(expected), result.Count);
+  CheckEquals(expected, TCollections.CreateList<Integer>(result));
+  CheckEquals(expected, result.ToArray);
+end;
+
+procedure TTestDefaultIfEmpty.DefaultIfEmptyRunOnce(
+  const source: IEnumerable<Integer>; defaultValue: Integer;
+  const expected: TArray<Integer>);
+begin
+   if defaultValue = 0 then
+     CheckEquals(expected, GuaranteedRunOnce<Integer>(source).DefaultIfEmpty);
+   CheckEquals(expected, GuaranteedRunOnce<Integer>(source).DefaultIfEmpty(defaultValue));
+end;
+
+procedure TTestDefaultIfEmpty.ElementAtOrDefault_OutOfBounds_ReturnsTypeDefault;
+var
+  empty, defaultIfEmpty: IEnumerable<Integer>;
+  emptyStrings, defaultIfEmptyString: IEnumerable<string>;
+begin
+  empty := TEnumerable.Empty<Integer>;
+  defaultIfEmpty := empty.DefaultIfEmpty(999);
+
+  CheckEquals(999, defaultIfEmpty.ElementAtOrDefault(0));
+
+  CheckEquals(0, defaultIfEmpty.ElementAtOrDefault(1));
+  CheckEquals(0, defaultIfEmpty.ElementAtOrDefault(2));
+  CheckEquals(0, defaultIfEmpty.ElementAtOrDefault(-1));
+
+  emptyStrings := TEnumerable.Empty<string>;
+  defaultIfEmptyString := emptyStrings.DefaultIfEmpty('default');
+
+  CheckEquals('default', defaultIfEmptyString.ElementAtOrDefault(0));
+
+  CheckEquals('', defaultIfEmptyString.ElementAtOrDefault(1));
+  CheckEquals('', defaultIfEmptyString.ElementAtOrDefault(2));
+end;
+
+procedure TTestDefaultIfEmpty.LastShouldReturnLastItem;
+var
+  q: IEnumerable<Integer>;
+begin
+  q := TEnumerable.From<Integer>([10, 20, 30]).DefaultIfEmpty;
+  CheckEquals(30, q.Last);
 end;
 
 {$ENDREGION}

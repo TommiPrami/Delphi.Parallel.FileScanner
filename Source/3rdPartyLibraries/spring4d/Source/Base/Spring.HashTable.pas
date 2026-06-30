@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -36,10 +36,8 @@ uses
 {$IFDEF DELPHIXE6_UP}{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS(FieldVisibility)}{$ENDIF}
 
 type
-  TEqualsMethod = function(self: Pointer; const left, right): Boolean;
-  TGetHashCodeMethod = function(self: Pointer; const value): Integer;
-  TEqualsMethod<T> = function(self: Pointer; const left, right: T): Boolean;
-  TGetHashCodeMethod<T> = function(self: Pointer; const value: T): Integer;
+  TEqualsThunk = function(const comparer: IInterface; const left, right): Boolean;
+  TGetHashCodeThunk = function(const comparer: IInterface; const value): Integer;
 
   THashTableEntry = record
     HashCode, BucketIndex, ItemIndex: Integer;
@@ -57,6 +55,7 @@ type
   IHashTable<T> = interface
     function Find(const key: T; options: Byte = 0): Pointer;
   end;
+  TFindMethod<T> = function(const key: T; options: Byte = 0): Pointer of object;
 
   PHashTable = ^THashTable;
   THashTable = record
@@ -77,8 +76,8 @@ type
     fVersion: Integer;
 
     fComparer: IInterface;
-    fEquals: TEqualsMethod;
-    fGetHashCode: TGetHashCodeMethod;
+    fEquals: TEqualsThunk;
+    fGetHashCode: TGetHashCodeThunk;
     fItemsInfo: PTypeInfo;      // TypeInfo(TArray<TItem>)
 
     function GetCapacity: Integer;
@@ -88,7 +87,7 @@ type
   {$IFDEF DEBUG}
     class var CollisionCount: Integer;
   {$ENDIF}
-    procedure Initialize(const equals, getHashCode: Pointer; typeInfo: PTypeInfo);
+    procedure Initialize(equals: TEqualsThunk; getHashCode: TGetHashCodeThunk; typeInfo: PTypeInfo);
 
     procedure EnsureCompact;
     procedure Grow;
@@ -129,8 +128,8 @@ type
     fVersion: Integer;
 
     fComparer: IEqualityComparer<T>;
-    fEquals: TEqualsMethod;
-    fGetHashCode: TGetHashCodeMethod;
+    fEquals: TEqualsThunk;
+    fGetHashCode: TGetHashCodeThunk;
     fItemsInfo: PTypeInfo;      // TypeInfo(TArray<TItem>)
 
     {$IFDEF DELPHIXE7_UP}
@@ -146,9 +145,9 @@ type
     property Comparer: IEqualityComparer<T> read fComparer write fComparer;
     property Count: Integer read fCount;
     property DefaultComparer: Boolean read fDefaultComparer write fDefaultComparer;
-    property Equals: TEqualsMethod read fEquals;
+    property Equals: TEqualsThunk read fEquals;
     property Find: Pointer read fFind write fFind;
-    property GetHashCode: TGetHashCodeMethod read fGetHashCode;
+    property GetHashCode: TGetHashCodeThunk read fGetHashCode;
     property ItemCount: Integer read fItemCount;
     property Items: PByte read fItems;
     property ItemsInfo: PTypeInfo read fItemsInfo;
@@ -192,7 +191,6 @@ implementation
 uses
   SysUtils,
   Spring.Comparers,
-  Spring.Hash,
   Spring.ResourceStrings;
 
 {$IF defined(DELPHIXE6) or defined(DELPHIXE7)}
@@ -228,7 +226,8 @@ end;
 
 {$REGION 'THashTable'}
 
-procedure THashTable.Initialize(const equals, getHashCode: Pointer; typeInfo: PTypeInfo);
+procedure THashTable.Initialize(equals: TEqualsThunk;
+  getHashCode: TGetHashCodeThunk; typeInfo: PTypeInfo);
 var
   comparer: Pointer;
 begin
@@ -341,7 +340,7 @@ var
 begin
   hashTable := @vTable;
 
-  hashCode := hashTable.fGetHashCode(Pointer(hashTable.fComparer), key) and not RemovedFlag;
+  hashCode := hashTable.fGetHashCode(hashTable.fComparer, key) and not RemovedFlag;
 
   if hashTable.Buckets = nil then goto notFound;
 
@@ -370,7 +369,7 @@ findAgain:
 
     item := @hashTable.Items[NativeInt(hashTable.ItemSize) * (itemIndex and mask)];
 
-    if not hashTable.fEquals(Pointer(hashTable.fComparer), item[KeyOffset], key) then Continue;
+    if not hashTable.fEquals(hashTable.fComparer, item[KeyOffset], key) then Continue;
 
     if options and ExistingMask <> 0 then
       if options and IgnoreExisting <> 0 then
@@ -471,7 +470,7 @@ begin
       begin
         entry.ItemIndex := entry.ItemIndex and mask;
         item := @hashTable.Items[NativeInt(hashTable.ItemSize) * entry.ItemIndex];
-        Result := hashTable.fEquals(Pointer(hashTable.fComparer), item[KeyOffset], key);
+        Result := hashTable.fEquals(hashTable.fComparer, item[KeyOffset], key);
         if Result then Exit;
       end;
     until False;
@@ -485,7 +484,7 @@ begin
         begin
           entry.ItemIndex := entry.ItemIndex and mask;
           item := @hashTable.Items[NativeInt(hashTable.ItemSize) * entry.ItemIndex];
-          Result := hashTable.fEquals(Pointer(hashTable.fComparer), item[KeyOffset], key);
+          Result := hashTable.fEquals(hashTable.fComparer, item[KeyOffset], key);
           if Result then Exit;
         end;
       end;
@@ -521,7 +520,7 @@ begin
 
   Assert(newCapacity >= fCount);
 
-  newBucketCount := NextPowerOf2(NativeInt(NativeUInt(newCapacity) * 4 div 3 - 1)); // 75% load factor
+  newBucketCount := RoundUpToPowerOf2(NativeUInt(newCapacity) * 4 div 3); // 75% load factor
   newCapacity := NativeInt(NativeUInt(newBucketCount) * 3 div 4);
 
   if (newCapacity = Capacity) and (fItemCount = fCount) then

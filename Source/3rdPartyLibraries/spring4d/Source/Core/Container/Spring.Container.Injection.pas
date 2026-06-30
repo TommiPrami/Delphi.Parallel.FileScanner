@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -71,6 +71,8 @@ type
     procedure Validate(const target: TRttiMember); override;
     procedure InitializeDependencies(out dependencies: TArray<TDependencyModel>); override;
     procedure DoInject(const instance: TValue; const arguments: array of TValue); override;
+  public
+    constructor Create(const source: IInjection; const arguments: TArray<TValue>); overload;
   end;
 
   TPropertyInjection = class(TInjectionBase)
@@ -123,8 +125,7 @@ implementation
 uses
   TypInfo,
   Spring.Container.ResourceStrings,
-  Spring.Reflection,
-  Spring.ResourceStrings;
+  Spring.Reflection;
 
 
 {$REGION 'TInjectionBase'}
@@ -205,6 +206,22 @@ end;
 
 
 {$REGION 'TConstructorInjection'}
+
+constructor TConstructorInjection.Create(const source: IInjection;
+  const arguments: TArray<TValue>);
+var
+  src: TInjectionBase;
+  i: NativeInt;
+begin
+  src := TInjectionBase(source);
+  fTarget := src.fTarget;
+  SetLength(fDependencies, Length(src.fDependencies));
+  for i := 0 to High(src.fDependencies) do
+    fDependencies[i] := src.fDependencies[i];
+  SetLength(fArguments, Length(arguments));
+  for i := 0 to High(arguments) do
+    fArguments[i] := arguments[i]
+end;
 
 procedure TConstructorInjection.Validate(const target: TRttiMember);
 begin

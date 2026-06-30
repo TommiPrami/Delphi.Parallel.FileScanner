@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -37,8 +37,6 @@ uses
   Spring.Cryptography;
 
 type
-  PUInt32 = ^UInt32;
-
   /// <summary>
   ///   Abstract base class for hash algorithms.
   /// </summary>

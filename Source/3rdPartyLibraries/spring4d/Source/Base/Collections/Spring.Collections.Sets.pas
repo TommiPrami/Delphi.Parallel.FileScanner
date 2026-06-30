@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -39,22 +39,6 @@ uses
 {$IFDEF DELPHIXE6_UP}{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS(FieldVisibility)}{$ENDIF}
 
 type
-  /// <summary>
-  ///   The abstract base class for all set implementations.
-  /// </summary>
-  TSetBase<T> = class abstract(TCollectionBase<T>)
-  protected
-    function CreateSet: ISet<T>; virtual; abstract;
-  public
-    procedure ExceptWith(const other: IEnumerable<T>);
-    procedure IntersectWith(const other: IEnumerable<T>);
-    procedure UnionWith(const other: IEnumerable<T>);
-    function IsSubsetOf(const other: IEnumerable<T>): Boolean;
-    function IsSupersetOf(const other: IEnumerable<T>): Boolean;
-    function SetEquals(const other: IEnumerable<T>): Boolean;
-    function Overlaps(const other: IEnumerable<T>): Boolean;
-  end;
-
   THashSetItem<T> = packed record
   public
     HashCode: Integer;
@@ -67,7 +51,7 @@ type
   /// <typeparam name="T">
   ///   The type of elements in the hash set.
   /// </typeparam>
-  THashSet<T> = class(TSetBase<T>, IInterface, IEnumerable<T>,
+  THashSet<T> = class(TCollectionBase<T>, IInterface, IEnumerable<T>,
     IReadOnlyCollection<T>, ICollection<T>, ISet<T>, IOrderedSet<T>)
   private type
   {$REGION 'Nested Types'}
@@ -92,18 +76,17 @@ type
   private
     fHashTable: THashTable;
   {$REGION 'Property Accessors'}
-    function GetCapacity: Integer; inline;
+    function GetCapacity: Integer;
     function GetCount: Integer;
     function GetItemByIndex(index: Integer): T;
     function GetNonEnumeratedCount: Integer;
     procedure SetCapacity(value: Integer);
   {$ENDREGION}
-  protected
-    function CreateSet: ISet<T>; override;
-    function TryGetElementAt(var item: T; index: Integer): Boolean;
-    property Capacity: Integer read GetCapacity;
+    procedure CheckUniqueAndUnfoundElements(const other: IEnumerable<T>;
+      returnIfUnfound: Boolean; var uniqueCount, unfoundCount: Integer);
+    procedure IntersectWithEnumerable(const other: IEnumerable<T>);
   public
-    constructor Create(capacity: Integer; const comparer: IEqualityComparer<T>);
+    constructor Create(elementType: PTypeInfo; capacity: Integer; const comparer: IEqualityComparer<T>);
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
 
@@ -111,6 +94,7 @@ type
     function GetEnumerator: IEnumerator<T>;
     function Contains(const item: T): Boolean; overload;
     function ToArray: TArray<T>;
+    function TryGetElementAt(var item: T; index: Integer): Boolean;
   {$ENDREGION}
 
   {$REGION 'Implements ICollection<T>'}
@@ -122,6 +106,13 @@ type
   {$ENDREGION}
 
   {$REGION 'Implements ISet<T>'}
+    procedure ExceptWith(const other: IEnumerable<T>);
+    procedure IntersectWith(const other: IEnumerable<T>);
+    procedure UnionWith(const other: IEnumerable<T>);
+    function IsSubsetOf(const other: IEnumerable<T>): Boolean;
+    function IsSupersetOf(const other: IEnumerable<T>): Boolean;
+    function SetEquals(const other: IEnumerable<T>): Boolean;
+    function Overlaps(const other: IEnumerable<T>): Boolean;
     procedure TrimExcess;
   {$ENDREGION}
 
@@ -130,7 +121,7 @@ type
   {$ENDREGION}
   end;
 
-  TSortedSet<T> = class(TSetBase<T>, IEnumerable<T>,
+  TSortedSet<T> = class(TCollectionBase<T>, IEnumerable<T>,
     IReadOnlyCollection<T>, ICollection<T>, ISet<T>)
   private type
   {$REGION 'Nested Types'}
@@ -162,10 +153,9 @@ type
     function GetNonEnumeratedCount: Integer;
     procedure SetCapacity(value: Integer);
   {$ENDREGION}
-  protected
-    function CreateSet: ISet<T>; override;
+    procedure IntersectWithEnumerable(const other: IEnumerable<T>);
   public
-    constructor Create(const comparer: IComparer<T>);
+    constructor Create(elementType: PTypeInfo; const comparer: IComparer<T>);
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
 
@@ -183,19 +173,15 @@ type
   {$ENDREGION}
 
   {$REGION 'Implements ISet<T>'}
+    procedure ExceptWith(const other: IEnumerable<T>);
+    procedure IntersectWith(const other: IEnumerable<T>);
+    procedure UnionWith(const other: IEnumerable<T>);
+    function IsSubsetOf(const other: IEnumerable<T>): Boolean;
+    function IsSupersetOf(const other: IEnumerable<T>): Boolean;
+    function SetEquals(const other: IEnumerable<T>): Boolean;
+    function Overlaps(const other: IEnumerable<T>): Boolean;
     procedure TrimExcess;
   {$ENDREGION}
-  end;
-
-  TFoldedHashSet<T> = class(THashSet<T>)
-  private
-    fElementType: PTypeInfo;
-  protected
-    function GetElementType: PTypeInfo; override;
-  public
-    constructor Create(elementType: PTypeInfo;
-      capacity: Integer;
-      const comparer: IEqualityComparer<T>);
   end;
 
 implementation
@@ -203,184 +189,27 @@ implementation
 uses
   TypInfo,
   Spring.Comparers,
-  Spring.Events.Base,
-  Spring.ResourceStrings;
+  Spring.Span;
 
-
-{$REGION 'TSetBase<T>'}
-
-procedure TSetBase<T>.ExceptWith(const other: IEnumerable<T>);
-begin
-  ICollection<T>(this).RemoveRange(other);
-end;
-
-procedure TSetBase<T>.IntersectWith(const other: IEnumerable<T>);
-var
-  count, capacity: NativeInt;
-  enumerator: IEnumerator<T>;
-  items: TArray<T>;
-begin
-  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
-
-  count := 0;
-  capacity := 0;
-  enumerator := IEnumerable<T>(this).GetEnumerator;
-  while enumerator.MoveNext do
-  begin
-    if count >= capacity then
-      capacity := DynArrayGrow(Pointer(items), TypeInfo(TArray<T>), capacity);
-    {$IFDEF RSP31615}
-    if IsManagedType(T) then
-      IEnumeratorInternal(enumerator).GetCurrent(items[count])
-    else
-    {$ENDIF}
-    items[count] := enumerator.Current;
-    Inc(count, Ord(not other.Contains(items[count])));
-  end;
-  if count > 0 then
-  begin
-    SetLength(items, count);
-    ICollection<T>(this).RemoveRange(items);
-  end;
-end;
-
-function TSetBase<T>.IsSubsetOf(const other: IEnumerable<T>): Boolean;
-var
-  enumerator: IEnumerator<T>;
-  item: T;
-begin
-  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
-
-  enumerator := IEnumerable<T>(this).GetEnumerator;
-  while enumerator.MoveNext do
-  begin
-    {$IFDEF RSP31615}
-    if IsManagedType(T) then
-      IEnumeratorInternal(enumerator).GetCurrent(item)
-    else
-    {$ENDIF}
-    item := enumerator.Current;
-    if not other.Contains(item) then
-      Exit(False);
-  end;
-
-  Result := True;
-end;
-
-function TSetBase<T>.IsSupersetOf(const other: IEnumerable<T>): Boolean;
-var
-  enumerator: IEnumerator<T>;
-  item: T;
-begin
-  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
-
-  enumerator := other.GetEnumerator;
-  while enumerator.MoveNext do
-  begin
-    {$IFDEF RSP31615}
-    if IsManagedType(T) then
-      IEnumeratorInternal(enumerator).GetCurrent(item)
-    else
-    {$ENDIF}
-    item := enumerator.Current;
-    if not IEnumerable<T>(this).Contains(item) then
-      Exit(False);
-  end;
-
-  Result := True;
-end;
-
-function TSetBase<T>.Overlaps(const other: IEnumerable<T>): Boolean;
-var
-  enumerator: IEnumerator<T>;
-  item: T;
-begin
-  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
-
-  enumerator := other.GetEnumerator;
-  while enumerator.MoveNext do
-  begin
-    {$IFDEF RSP31615}
-    if IsManagedType(T) then
-      IEnumeratorInternal(enumerator).GetCurrent(item)
-    else
-    {$ENDIF}
-    item := enumerator.Current;
-    if IEnumerable<T>(this).Contains(item) then
-      Exit(True);
-  end;
-
-  Result := False;
-end;
-
-function TSetBase<T>.SetEquals(const other: IEnumerable<T>): Boolean;
-var
-  localSet: ISet<T>;
-  enumerator: IEnumerator<T>;
-  item: T;
-begin
-  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
-
-  if other = IEnumerable<T>(this) then
-    Exit(True);
-
-  localSet := CreateSet;
-
-  enumerator := other.GetEnumerator;
-  while enumerator.MoveNext do
-  begin
-    {$IFDEF RSP31615}
-    if IsManagedType(T) then
-      IEnumeratorInternal(enumerator).GetCurrent(item)
-    else
-    {$ENDIF}
-    item := enumerator.Current;
-    localSet.Add(item);
-    if not IEnumerable<T>(this).Contains(item) then
-      Exit(False);
-  end;
-
-  enumerator := IEnumerable<T>(this).GetEnumerator;
-  while enumerator.MoveNext do
-  begin
-    {$IFDEF RSP31615}
-    if IsManagedType(T) then
-      IEnumeratorInternal(enumerator).GetCurrent(item)
-    else
-    {$ENDIF}
-    item := enumerator.Current;
-    if not localSet.Contains(item) then
-      Exit(False);
-  end;
-
-  Result := True;
-end;
-
-procedure TSetBase<T>.UnionWith(const other: IEnumerable<T>);
-begin
-  ICollection<T>(this).AddRange(other);
-end;
-
-{$ENDREGION}
+const
+  StackAllocThreshold = 100;
 
 
 {$REGION 'THashSet<T>'}
 
-constructor THashSet<T>.Create(capacity: Integer; const comparer: IEqualityComparer<T>);
+constructor THashSet<T>.Create(elementType: PTypeInfo; capacity: Integer; const comparer: IEqualityComparer<T>);
 begin
+  fElementType := elementType;
   fHashTable.Comparer := comparer;
   fHashTable.ItemsInfo := TypeInfo(TItems);
   SetCapacity(capacity);
 end;
 
 procedure THashSet<T>.AfterConstruction;
-var
-  elementType: PTypeInfo;
 begin
   inherited AfterConstruction;
 
-  elementType := GetElementType;
-  fHashTable.Initialize(@TComparerThunks<T>.Equals, @TComparerThunks<T>.GetHashCode, elementType);
+  fHashTable.Initialize(TComparerThunks<T>.Equals, TComparerThunks<T>.GetHashCode, fElementType);
   {$IFDEF DELPHIXE7_UP}
   if fHashTable.DefaultComparer then
     fHashTable.Find := @THashTable<T>.FindWithoutComparer
@@ -393,11 +222,6 @@ procedure THashSet<T>.BeforeDestruction;
 begin
   Clear;
   inherited BeforeDestruction;
-end;
-
-function THashSet<T>.CreateSet: ISet<T>;
-begin
-  Result := THashSet<T>.Create(0, IEqualityComparer<T>(fHashTable.Comparer));
 end;
 
 procedure THashSet<T>.SetCapacity(value: Integer);
@@ -449,6 +273,77 @@ begin
   end;
 end;
 
+procedure THashSet<T>.CheckUniqueAndUnfoundElements(const other: IEnumerable<T>;
+  returnIfUnfound: Boolean; var uniqueCount, unfoundCount: Integer);
+var
+  intArrayLength: Integer;
+  buffer: array[0..StackAllocThreshold-1] of Integer;
+  heapAlloc: Boolean;
+  bitHelper: PIntegerArray;
+
+  enumerator: IEnumerator<T>;
+  item: T;
+  entry: THashTableEntry;
+  index: NativeUInt;
+  bitMask: Integer;
+begin
+  uniqueCount := 0;
+  if fHashTable.Count = 0 then
+  begin
+    unfoundCount := Ord(other.Any);
+    Exit;
+  end;
+
+  intArrayLength := fHashTable.ItemCount;
+  if intArrayLength > 0 then
+    intArrayLength := (intArrayLength - 1) shr 5 + 1;
+  if intArrayLength <= StackAllocThreshold then
+  begin
+    heapAlloc := False;
+    bitHelper := @buffer[0];
+    FillChar(bitHelper^, intArrayLength shl 2, 0);
+  end
+  else
+  begin
+    heapAlloc := True;
+    bitHelper := AllocMem(intArrayLength shl 2);
+  end;
+
+  try
+    unfoundCount := 0;
+    enumerator := other.GetEnumerator;
+    while enumerator.MoveNext do
+    begin
+      {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+      if IsManagedType(T) then
+        IEnumeratorInternal(enumerator).GetCurrent(item)
+      else{$ENDIF}
+      item := enumerator.Current;
+      entry.HashCode := IEqualityComparer<T>(fHashTable.Comparer).GetHashCode(item);
+      if fHashTable.FindEntry(item, entry) then
+      begin
+        index := NativeUInt(entry.ItemIndex);
+        bitMask := 1 shl (Byte(index) and 31);
+        index := index shr 5;
+        if bitHelper[index] and bitMask = 0 then
+        begin
+          bitHelper[index] := bitHelper[index] or bitMask;
+          Inc(uniqueCount);
+        end;
+      end
+      else
+      begin
+        Inc(unfoundCount);
+        if returnIfUnfound then
+          Break;
+      end;
+    end;
+  finally
+    if heapAlloc then
+      FreeMem(bitHelper);
+  end;
+end;
+
 procedure THashSet<T>.Clear;
 var
   item: PItem;
@@ -458,10 +353,15 @@ begin
   begin
     itemCount := fHashTable.ItemCount;
     fHashTable.ClearCount;
+    if itemCount > 0 then
+      Reset;
     item := PItem(fHashTable.Items);
     for i := 1 to itemCount do //FI:W528
+    begin
       if item.HashCode >= 0 then
         Notify(Self, item.Item, caRemoved);
+      Inc(item);
+    end;
   end;
 
   fHashTable.Clear;
@@ -539,6 +439,61 @@ begin
   Result := -1;
 end;
 
+procedure THashSet<T>.IntersectWithEnumerable(const other: IEnumerable<T>);
+var
+  originalCount, intArrayLength: Integer;
+  buffer: array[0..StackAllocThreshold-1] of Integer;
+  heapAlloc: Boolean;
+  bitHelper: PIntegerArray;
+
+  enumerator: IEnumerator<T>;
+  current: T;
+  entry: THashTableEntry;
+  index, i: NativeUInt;
+begin
+  originalCount := fHashTable.ItemCount;
+  intArrayLength := originalCount;
+  if intArrayLength > 0 then
+    intArrayLength := (intArrayLength - 1) shr 5 + 1;
+  if intArrayLength <= StackAllocThreshold then
+  begin
+    heapAlloc := False;
+    bitHelper := @buffer[0];
+    FillChar(bitHelper^, intArrayLength shl 2, 0);
+  end
+  else
+  begin
+    heapAlloc := True;
+    bitHelper := AllocMem(intArrayLength shl 2);
+  end;
+
+  try
+    enumerator := other.GetEnumerator;
+    while enumerator.MoveNext do
+    begin
+      {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+      if IsManagedType(T) then
+        IEnumeratorInternal(enumerator).GetCurrent(current)
+      else{$ENDIF}
+      current := enumerator.Current;
+      entry.HashCode := IEqualityComparer<T>(fHashTable.Comparer).GetHashCode(current);
+      if fHashTable.FindEntry(current, entry) then
+      begin
+        index := NativeUInt(entry.ItemIndex);
+        bitHelper[index shr 5] := bitHelper[index shr 5] or (1 shl (Byte(index) and 31));
+      end;
+    end;
+
+    for i := 0 to originalCount - 1 do
+      if (TItems(fHashTable.Items)[i].HashCode >= 0)
+        and (bitHelper[i shr 5] and (1 shl (Byte(i) and 31)) = 0) then
+        Remove(TItems(fHashTable.Items)[i].Item);
+  finally
+    if heapAlloc then
+      FreeMem(bitHelper);
+  end;
+end;
+
 function THashSet<T>.Remove(const item: T): Boolean;
 var
   temp: Pointer;
@@ -574,6 +529,156 @@ begin
       Inc(source);
     end;
   end;
+end;
+
+procedure THashSet<T>.ExceptWith(const other: IEnumerable<T>);
+begin
+  ICollection<T>(this).RemoveRange(other);
+end;
+
+procedure THashSet<T>.IntersectWith(const other: IEnumerable<T>);
+var
+  count: NativeInt;
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  // Intersection of anything with empty set is empty set, so return if count is 0.
+  // Same if the set intersecting with itself is the same set.
+  if (fHashTable.Count = 0) or (other = IEnumerable<T>(this)) then
+    Exit;
+
+  count := other.GetNonEnumeratedCount;
+  // If other is known to be empty, intersection is empty set; remove all elements, and we're done.
+  if count = 0 then
+  begin
+    ICollection<T>(this).Clear;
+    Exit;
+  end;
+
+  IntersectWithEnumerable(other);
+end;
+
+procedure THashSet<T>.UnionWith(const other: IEnumerable<T>);
+begin
+  ICollection<T>(this).AddRange(other);
+end;
+
+function THashSet<T>.IsSubsetOf(const other: IEnumerable<T>): Boolean;
+var
+  count, uniqueCount, unfoundCount: Integer;
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  count := fHashTable.Count;
+  // The empty set is a subset of any set, and a set is a subset of itself.
+  if (count = 0) or (other = IEnumerable<T>(this)) then
+    Exit(True);
+
+  // If this has more elements then it can't be a subset.
+  if Cardinal(count) > Cardinal(other.GetNonEnumeratedCount) then
+    Exit(False);
+
+  CheckUniqueAndUnfoundElements(other, False, uniqueCount, unfoundCount);
+  Result := uniqueCount = count;
+end;
+
+function THashSet<T>.IsSupersetOf(const other: IEnumerable<T>): Boolean;
+var
+  count: Integer;
+  find: TFindMethod<T>;
+  enumerator: IEnumerator<T>;
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+  item: T;
+  {$ENDIF}
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  // A set is always a superset of itself.
+  if other = IEnumerable<T>(this) then
+    Exit(True);
+
+  count := other.GetNonEnumeratedCount;
+  // If other is the empty set then this is a superset.
+  if count = 0 then
+    Exit(True);
+
+  TMethod(find).Data := @fHashTable;
+  TMethod(find).Code := fHashTable.Find;
+  enumerator := other.GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+    begin
+      IEnumeratorInternal(enumerator).GetCurrent(item);
+      Result := Assigned(find(item));
+    end else{$ENDIF}
+    Result := Assigned(find(enumerator.Current));
+    if not Result then
+      Exit;
+  end;
+
+  Result := True;
+end;
+
+function THashSet<T>.SetEquals(const other: IEnumerable<T>): Boolean;
+var
+  count, otherCount, uniqueCount, unfoundCount: Integer;
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  // A set is equal to itself.
+  if other = IEnumerable<T>(this) then
+    Exit(True);
+
+  count := fHashTable.Count;
+  otherCount := other.GetNonEnumeratedCount;
+  // If this is empty, they are equal if other is empty as well
+  if (count = 0) and (otherCount >= 0) then
+    Exit(otherCount = 0);
+
+  // Cannot be equal if other contains fewer elements than this
+  if Cardinal(count) > Cardinal(otherCount) then
+    Exit(False);
+
+  CheckUniqueAndUnfoundElements(other, True, uniqueCount, unfoundCount);
+  Result := (uniqueCount = count) and (unfoundCount = 0);
+end;
+
+function THashSet<T>.Overlaps(const other: IEnumerable<T>): Boolean;
+var
+  find: TFindMethod<T>;
+  enumerator: IEnumerator<T>;
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+  item: T;
+  {$ENDIF}
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  if fHashTable.Count = 0 then
+    Exit(False);
+
+  // Set overlaps itself
+  if other = IEnumerable<T>(this) then
+    Exit(True);
+
+  TMethod(find).Data := @fHashTable;
+  TMethod(find).Code := fHashTable.Find;
+  enumerator := other.GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+    begin
+      IEnumeratorInternal(enumerator).GetCurrent(item);
+      Result := Assigned(find(item));
+    end else{$ENDIF}
+    Result := Assigned(find(enumerator.Current));
+    if Result then
+      Exit;
+  end;
+
+  Result := False;
 end;
 
 {$ENDREGION}
@@ -617,8 +722,9 @@ end;
 
 {$REGION 'TSortedSet<T>'}
 
-constructor TSortedSet<T>.Create(const comparer: IComparer<T>);
+constructor TSortedSet<T>.Create(elementType: PTypeInfo; const comparer: IComparer<T>);
 begin
+  fElementType := elementType;
   fComparer := comparer;
 end;
 
@@ -634,11 +740,6 @@ begin
   Clear;
   fTree.Free;
   inherited BeforeDestruction;
-end;
-
-function TSortedSet<T>.CreateSet: ISet<T>;
-begin
-  Result := TSortedSet<T>.Create(fComparer);
 end;
 
 function TSortedSet<T>.Add(const item: T): Boolean;
@@ -669,8 +770,12 @@ begin
   begin
     node := fTree.Root.LeftMost;
     fTree.ClearCount;
+    Reset;
     while Assigned(node) do
+    begin
       Notify(Self, PNode(node).Key, caRemoved);
+      node := PBinaryTreeNode(node).Next;
+    end;
   end;
 
   fTree.Clear;
@@ -760,6 +865,192 @@ begin
   end;
 end;
 
+procedure TSortedSet<T>.ExceptWith(const other: IEnumerable<T>);
+begin
+  ICollection<T>(this).RemoveRange(other);
+end;
+
+procedure TSortedSet<T>.IntersectWith(const other: IEnumerable<T>);
+var
+  count: NativeInt;
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  // Intersection of anything with empty set is empty set, so return if count is 0.
+  // Same if the set intersecting with itself is the same set.
+  if (fTree.Count = 0) or (other = IEnumerable<T>(this)) then
+    Exit;
+
+  count := other.GetNonEnumeratedCount;
+  // If other is known to be empty, intersection is empty set; remove all elements, and we're done.
+  if count = 0 then
+  begin
+    ICollection<T>(this).Clear;
+    Exit;
+  end;
+
+  IntersectWithEnumerable(other);
+end;
+
+procedure TSortedSet<T>.IntersectWithEnumerable(const other: IEnumerable<T>);
+var
+  count, capacity: NativeInt;
+  enumerator: IEnumerator<T>;
+  items: TArray<T>;
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  count := 0;
+  capacity := 0;
+  enumerator := IEnumerable<T>(this).GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    if count >= capacity then
+      capacity := DynArrayGrow(Pointer(items), TypeInfo(TArray<T>), capacity);
+    {$IFDEF MANAGED_TYPE_RVO}
+    if IsManagedType(T) then
+      IEnumeratorInternal(enumerator).GetCurrent(items[count])
+    else{$ENDIF}
+    items[count] := enumerator.Current;
+    Inc(count, Ord(not other.Contains(items[count])));
+  end;
+  if count > 0 then
+  begin
+    SetLength(items, count);
+    ICollection<T>(this).RemoveRange(items);
+  end;
+end;
+
+procedure TSortedSet<T>.UnionWith(const other: IEnumerable<T>);
+begin
+  ICollection<T>(this).AddRange(other);
+end;
+
+function TSortedSet<T>.IsSubsetOf(const other: IEnumerable<T>): Boolean;
+var
+  enumerator: IEnumerator<T>;
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+  item: T;
+  {$ENDIF}
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  // TODO: optimize
+  enumerator := IEnumerable<T>(this).GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+    begin
+      IEnumeratorInternal(enumerator).GetCurrent(item);
+      Result := other.Contains(item);
+    end else{$ENDIF}
+    Result := other.Contains(enumerator.Current);
+    if not Result then
+      Exit;
+  end;
+
+  Result := True;
+end;
+
+function TSortedSet<T>.IsSupersetOf(const other: IEnumerable<T>): Boolean;
+var
+  enumerator: IEnumerator<T>;
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+  item: T;
+  {$ENDIF}
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  // TODO: optimize
+  enumerator := other.GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+    begin
+      IEnumeratorInternal(enumerator).GetCurrent(item);
+      Result := IEnumerable<T>(this).Contains(item);
+    end else{$ENDIF}
+    Result := IEnumerable<T>(this).Contains(enumerator.Current);
+    if not Result then
+      Exit;
+  end;
+
+  Result := True;
+end;
+
+function TSortedSet<T>.SetEquals(const other: IEnumerable<T>): Boolean;
+var
+  localSet: ISet<T>;
+  enumerator: IEnumerator<T>;
+  item: T;
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  if other = IEnumerable<T>(this) then
+    Exit(True);
+
+  localSet := TSortedSet<T>.Create(fElementType, fComparer);
+
+  enumerator := other.GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+      IEnumeratorInternal(enumerator).GetCurrent(item)
+    else{$ENDIF}
+    item := enumerator.Current;
+    localSet.Add(item);
+    Result := IEnumerable<T>(this).Contains(item);
+    if not Result then
+      Exit;
+  end;
+
+  enumerator := IEnumerable<T>(this).GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+    begin
+      IEnumeratorInternal(enumerator).GetCurrent(item);
+      Result := localSet.Contains(item);
+    end else{$ENDIF}
+    Result := localSet.Contains(enumerator.Current);
+    if not Result then
+      Exit;
+  end;
+
+  Result := True;
+end;
+
+function TSortedSet<T>.Overlaps(const other: IEnumerable<T>): Boolean;
+var
+  enumerator: IEnumerator<T>;
+  {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+  item: T;
+  {$ENDIF}
+begin
+  if not Assigned(other) then RaiseHelper.ArgumentNil(ExceptionArgument.other);
+
+  enumerator := other.GetEnumerator;
+  while enumerator.MoveNext do
+  begin
+    {$IFDEF MANAGED_TYPE_RVO_BROKEN}
+    if IsManagedType(T) then
+    begin
+      IEnumeratorInternal(enumerator).GetCurrent(item);
+      Result := IEnumerable<T>(this).Contains(item);
+    end else{$ENDIF}
+    Result := IEnumerable<T>(this).Contains(enumerator.Current);
+    if Result then
+      Exit;
+  end;
+
+  Result := False;
+end;
+
+
 {$ENDREGION}
 
 
@@ -803,25 +1094,6 @@ end;
 procedure TSortedSet<T>.TrimExcess;
 begin
   fTree.TrimExcess;
-end;
-
-{$ENDREGION}
-
-
-{$REGION 'TFoldedHashSet<T>'}
-
-constructor TFoldedHashSet<T>.Create(elementType: PTypeInfo; capacity: Integer;
-  const comparer: IEqualityComparer<T>);
-begin
-  fHashTable.Comparer := comparer;
-  fHashTable.ItemsInfo := TypeInfo(TItems);
-  SetCapacity(capacity);
-  fElementType := elementType;
-end;
-
-function TFoldedHashSet<T>.GetElementType: PTypeInfo;
-begin
-  Result := fElementType;
 end;
 
 {$ENDREGION}

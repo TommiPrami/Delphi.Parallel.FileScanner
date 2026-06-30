@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -692,7 +692,7 @@ type
   {$ENDREGION}
 
 
-  {$REGION 'TGUIDToStringConverter}
+  {$REGION 'TGUIDToStringConverter'}
 
   /// <summary>
   ///   Provides conversion routine between TGUID and string
@@ -707,7 +707,7 @@ type
   {$ENDREGION}
 
 
-  {$REGION 'TVariantToGUIDConverter}
+  {$REGION 'TVariantToGUIDConverter'}
 
   /// <summary>
   ///   Provides conversion routine between Variant and TGUID
@@ -722,7 +722,7 @@ type
   {$ENDREGION}
 
 
-  {$REGION 'TByteArrayToGUIDConverter}
+  {$REGION 'TByteArrayToGUIDConverter'}
 
   /// <summary>
   ///   Provides conversion routine between TArray&lt;Byte&gt; and TGUID
@@ -737,7 +737,7 @@ type
   {$ENDREGION}
 
 
-  {$REGION 'TGUIDToByteArrayConverter}
+  {$REGION 'TGUIDToByteArrayConverter'}
 
   /// <summary>
   ///   Provides conversion routine between TGUID and TArray&lt;Byte&gt;
@@ -840,14 +840,6 @@ uses
   Spring.ResourceStrings,
   Spring.SystemUtils;
 
-
-function SameTypeInfo(const left, right: PTypeInfo): Boolean;
-begin
-  Result := left = right;
-  if Assigned(left) and Assigned(right) then
-    Result := Result or ((left.Kind = right.Kind)
-      and (left.TypeName = right.TypeName));
-end;
 
 procedure RaiseConvertError(sourceType, targetType: PTypeInfo);
 begin
@@ -1154,9 +1146,10 @@ begin
   if Assigned(innerTypeInfo) then
   begin
     innerValue := value;
-    if innerTypeInfo.TypeName <> value.TypeInfo.TypeName then
-      Result := TValueConverter.Default.TryConvertTo(value, innerTypeInfo,
-        innerValue, parameter);
+    if not SameTypeInfo(value.TypeInfo, innerTypeInfo) then
+      if not TValueConverter.Default.TryConvertTo(value, innerTypeInfo,
+        innerValue, parameter) then
+        RaiseConvertError(value.TypeInfo, targetTypeInfo);
 
     TValue.Make(nil, targetTypeInfo, Result);
     Result.SetNullableValue(innerValue);
@@ -2020,7 +2013,7 @@ begin
       typeToTypeMapping.TargetType := targetTypeInfo;
       System.MonitorEnter(fTypeInfoToTypeInfoRegistry);
       try
-        fTypeInfoToTypeInfoRegistry.Add(typeToTypeMapping, converter);
+        fTypeInfoToTypeInfoRegistry.AddOrSetValue(typeToTypeMapping, converter);
       finally
         System.MonitorExit(fTypeInfoToTypeInfoRegistry);
       end;
@@ -2059,8 +2052,8 @@ var
   targetTypeKind: TTypeKind;
 begin
 {$IFDEF SPRING_ENABLE_GUARD}
-  Guard.CheckFalse(SizeOf(sourceTypeKinds) = 0, SEmptySourceTypeKind);
-  Guard.CheckFalse(SizeOf(targetTypeKinds) = 0, SEmptyTargetTypeKind);
+  Guard.CheckFalse(sourceTypeKinds = [], SEmptySourceTypeKind);
+  Guard.CheckFalse(targetTypeKinds = [], SEmptyTargetTypeKind);
 {$ENDIF}
 
   System.MonitorEnter(fTypeKindsToTypeKindsRegistry);
@@ -2108,7 +2101,7 @@ var
 begin
 {$IFDEF SPRING_ENABLE_GUARD}
   Guard.CheckNotNull(sourceTypeInfo, 'sourceTypeInfo');
-  Guard.CheckFalse(SizeOf(targetTypeKinds) = 0, SEmptyTargetTypeKind);
+  Guard.CheckFalse(targetTypeKinds = [], SEmptyTargetTypeKind);
 {$ENDIF}
 
   System.MonitorEnter(fTypeInfoToTypeKindsRegistry);
@@ -2133,7 +2126,7 @@ var
   sourceTypeKind: TTypeKind;
 begin
 {$IFDEF SPRING_ENABLE_GUARD}
-  Guard.CheckFalse(SizeOf(sourceTypeKinds) = 0, SEmptySourceTypeKind);
+  Guard.CheckFalse(sourceTypeKinds = [], SEmptySourceTypeKind);
   Guard.CheckNotNull(targetTypeInfo, 'targetTypeInfo');
 {$ENDIF}
 

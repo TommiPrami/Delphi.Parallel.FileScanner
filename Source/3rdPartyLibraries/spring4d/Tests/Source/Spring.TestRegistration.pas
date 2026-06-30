@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -131,6 +131,7 @@ begin
       TTestLinkedList.Suite,
       TTestObjectList.Suite,
       TTestInterfaceList.Suite,
+      TTestWeakRefRecList.Suite,
       TTestCollectionList.Suite,
       TTestEnumerable.Suite,
       TTestListMultiMap.Suite,
@@ -159,7 +160,10 @@ begin
 
       TMemoizeTests.Suite,
 
-      TTestChunk.Suite
+      TTestChunk.Suite,
+
+      TTestCountBy.Suite,
+      TAggregateByTests.Suite
     ]);
 
     RegisterTests('Spring.Base.Collections.Dictionaries', [
@@ -231,6 +235,11 @@ begin
       TTestTreeMultiSet.Suite,
       TTestHashMultiSetChangedEvent.Suite,
       TTestTreeMultiSetChangedEvent.Suite
+    ]);
+
+    RegisterTests('Spring.Base.Collections.Sets', [
+      TTestHashSetChangedEvent.Suite,
+      TTestTreeSetChangedEvent.Suite
     ]);
   end;
 

@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -45,6 +45,33 @@ uses
   Spring.Testing;
 
 type
+  TIndexOfTests = class(TTestCase)
+  private type
+    TCustomComparer = class(TInterfacedObject, IEqualityComparer<Integer>)
+    private
+      fMatchOnXIteration: Integer;
+      fIteration: Integer;
+    public
+      class function Create(matchOnXIteration: Integer): IEqualityComparer<Integer>; static;
+      function Equals(const left, right: Integer): Boolean; reintroduce;
+      function GetHashCode(const value: Integer): Integer; reintroduce;
+    end;
+  public
+    procedure TestIndexOf<TCollection>(
+      const factory: Func<IEnumerable<Integer>, TCollection>;
+      const indexOfItem: Func<TCollection, Integer, Integer>;
+      const indexOfItemIndex: Func<TCollection, Integer, Integer, Integer>;
+      const indexOfItemIndexCount: Func<TCollection, Integer, Integer, Integer, Integer>;
+      const indexOfItemIndexCountEQ: Func<TCollection, Integer, Integer, Integer, IEqualityComparer<Integer>, Integer>);
+    procedure TestLastIndexOf<TCollection>(
+      const factory: Func<IEnumerable<Integer>, TCollection>;
+      const lastIndexOfItem: Func<TCollection, Integer, Integer>;
+      const lastIndexOfItemEQ: Func<TCollection, Integer, IEqualityComparer<Integer>, Integer>;
+      const lastIndexOfItemIndex: Func<TCollection, Integer, Integer, Integer>;
+      const lastIndexOfItemIndexCount: Func<TCollection, Integer, Integer, Integer, Integer>;
+      const lastIndexOfItemIndexCountEQ: Func<TCollection, Integer, Integer, Integer, IEqualityComparer<Integer>, Integer>);
+  end;
+
   TTestNullableInteger = class(TTestCase)
   private
     fInteger: Nullable<Integer>;
@@ -58,6 +85,8 @@ type
     procedure TestLocalVariable;
     procedure TestFromVariant;
     procedure TestEquals;
+    procedure TestEqualsOperator;
+    procedure TestNotEqualsOperator;
     procedure TestDefaultReturnsInitialValue;
     procedure TestAssignFloat;
     procedure TestAssignStringNonInt;
@@ -136,15 +165,34 @@ type
   TTestMulticastEvent = class(TTestCase)
   strict private
     type
+      TThreeBytes = array[0..2] of Byte;
+      TEventThreeBytes = procedure(const Value: TThreeBytes) of object;
+      TEventThreeBytesVar = procedure(var Value: TThreeBytes) of object;
+      TString1 = string[1];
+      TString2 = string[2];
+      TString3 = string[3];
+      TString4 = string[4];
+      TString7 = string[7];
+
       TEventArgs = record i: Integer; s: string; v: Variant; end;
+      TEventInt32 = procedure(const Value: Int32) of object;
+      TEventInt32Var = procedure(var Value: Int32) of object;
       TEventInt64 = procedure(const Value: Int64) of object;
+      TEventInt64Var = procedure(var Value: Int64) of object;
       TEventSingle = procedure(const Value: Single) of object;
+      TEventSingleVar = procedure(var Value: Single) of object;
       TEventDouble = procedure(const Value: Double) of object;
+      TEventDoubleVar = procedure(var Value: Double) of object;
       TEventExtended = procedure(const Value: Extended) of object;
+      TEventExtendedVar = procedure(var Value: Extended) of object;
+      TEventNotifyEvent = procedure(const Value: TNotifyEvent) of object;
+      TEventNotifyEventVar = procedure(var Value: TNotifyEvent) of object;
       TEventWithStackParams = procedure(const Value1: Int64; const Value2: Single;
         const Value3: Double; const Value4: Extended; const Value5: TEventArgs) of object;
+      TEventWithStackParams2 = procedure(const Value1, Value2, Value3, Value4, Value5, Value6, Value7: NativeInt) of object;
       TEventWithRegisterParams = procedure(const Value1, Value2, Value3: NativeInt) of object;
       TEventWithFloatParams = procedure(const Value1, Value2, Value3: Double) of object;
+      TEventWithShortStringParams = procedure(Value1: TString1; Value2: TString2; Value3: TString3; Value4: TString4) of object;
     const
       CNumber = 5;
       CText = 'test';
@@ -162,14 +210,26 @@ type
     procedure HandlerA(sender: TObject);
     procedure HandlerB(sender: TObject);
 
+    procedure HandlerThreeBytes(const value: TThreeBytes);
+    procedure HandlerThreeBytesVar(var value: TThreeBytes);
+    procedure HandlerInt32(const value: Int32);
+    procedure HandlerInt32Var(var value: Int32);
     procedure HandlerInt64(const value: Int64);
+    procedure HandlerInt64Var(var value: Int64);
     procedure HandlerSingle(const value: Single);
+    procedure HandlerSingleVar(var value: Single);
     procedure HandlerDouble(const value: Double);
+    procedure HandlerDoubleVar(var value: Double);
     procedure HandlerExtended(const value: Extended);
+    procedure HandlerExtendedVar(var value: Extended);
+    procedure HandlerNotifyEvent(const value: TNotifyEvent);
+    procedure HandlerNotifyEventVar(var value: TNotifyEvent);
     procedure HandlerWithStackParams(const value1: Int64; const value2: Single;
       const value3: Double; const value4: Extended; const value5: TEventArgs);
+    procedure HandlerWithStackParams2(const value1, value2, value3, value4, value5, value6, value7: NativeInt);
     procedure HandlerWithRegisterParams(const value1, value2, value3: NativeInt);
     procedure HandlerWithFloatParams(const value1, value2, value3: Double);
+    procedure HandlerWithShortStringParams(value1: TString1; value2: TString2; value3: TString3; value4: TString4);
     procedure HandleChanged(Sender: TObject);
   published
     procedure TestInvoke;
@@ -178,10 +238,12 @@ type
     procedure TestRecordType;
     procedure TestIssue58;
     procedure TestDelegate;
-    procedure TestIssue60;
+    procedure TestCorrectParameterPassing;
     procedure TestStackParams;
+    procedure TestStackParams2;
     procedure TestRegisterParams;
     procedure TestFloatParams;
+    procedure TestShortStringParams;
     procedure TestNotify;
     procedure TestNotifyDelegate;
     procedure TestRemove;
@@ -595,6 +657,8 @@ type
     procedure TestBinarySearchUpperBound;
     procedure TestBinarySearchUpperBoundSubRange;
 
+    procedure TestIndexOf;
+
     procedure TestLastIndexOf;
     procedure TestLastIndexOfSubRange;
 
@@ -716,7 +780,8 @@ type
 
   TTestBaseRoutines = class(TTestCase)
   published
-    procedure TestNextPowerOf2;
+    procedure TestRoundUpToPowerOf2;
+    procedure TestLog2;
   end;
 
   THashKind = (xxHash32, Murmur3Hash);
@@ -731,6 +796,7 @@ implementation
 uses
   DateUtils,
   FmtBcd,
+  Math,
   SqlTimSt,
   SysUtils,
   Variants,
@@ -741,6 +807,168 @@ uses
   Spring.Comparers,
   Spring.Hash,
   Spring.VirtualClass;
+
+
+{$REGION 'TIndexOfTests.TCustomComparer'}
+
+class function TIndexOfTests.TCustomComparer.Create(matchOnXIteration: Integer): IEqualityComparer<Integer>;
+var
+  instance: TCustomComparer;
+begin
+  instance := TCustomComparer(TCustomComparer.NewInstance);
+  instance.AfterConstruction;
+  instance.fMatchOnXIteration := matchOnXIteration;
+  Result := instance;
+end;
+
+function TIndexOfTests.TCustomComparer.Equals(const left, right: Integer): Boolean;
+begin
+  Inc(fIteration);
+  Result := fIteration = fMatchOnXIteration;
+end;
+
+function TIndexOfTests.TCustomComparer.GetHashCode(const value: Integer): Integer;
+begin
+  raise ENotImplementedException.NewInstance;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TIndexOfTests'}
+
+procedure TIndexOfTests.TestIndexOf<TCollection>(
+  const factory: Func<IEnumerable<Integer>, TCollection>;
+  const indexOfItem: Func<TCollection, Integer, Integer>;
+  const indexOfItemIndex: Func<TCollection, Integer, Integer, Integer>;
+  const indexOfItemIndexCount: Func<TCollection, Integer, Integer, Integer, Integer>;
+  const indexOfItemIndexCountEQ: Func<TCollection, Integer, Integer, Integer, IEqualityComparer<Integer>, Integer>);
+var
+  emptyCollection: TCollection;
+  collection1256: TCollection;
+  list: IReadOnlyList<Integer>;
+  idx, count, match, expected, actual: Integer;
+begin
+  emptyCollection := factory(TEnumerable.Empty<Integer>);
+  collection1256 := factory(TEnumerable.From<Integer>([1, 2, 5, 6]));
+
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(emptyCollection, 100, 1, 1, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(emptyCollection, 100, -1, 1, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(collection1256, 100, 1, 20, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(collection1256, 100, 1, -1, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(emptyCollection, 100, 1, 1, TCustomComparer.Create(50)) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(emptyCollection, 100, -1, 1, TCustomComparer.Create(50)) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(collection1256, 100, 1, 20, TCustomComparer.Create(1)) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin indexOfItemIndexCountEQ(collection1256, 100, 1, -1, TCustomComparer.Create(1)) end);
+
+  CheckEquals(-1, indexOfItem(emptyCollection, 5));
+  CheckEquals(-1, indexOfItem(emptyCollection, 5));
+  CheckEquals(-1, indexOfItemIndex(emptyCollection, 5, 0));
+  CheckEquals(2, indexOfItemIndex(collection1256, 5, 1));
+  CheckEquals(-1, indexOfItemIndexCount(emptyCollection, 5, 0, 0));
+  CheckEquals(-1, indexOfItemIndexCount(collection1256, 5, 1, 1));
+  CheckEquals(2, indexOfItemIndexCount(collection1256, 5, 1, 2));
+
+  list := TCollections.CreateList<Integer>([100, 101, 102, 103, 104, 100, 101, 102, 103, 104]).AsReadOnly;
+
+  CheckEquals(-1, indexOfItem(factory(list), 6));
+  CheckEquals(2, indexOfItemIndexCountEQ(factory(list), 102, 0, 4, nil));
+
+  for idx := 0 to list.Count - 1 do
+    for count := 0 to list.Count - idx do
+      for match in list.Concat(TEnumerable.From<Integer>([99])) do
+      begin
+        expected := list.IndexOf(match, idx, count);
+        actual := indexOfItemIndexCount(factory(list), match, idx, count);
+        CheckEquals(expected, actual);
+
+        actual := indexOfItemIndexCountEQ(factory(list), match, idx, count, TCustomComparer.Create(count));
+        CheckEquals(IfThen(count > 0, idx + count - 1, -1), actual);
+
+        if count = list.Count then
+        begin
+          // Also test the IndexOf overload that takes no count parameter.
+          actual := indexOfItemIndex(factory(list), match, idx);
+          CheckEquals(expected, actual);
+
+          if idx = 0 then
+          begin
+            // Also test the IndexOf overload that takes no index parameter.
+            actual := indexOfItem(factory(list), match);
+            CheckEquals(expected, actual);
+          end;
+        end;
+      end;
+end;
+
+procedure TIndexOfTests.TestLastIndexOf<TCollection>(
+  const factory: Func<IEnumerable<Integer>, TCollection>;
+  const lastIndexOfItem: Func<TCollection, Integer, Integer>;
+  const lastIndexOfItemEQ: Func<TCollection, Integer, IEqualityComparer<Integer>, Integer>;
+  const lastIndexOfItemIndex: Func<TCollection, Integer, Integer, Integer>;
+  const lastIndexOfItemIndexCount: Func<TCollection, Integer, Integer, Integer, Integer>;
+  const lastIndexOfItemIndexCountEQ: Func<TCollection, Integer, Integer, Integer, IEqualityComparer<Integer>, Integer>);
+var
+  emptyCollection: TCollection;
+  collection1256: TCollection;
+  list: IList<Integer>;//IReadOnlyList<Integer>;
+  idx, count, match, expected, actual: Integer;
+begin
+  emptyCollection := factory(TEnumerable.Empty<Integer>);
+  collection1256 := factory(TEnumerable.From<Integer>([1, 2, 5, 6]));
+
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(emptyCollection, 100, 1, 1, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(emptyCollection, 100, -1, 1, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(collection1256, 100, 1, 20, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(collection1256, 100, 1, -1, TEqualityComparer<Integer>.Default) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(emptyCollection, 100, 1, 1, TCustomComparer.Create(50)) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(emptyCollection, 100, -1, 1, TCustomComparer.Create(50)) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(collection1256, 100, 1, 20, TCustomComparer.Create(1)) end);
+  CheckException(EArgumentOutOfRangeException, procedure begin lastIndexOfItemIndexCountEQ(collection1256, 100, 1, -1, TCustomComparer.Create(1)) end);
+
+  CheckEquals(-1, lastIndexOfItem(emptyCollection, 5));
+  CheckEquals(-1, lastIndexOfItemEQ(emptyCollection, 5, TEqualityComparer<Integer>.Default));
+  CheckEquals(-1, lastIndexOfItemIndex(emptyCollection, 5, 0));
+  CheckEquals(-1, lastIndexOfItemIndexCount(emptyCollection, 5, 0, 0));
+
+  list := TCollections.CreateList<Integer>([100, 101, 102, 103, 104, 100, 101, 102, 103, 104]);
+
+  CheckEquals(-1, lastIndexOfItem(factory(list), 6));
+  CheckEquals(2, lastIndexOfItemIndexCountEQ(factory(list), 102, 6, 5, nil));
+
+  for idx := 0 to list.Count - 1 do
+    for count := 0 to idx + 1 do
+      for match in list.Concat(TEnumerable.From<Integer>([99])) do
+      begin
+        expected := list.LastIndexOf(match, idx, count);
+        actual := lastIndexOfItemIndexCount(factory(list), match, idx, count);
+        CheckEquals(expected, actual);
+
+        expected := list.LastIndexOf(match);
+        actual := lastIndexOfItemEQ(factory(list), match, TEqualityComparer<Integer>.Default);
+        CheckEquals(expected, actual);
+
+        actual := lastIndexOfItemIndexCountEQ(factory(list), match, idx, count, TCustomComparer.Create(count));
+        CheckEquals(IfThen(count > 0, idx - count + 1, -1), actual);
+
+        if count = list.Count then
+        begin
+          // Also test the LastIndexOf overload that takes no count parameter.
+          actual := lastIndexOfItemIndex(factory(list), match, idx);
+          CheckEquals(expected, actual);
+
+          if idx = list.Count - 1 then
+          begin
+            // Also test the LastIndexOf overload that takes no index parameter.
+            actual := lastIndexOfItem(factory(list), match);
+            CheckEquals(expected, actual);
+          end;
+        end;
+      end;
+end;
+
+
+{$ENDREGION}
 
 
 {$REGION 'TTestNullableInteger'}
@@ -880,9 +1108,73 @@ begin
 
   b := 2;
   CheckTrue(a.Equals(b));
+  CheckTrue(b.Equals(a));
 
   b := 3;
   CheckFalse(a.Equals(b));
+  CheckFalse(b.Equals(a));
+
+  a := nil;
+  CheckFalse(a.Equals(b));
+  CheckFalse(b.Equals(a));
+end;
+
+procedure TTestNullableInteger.TestEqualsOperator;
+var
+  a, b: Nullable<Integer>;
+begin
+  CheckTrue(a = b);
+  CheckTrue(b = a);
+  CheckTrue(a = nil);
+
+  a := 2;
+  CheckFalse(a = b);
+  CheckFalse(b = a);
+  CheckFalse(a = nil);
+
+  b := 2;
+  CheckTrue(a = b);
+  CheckTrue(b = a);
+  CheckTrue(a = 2);
+
+  b := 3;
+  CheckFalse(a = b);
+  CheckFalse(b = a);
+  CheckFalse(a = 3);
+
+  a := nil;
+  CheckFalse(a = b);
+  CheckFalse(b = a);
+  CheckFalse(a = 3);
+end;
+
+procedure TTestNullableInteger.TestNotEqualsOperator;
+var
+  a, b: Nullable<Integer>;
+begin
+  CheckFalse(a <> b);
+  CheckFalse(b <> a);
+  CheckFalse(a <> nil);
+
+  a := 2;
+  CheckTrue(a <> b);
+  CheckTrue(b <> a);
+  CheckTrue(a <> nil);
+
+  b := 2;
+  CheckFalse(a <> b);
+  CheckFalse(b <> a);
+  CheckFalse(a <> 2);
+
+  b := 3;
+  CheckTrue(a <> b);
+  CheckTrue(b <> a);
+  CheckTrue(a <> 3);
+
+  a := nil;
+  CheckTrue(a <> b);
+  CheckTrue(b <> a);
+  CheckTrue(a <> 3);
 end;
 
 {$ENDREGION}
@@ -986,9 +1278,55 @@ begin
   Inc(fHandlerInvokeCount);
 end;
 
+procedure TTestMulticastEvent.HandlerDoubleVar(var value: Double);
+begin
+  CheckEquals(42, value);
+  value := value + 1;
+  Inc(fHandlerInvokeCount);
+end;
+
 procedure TTestMulticastEvent.HandlerExtended(const value: Extended);
 begin
   CheckEquals(42, value);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerExtendedVar(var value: Extended);
+begin
+  CheckEquals(42, value);
+  value := value + 1;
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerThreeBytes(const value: TThreeBytes);
+begin
+  CheckEquals(42, value[0]);
+  CheckEquals(43, value[1]);
+  CheckEquals(44, value[2]);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerThreeBytesVar(var value: TThreeBytes);
+begin
+  CheckEquals(42, value[0]);
+  CheckEquals(43, value[1]);
+  CheckEquals(44, value[2]);
+  Inc(value[0]);
+  Inc(value[1]);
+  Inc(value[2]);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerInt32(const value: Int32);
+begin
+  CheckEquals(42, value);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerInt32Var(var value: Int32);
+begin
+  CheckEquals(42, value);
+  Inc(value);
   Inc(fHandlerInvokeCount);
 end;
 
@@ -998,9 +1336,42 @@ begin
   Inc(fHandlerInvokeCount);
 end;
 
+procedure TTestMulticastEvent.HandlerInt64Var(var value: Int64);
+begin
+  CheckEquals(42, value);
+  Inc(value);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerNotifyEvent(const value: TNotifyEvent);
+var
+  notify: TNotifyEvent;
+begin
+  notify := HandleChanged;
+  CheckEquals(TMethod(value).Code, TMethod(notify).Code);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerNotifyEventVar(var value: TNotifyEvent);
+var
+  notify: TNotifyEvent;
+begin
+  notify := HandleChanged;
+  CheckEquals(TMethod(value).Code, TMethod(notify).Code);
+  value := nil;
+  Inc(fHandlerInvokeCount);
+end;
+
 procedure TTestMulticastEvent.HandlerSingle(const value: Single);
 begin
   CheckEquals(42, value);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerSingleVar(var value: Single);
+begin
+  CheckEquals(42, value);
+  value := value + 1;
   Inc(fHandlerInvokeCount);
 end;
 
@@ -1020,6 +1391,16 @@ begin
   Inc(fHandlerInvokeCount);
 end;
 
+procedure TTestMulticastEvent.HandlerWithShortStringParams(value1: TString1;
+  value2: TString2; value3: TString3; value4: TString4);
+begin
+  CheckEquals('a', string(value1));
+  CheckEquals('bb', string(value2));
+  CheckEquals('ccc', string(value3));
+  CheckEquals('dddd', string(value4));
+  Inc(fHandlerInvokeCount);
+end;
+
 procedure TTestMulticastEvent.HandlerWithStackParams(const value1: Int64;
   const value2: Single; const value3: Double; const value4: Extended;
   const value5: TEventArgs);
@@ -1031,6 +1412,19 @@ begin
   CheckEquals(46, value5.i);
   CheckEquals('47', value5.s);
   CheckEquals(48, value5.v);
+  Inc(fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.HandlerWithStackParams2(const value1, value2,
+  value3, value4, value5, value6, value7: NativeInt);
+begin
+  CheckEquals(42, value1);
+  CheckEquals(43, value2);
+  CheckEquals(44, value3);
+  CheckEquals(45, value4);
+  CheckEquals(46, value5);
+  CheckEquals(47, value6);
+  CheckEquals(48, value7);
   Inc(fHandlerInvokeCount);
 end;
 
@@ -1172,25 +1566,73 @@ begin
   Check(Assigned(i));
 end;
 
-procedure TTestMulticastEvent.TestIssue60;
+procedure TTestMulticastEvent.TestCorrectParameterPassing;
 var
+  eventThreeBytes: Event<TEventThreeBytes>;
+  eventThreeBytesVar: Event<TEventThreeBytesVar>;
+  eventInt32: Event<TEventInt32>;
+  eventInt32Var: Event<TEventInt32Var>;
   eventInt64: Event<TEventInt64>;
+  eventInt64Var: Event<TEventInt64Var>;
   eventSingle: Event<TEventSingle>;
+  eventSingleVar: Event<TEventSingleVar>;
   eventDouble: Event<TEventDouble>;
+  eventDoubleVar: Event<TEventDoubleVar>;
   eventExtended: Event<TEventExtended>;
+  eventExtendedVar: Event<TEventExtendedVar>;
+  eventNotifyEvent: Event<TEventNotifyEvent>;
+  eventNotifyEventVar: Event<TEventNotifyEventVar>;
   expected: Integer;
+  valueThreeBytes: TThreeBytes;
+  valueInt32: Int32;
+  valueInt64: Int64;
+  valueSingle: Single;
+  valueDouble: Double;
+  valueExtended: Extended;
+  valueNotifyEvent: TNotifyEvent;
 begin
   expected := 0;
 
+  eventThreeBytes.Add(HandlerThreeBytes);
+  eventThreeBytesVar.Add(HandlerThreeBytesVar);
+  eventInt32.Add(HandlerInt32);
+  eventInt32Var.Add(HandlerInt32Var);
   eventInt64.Add(HandlerInt64);
+  eventInt64Var.Add(HandlerInt64Var);
   eventSingle.Add(HandlerSingle);
+  eventSingleVar.Add(HandlerSingleVar);
   eventDouble.Add(HandlerDouble);
+  eventDoubleVar.Add(HandlerDoubleVar);
   eventExtended.Add(HandlerExtended);
+  eventExtendedVar.Add(HandlerExtendedVar);
+  eventNotifyEvent.Add(HandlerNotifyEvent);
+  eventNotifyEventVar.Add(HandlerNotifyEventVar);
 
+  valueThreeBytes[0] := 42; valueThreeBytes[1] := 43;  valueThreeBytes[2] := 44;
+  eventThreeBytes.Invoke(valueThreeBytes); Inc(expected);
+  eventThreeBytesVar.Invoke(valueThreeBytes); Inc(expected);
+  CheckEquals(43, valueThreeBytes[0]);
+  CheckEquals(44, valueThreeBytes[1]);
+  CheckEquals(45, valueThreeBytes[2]);
+
+  eventInt32.Invoke(42); Inc(expected);
+  valueInt32 := 42; eventInt32Var.Invoke(valueInt32); Inc(expected); CheckEquals(43, valueInt32);
+  eventInt32.Enabled := False; eventInt32.Invoke(42);
   eventInt64.Invoke(42); Inc(expected);
+  valueInt64 := 42; eventInt64Var.Invoke(valueInt64); Inc(expected); CheckEquals(43, valueInt64);
+  eventInt64.Enabled := False; eventInt64.Invoke(42);
   eventSingle.Invoke(42); Inc(expected);
+  valueSingle := 42; eventSingleVar.Invoke(valueSingle); Inc(expected); CheckEquals(43, valueSingle);
+  eventSingle.Enabled := False; eventSingle.Invoke(42);
   eventDouble.Invoke(42); Inc(expected);
+  valueDouble := 42; eventDoubleVar.Invoke(valueDouble); Inc(expected); CheckEquals(43, valueDouble);
+  eventDouble.Enabled := False; eventDouble.Invoke(42);
   eventExtended.Invoke(42); Inc(expected);
+  valueExtended := 42; eventExtendedVar.Invoke(valueExtended); Inc(expected); CheckEquals(43, valueExtended);
+  eventExtended.Enabled := False; eventExtended.Invoke(42);
+  eventNotifyEvent.Invoke(HandleChanged); Inc(expected);
+  valueNotifyEvent := HandleChanged; eventNotifyEventVar.Invoke(valueNotifyEvent); Inc(expected); Check(not Assigned(valueNotifyEvent));
+  eventNotifyEvent.Enabled := False; eventNotifyEvent.Invoke(HandleChanged);
 
   CheckEquals(expected, fHandlerInvokeCount);
 end;
@@ -1299,6 +1741,22 @@ begin
   CheckTrue(fEvent.UseFreeNotification);
 end;
 
+procedure TTestMulticastEvent.TestShortStringParams;
+var
+  event: Event<TEventWithShortStringParams>;
+  expected: Integer;
+begin
+  expected := 1;
+
+  event.Add(HandlerWithShortStringParams);
+  HandlerWithShortStringParams('a', 'bb', 'ccc', 'dddd');
+  event.Invoke('a', 'bb', 'ccc', 'dddd'); Inc(expected);
+  event.Enabled := False;
+  event.Invoke('a', 'bb', 'ccc', 'dddd');
+
+  CheckEquals(expected, fHandlerInvokeCount);
+end;
+
 procedure TTestMulticastEvent.TestStackParams;
 var
   event: Event<TEventWithStackParams>;
@@ -1313,6 +1771,24 @@ begin
   event.Add(HandlerWithStackParams);
   HandlerWithStackParams(42, 43, 44, 45, args);
   event.Invoke(42, 43, 44, 45, args); Inc(expected);
+  event.Enabled := False;
+  event.Invoke(42, 43, 44, 45, args);
+
+  CheckEquals(expected, fHandlerInvokeCount);
+end;
+
+procedure TTestMulticastEvent.TestStackParams2;
+var
+  event: Event<TEventWithStackParams2>;
+  expected: Integer;
+begin
+  expected := 1;
+
+  event.Add(HandlerWithStackParams2);
+  HandlerWithStackParams2(42, 43, 44, 45, 46, 47, 48);
+  event.Invoke(42, 43, 44, 45, 46, 47, 48); Inc(expected);
+  event.Enabled := False;
+  event.Invoke(42, 43, 44, 45, 46, 47, 48);
 
   CheckEquals(expected, fHandlerInvokeCount);
 end;
@@ -1327,6 +1803,8 @@ begin
   event.Add(HandlerWithRegisterParams);
   HandlerWithRegisterParams(42, 43, 44);
   event.Invoke(42, 43, 44); Inc(expected);
+  event.Enabled := False;
+  event.Invoke(42, 43, 44);
 
   CheckEquals(expected, fHandlerInvokeCount);
 end;
@@ -1341,6 +1819,8 @@ begin
   event.Add(HandlerWithFloatParams);
   HandlerWithFloatParams(42, 43, 44);
   event.Invoke(42, 43, 44); Inc(expected);
+  event.Enabled := False;
+  event.Invoke(42, 43, 44);
 
   CheckEquals(expected, fHandlerInvokeCount);
 end;
@@ -2092,22 +2572,22 @@ end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_ShortString;
 begin
-  MatchType(TypeInfo(ShortString), tkString, PointerSize);
+  MatchType(TypeInfo(ShortString), tkString, SizeOf(ShortString));
 end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_ShortString0;
 begin
-  MatchType(TypeInfo(TShortString0), tkString, PointerSize);
+  MatchType(TypeInfo(TShortString0), tkString, SizeOf(TShortString0));
 end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_ShortString1;
 begin
-  MatchType(TypeInfo(TShortString1), tkString, PointerSize);
+  MatchType(TypeInfo(TShortString1), tkString, SizeOf(TShortString1));
 end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_ShortString2;
 begin
-  MatchType(TypeInfo(TShortString2), tkString, PointerSize);
+  MatchType(TypeInfo(TShortString2), tkString, SizeOf(TShortString2));
 end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_Interface;
@@ -2147,12 +2627,12 @@ end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_ShortString255;
 begin
-  MatchType(TypeInfo(TShortString255), tkString, PointerSize);
+  MatchType(TypeInfo(TShortString255), tkString, SizeOf(TShortString255));
 end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_ShortString7;
 begin
-  MatchType(TypeInfo(TShortString7), tkString, PointerSize);
+  MatchType(TypeInfo(TShortString7), tkString, SizeOf(TShortString7));
 end;
 
 procedure TTestSpringEventsMethods.Test_GetTypeSize_string;
@@ -3733,12 +4213,58 @@ begin
   CheckEquals(9, index);
 end;
 
-procedure TArrayTest.TestLastIndexOf;
-var
-  index: Integer;
+procedure TArrayTest.TestIndexOf;
 begin
-  index := TArray.LastIndexOf<Integer>(TestData, 5);
-  CheckEquals(6, index);
+  TIndexOfTests(Self).TestIndexOf<TArray<Integer>>(
+    function(const seq: IEnumerable<Integer>): TArray<Integer>
+    begin
+      Result := seq.ToArray;
+    end,
+    function(const b: TArray<Integer>; const v: Integer): Integer
+    begin
+      Result := TArray.IndexOf<Integer>(b, v);
+    end,
+    function(const b: TArray<Integer>; const v, i: Integer): Integer
+    begin
+      Result := TArray.IndexOf<Integer>(b, v, i);
+    end,
+    function(const b: TArray<Integer>; const v, i, c: Integer): Integer
+    begin
+      Result := TArray.IndexOf<Integer>(b, v, i, c);
+    end,
+    function(const b: TArray<Integer>; const v, i, c: Integer; const eq: IEqualityComparer<Integer>): Integer
+    begin
+      Result := TArray.IndexOf<Integer>(b, v, i, c, eq);
+    end);
+end;
+
+procedure TArrayTest.TestLastIndexOf;
+begin
+  TIndexOfTests(Self).TestLastIndexOf<TArray<Integer>>(
+    function(const seq: IEnumerable<Integer>): TArray<Integer>
+    begin
+      Result := seq.ToArray;
+    end,
+    function(const b: TArray<Integer>; const v: Integer): Integer
+    begin
+      Result := TArray.LastIndexOf<Integer>(b, v);
+    end,
+    function(const b: TArray<Integer>; const v: Integer; const eq: IEqualityComparer<Integer>): Integer
+    begin
+      Result := TArray.LastIndexOf<Integer>(b, v, High(b), Length(b), eq);
+    end,
+    function(const b: TArray<Integer>; const v, i: Integer): Integer
+    begin
+      Result := TArray.LastIndexOf<Integer>(b, v, i);
+    end,
+    function(const b: TArray<Integer>; const v, i, c: Integer): Integer
+    begin
+      Result := TArray.LastIndexOf<Integer>(b, v, i, c);
+    end,
+    function(const b: TArray<Integer>; const v, i, c: Integer; const eq: IEqualityComparer<Integer>): Integer
+    begin
+      Result := TArray.LastIndexOf<Integer>(b, v, i, c, eq);
+    end);
 end;
 
 procedure TArrayTest.TestLastIndexOfSubRange;
@@ -3886,15 +4412,17 @@ begin
 end;
 
 procedure TArrayTest.TestStableSortLongRuns;
+const
+  Len = 100000;
 var
   i: Integer;
   values: TArray<Integer>;
 begin
-  SetLength(values, 100000);
+  SetLength(values, Len);
   for i := Low(values) to High(values) do
     values[i] := i;
   for i := 1 to 5 do
-    TArray.Swap<Integer>(@values[Random(Length(values))], @values[Random(Length(values))]);
+    TArray.Swap<Integer>(@values[Random(Len)], @values[Random(Len)]);
   TArray.StableSort<Integer>(values);
   for i := Low(values) + 1 to High(values) do
     CheckTrue(values[i - 1] < values[i]);
@@ -4384,29 +4912,54 @@ end;
 
 {$REGION 'TTestBaseRoutines'}
 
-procedure TTestBaseRoutines.TestNextPowerOf2;
+procedure TTestBaseRoutines.TestLog2;
 
-  procedure TestRange(Low, High, Power: NativeInt);
+  procedure TestRange(Low, High, Log: NativeUInt);
   var
-    i: NativeInt;
+    i: NativeUInt;
   begin
     for i := Low to High do
-      CheckEquals(Power, NextPowerOf2(i), Format('NextPowerOf2(%d) did not return %d', [i, Power]));
+      CheckEquals(Log, Spring.Log2(i), Format('Log2(%u) did not return %u', [i, Log]));
+  end;
+
+const
+  MaxLog2 = SizeOf(NativeUInt) * 8 - 1;
+begin
+  TestRange(  0,  1,  0);
+  TestRange(  2,  3,  1);
+  TestRange(  4,  7,  2);
+  TestRange(  8, 15,  3);
+  TestRange( 16, 31,  4);
+  TestRange( 32, 63,  5);
+
+  TestRange(High(NativeUInt) div 2 + NativeUInt(2), High(NativeUInt) div 2 + NativeUInt(2), MaxLog2);
+  TestRange(High(NativeUInt) - 1, High(NativeUInt), MaxLog2);
+end;
+
+procedure TTestBaseRoutines.TestRoundUpToPowerOf2;
+
+  procedure TestRange(Low, High, Power: NativeUInt);
+  var
+    i: NativeUInt;
+  begin
+    for i := Low to High do
+      CheckEquals(Power, RoundUpToPowerOf2(i), Format('RoundUpToPowerOf2(%u) did not return %u', [i, Power]));
   end;
 
 const
   Pow_2_30 = 1 shl 30;
 begin
-  TestRange(-50,  0,  1);
-  TestRange(  1,  1,  2);
-  TestRange(  2,  3,  4);
-  TestRange(  4,  7,  8);
-  TestRange(  8, 15, 16);
-  TestRange( 16, 31, 32);
+  TestRange(  0,  0,  0);
+  TestRange(  1,  1,  1);
+  TestRange(  2,  2,  2);
+  TestRange(  3,  4,  4);
+  TestRange(  5,  8,  8);
+  TestRange(  9, 16, 16);
+  TestRange( 17, 32, 32);
 
   TestRange(Pow_2_30 - 50, Pow_2_30 - 1, Pow_2_30);
-  TestRange(High(NativeInt) div 2 + 1, High(NativeInt) div 2 + 2, Low(NativeInt));
-  TestRange(High(NativeInt) - 1, High(NativeInt), Low(NativeInt));
+  TestRange(High(NativeUInt) div 2 + NativeUInt(2), High(NativeUInt) div 2 + NativeUInt(2), 0);
+  TestRange(High(NativeUInt) - 1, High(NativeUInt), 0);
 end;
 
 {$ENDREGION}

@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -28,27 +28,28 @@ unit Spring.VirtualInterface;
 
 interface
 
+{$IFNDEF DELPHIXE}
 uses
-{$IFDEF DELPHIXE}
+  Rtti;
+
+type
+  TVirtualInterfaceInvokeEvent = Rtti.TVirtualInterfaceInvokeEvent;
+  TVirtualInterface = Rtti.TVirtualInterface;
+
+implementation
+
+uses
+  Spring.Patches.RSP13163;
+{$ELSE}
+uses
   Generics.Collections,
-{$ENDIF}
   Rtti,
-{$IFDEF DELPHIXE}
   TypInfo,
-{$ENDIF}
   Spring.MethodIntercept;
 
 type
-{$IFDEF DELPHIXE2_UP}
-  TVirtualInterfaceInvokeEvent = Rtti.TVirtualInterfaceInvokeEvent;
-{$ELSE}
   TVirtualInterfaceInvokeEvent = reference to procedure(Method: TRttiMethod;
     const Args: TArray<TValue>; out Result: TValue);
-{$ENDIF}
-
-{$IFDEF DELPHIXE2_UP}
-  TVirtualInterface = Rtti.TVirtualInterface;
-{$ELSE}
   TVirtualInterface = class(TInterfacedObject, IInterface)
   private
     fMethodTable: Pointer;
@@ -74,25 +75,18 @@ type
     function QueryInterface(const IID: TGUID; out Obj): HResult; virtual; stdcall;
     property OnInvoke: TVirtualInterfaceInvokeEvent read fOnInvoke write fOnInvoke;
   end;
-{$ENDIF}
 
 implementation
 
 uses
-{$IFDEF DELPHIXE}
   RTLConsts,
   Spring,
   Spring.Patches.GetInvokeInfo,
   Spring.Patches.QC93646,
   Spring.Patches.QC98671,
   Spring.Patches.QC107219,
-{$ENDIF}
   Spring.Patches.RSP13163;
 
-
-{$REGION 'TVirtualInterface'}
-
-{$IFNDEF DELPHIXE2_UP}
 constructor TVirtualInterface.Create(typeInfo: PTypeInfo);
 var
   i: Integer;
@@ -203,8 +197,5 @@ asm
   jmp dword ptr [eax+$04]
 end;
 {$ENDIF}
-
-{$ENDREGION}
-
 
 end.

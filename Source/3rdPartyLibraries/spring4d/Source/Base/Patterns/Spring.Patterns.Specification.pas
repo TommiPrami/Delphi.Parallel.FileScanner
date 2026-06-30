@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -30,6 +30,8 @@ interface
 
 uses
   Spring;
+
+{$IFDEF DELPHIXE6_UP}{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS(FieldVisibility)}{$ENDIF}
 
 type
 
@@ -94,19 +96,42 @@ type
     constructor Create(const left, right: ISpecification<T>);
   end;
 
-  TLogicalNotSpecification<T> = class sealed(TUnarySpecification<T>)
+  TLogicalNotSpecification<T> = class sealed(TRefCountedObject, ISpecification<T>)
   protected
-    function IsSatisfiedBy(const item: T): Boolean; override;
+    fValue: ISpecification<T>;
+  protected
+    function IsSatisfiedBy(const item: T): Boolean;
+  public
+    constructor Create(const value: ISpecification<T>);
   end;
 
-  TLogicalAndSpecification<T> = class sealed(TBinarySpecification<T>)
+  TLogicalAndSpecification<T> = class sealed(TRefCountedObject, ISpecification<T>)
   protected
-    function IsSatisfiedBy(const item: T): Boolean; override;
+    fLeft: ISpecification<T>;
+    fRight: ISpecification<T>;
+  protected
+    function IsSatisfiedBy(const item: T): Boolean;
+  public
+    constructor Create(const left, right: ISpecification<T>);
   end;
 
-  TLogicalOrSpecification<T> = class sealed(TBinarySpecification<T>)
+  TLogicalOrSpecification<T> = class sealed(TRefCountedObject, ISpecification<T>)
   protected
-    function IsSatisfiedBy(const item: T): Boolean; override;
+    fLeft: ISpecification<T>;
+    fRight: ISpecification<T>;
+  protected
+    function IsSatisfiedBy(const item: T): Boolean;
+  public
+    constructor Create(const left, right: ISpecification<T>);
+  end;
+
+  TSpecificationHelper = record
+    class procedure LogicalAnd_Object(const left, right: IInterface; var result); static;
+    class procedure LogicalOr_Object(const left, right: IInterface; var result); static;
+    class procedure LogicalNot_Object(const value: IInterface; var result); static;
+    class procedure LogicalAnd_Interface(const left, right: IInterface; var result); static;
+    class procedure LogicalOr_Interface(const left, right: IInterface; var result); static;
+    class procedure LogicalNot_Interface(const value: IInterface; var result); static;
   end;
 
 implementation
@@ -140,7 +165,7 @@ end;
 class operator Specification<T>.Implicit(
   const specification: Specification<T>): Predicate<T>;
 begin
-  ISpecification<T>(Result) := specification.fInstance;
+  Result := Predicate<T>(specification.fInstance);
 end;
 
 class operator Specification<T>.In(const left: T;
@@ -170,22 +195,46 @@ end;
 class operator Specification<T>.LogicalAnd(const left,
   right: Specification<T>): Specification<T>;
 begin
-  Result.fInstance := TLogicalAndSpecification<T>.Create(
-    left.fInstance, right.fInstance)
+{$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkClass: TSpecificationHelper.LogicalAnd_Object(
+      left.fInstance, right.fInstance, Result.fInstance);
+    tkInterface: TSpecificationHelper.LogicalAnd_Interface(
+      left.fInstance, right.fInstance, Result.fInstance);
+  else{$ELSE}begin{$ENDIF}
+    Result.fInstance := TLogicalAndSpecification<T>.Create(
+      left.fInstance, right.fInstance);
+  end;
 end;
 
 class operator Specification<T>.LogicalOr(const left,
   right: Specification<T>): Specification<T>;
 begin
-  Result.fInstance := TLogicalOrSpecification<T>.Create(
-    left.fInstance, right.fInstance);
+{$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkClass: TSpecificationHelper.LogicalOr_Object(
+      left.fInstance, right.fInstance, Result.fInstance);
+    tkInterface: TSpecificationHelper.LogicalOr_Interface(
+      left.fInstance, right.fInstance, Result.fInstance);
+  else{$ELSE}begin{$ENDIF}
+    Result.fInstance := TLogicalOrSpecification<T>.Create(
+      left.fInstance, right.fInstance);
+  end;
 end;
 
 class operator Specification<T>.LogicalNot(
   const value: Specification<T>): Specification<T>;
 begin
-  Result.fInstance := TLogicalNotSpecification<T>.Create(
-    value.fInstance);
+{$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkClass: TSpecificationHelper.LogicalNot_Object(
+      value.fInstance, Result.fInstance);
+    tkInterface: TSpecificationHelper.LogicalNot_Interface(
+      value.fInstance, Result.fInstance);
+  else{$ELSE}begin{$ENDIF}
+    Result.fInstance := TLogicalNotSpecification<T>.Create(
+      value.fInstance);
+  end;
 end;
 
 {$ENDREGION}
@@ -214,6 +263,11 @@ end;
 
 {$REGION 'TLogicalNotSpecification<T>'}
 
+constructor TLogicalNotSpecification<T>.Create(const value: ISpecification<T>);
+begin
+  fValue := value;
+end;
+
 function TLogicalNotSpecification<T>.IsSatisfiedBy(const item: T): Boolean;
 begin
   Result := not fValue.IsSatisfiedBy(item);
@@ -223,6 +277,12 @@ end;
 
 
 {$REGION 'TLogicalAndSpecification<T>'}
+
+constructor TLogicalAndSpecification<T>.Create(const left, right: ISpecification<T>);
+begin
+  fLeft := left;
+  fRight := right;
+end;
 
 function TLogicalAndSpecification<T>.IsSatisfiedBy(const item: T): Boolean;
 begin
@@ -234,9 +294,58 @@ end;
 
 {$REGION 'TLogicalOrSpecification<T>'}
 
+constructor TLogicalOrSpecification<T>.Create(const left, right: ISpecification<T>);
+begin
+  fLeft := left;
+  fRight := right;
+end;
+
 function TLogicalOrSpecification<T>.IsSatisfiedBy(const item: T): Boolean;
 begin
   Result := fLeft.IsSatisfiedBy(item) or fRight.IsSatisfiedBy(item);
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TSpecificationHelper'}
+
+class procedure TSpecificationHelper.LogicalAnd_Object(const left, right: IInterface; var result);
+begin
+  ISpecification<TObject>(result) := TLogicalAndSpecification<TObject>.Create(
+    ISpecification<TObject>(left), ISpecification<TObject>(right));
+end;
+
+class procedure TSpecificationHelper.LogicalOr_Object(const left, right: IInterface; var result);
+begin
+  ISpecification<TObject>(result) := TLogicalOrSpecification<TObject>.Create(
+    ISpecification<TObject>(left), ISpecification<TObject>(right));
+end;
+
+class procedure TSpecificationHelper.LogicalNot_Object(const value: IInterface;
+  var result);
+begin
+  ISpecification<TObject>(result) := TLogicalNotSpecification<TObject>.Create(
+    ISpecification<TObject>(value));
+end;
+
+class procedure TSpecificationHelper.LogicalAnd_Interface(const left, right: IInterface; var result);
+begin
+  ISpecification<IInterface>(result) := TLogicalAndSpecification<IInterface>.Create(
+    ISpecification<IInterface>(left), ISpecification<IInterface>(right));
+end;
+
+class procedure TSpecificationHelper.LogicalOr_Interface(const left, right: IInterface; var result);
+begin
+  ISpecification<IInterface>(result) := TLogicalOrSpecification<IInterface>.Create(
+    ISpecification<IInterface>(left), ISpecification<IInterface>(right));
+end;
+
+class procedure TSpecificationHelper.LogicalNot_Interface(
+  const value: IInterface; var result);
+begin
+  ISpecification<IInterface>(result) := TLogicalNotSpecification<IInterface>.Create(
+    ISpecification<IInterface>(value));
 end;
 
 {$ENDREGION}

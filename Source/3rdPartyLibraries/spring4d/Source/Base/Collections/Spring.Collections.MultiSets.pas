@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -193,8 +193,7 @@ implementation
 
 uses
   Spring.Comparers,
-  Spring.Events.Base,
-  Spring.ResourceStrings;
+  Spring.Events.Base;
 
 
 {$REGION 'TAbstractMultiSet<T>'}
@@ -275,9 +274,9 @@ var
 begin
   inherited AfterConstruction;
 
-  elementType := GetElementType;
+  elementType := fElementType;
   fHashTable.ItemsInfo := TypeInfo(TItems);
-  fHashTable.Initialize(@TComparerThunks<T>.Equals, @TComparerThunks<T>.GetHashCode, elementType);
+  fHashTable.Initialize(TComparerThunks<T>.Equals, TComparerThunks<T>.GetHashCode, elementType);
   {$IFDEF DELPHIXE7_UP}
   if fHashTable.DefaultComparer then
     fHashTable.Find := @THashTable<T>.FindWithoutComparer
@@ -489,11 +488,11 @@ begin
   begin
     entry := IHashTable<T>(@fHashTable).Find(item, InsertNonExisting);
     entry.Item := item;
-//    entry.Count := 0;
     Inc(fCount, count - entry.Count);
     i := entry.Count;
     entry.Count := count;
     if Assigned(Notify) then
+    begin
       while i > count do
       begin
         Notify(Self, item, caRemoved);
@@ -504,6 +503,7 @@ begin
         Notify(Self, item, caAdded);
         Inc(i);
       end;
+    end;
   end;
 end;
 
@@ -582,7 +582,7 @@ constructor TTreeMultiSet<T>.Create(const comparer: IComparer<T>);
 begin
   fTree := TRedBlackTreeBase<T, Integer>.Create(comparer);
   fItems := TTreeMapInnerCollection.Create(TTreeMapInnerCollection<T>,
-    Self, fTree, @fVersion, nil, GetElementType, 0);
+    Self, fTree, @fVersion, nil, fElementType, 0);
   fEntries := TTreeMapInnerCollection.Create(TTreeMapInnerCollection<TPair<T,Integer>>,
     Self, fTree, @fVersion, nil, TypeInfo(TEntry), 0);
 end;
@@ -763,12 +763,16 @@ begin
   begin
     node := fTree.FindNode(item);
     if Assigned(node) then
+    begin
+      Dec(fCount, PNode(node).Count);
       fTree.DeleteNode(node);
+    end;
   end
   else
   begin
     node := fTree.AddNode(item, True);
     node := Pointer(IntPtr(node) and not 1);
+    Inc(fCount, count - PNode(node).Count);
     PNode(node).Count := count;
   end;
 end;
@@ -836,3 +840,4 @@ end;
 
 
 end.
+

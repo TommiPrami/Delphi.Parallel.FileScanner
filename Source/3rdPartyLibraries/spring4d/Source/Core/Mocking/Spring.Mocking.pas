@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -277,7 +277,6 @@ type
 implementation
 
 uses
-  Spring.Helpers,
   Spring.Mocking.Core,
   Spring.Mocking.Interceptor;
 
@@ -358,7 +357,7 @@ end;
 
 function Setup<T>.Returns<TResult>(const value: TResult): IWhen<T>;
 begin
-  Result := fSetup.Returns(TValue.From(value, TypeInfo(TResult)));
+  Result := fSetup.Returns(TValue.From(TypeInfo(TResult), value));
 end;
 
 function Setup<T>.Returns<TResult>(const values: array of TResult): IWhen<T>;

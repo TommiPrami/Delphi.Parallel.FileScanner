@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -599,30 +599,31 @@ procedure TAbstractMethodInspector.DoProcessModel(const kernel: TKernel;
 
   function HasVirtualAbstractMethod(const rttiType: TRttiType): Boolean;
   var
-    virtualMethods: IEnumerable<TRttiMethod>;
-    virtualMethodsGrouped: IEnumerable<IGrouping<SmallInt,TRttiMethod>>;
+    // TODO: temporary fix to reduce binary bloat until GroupBy and Select fold
+    virtualMethods: IEnumerable<TObject>;
+    virtualMethodsGrouped: IEnumerable<IGrouping<Integer,TObject>>;
   begin
-    virtualMethods := rttiType.Methods.Where(
+    virtualMethods := IEnumerable<TObject>(rttiType.Methods.Where(
       function(const method: TRttiMethod): Boolean
       begin
         Result := (method.DispatchKind = dkVtable) and (method.VirtualIndex >= 0);
-      end);
-    virtualMethodsGrouped := TEnumerable.GroupBy<TRttiMethod,SmallInt>(
+      end));
+    virtualMethodsGrouped := TEnumerable.GroupBy<TObject,Integer>(
       virtualMethods,
-      function(const method: TRttiMethod): SmallInt
+      function(const method: TObject): Integer
       begin
-        Result := method.VirtualIndex;
+        Result := TRttiMethod(method).VirtualIndex;
       end);
-    virtualMethods := TEnumerable.Select<IGrouping<SmallInt,TRttiMethod>, TRttiMethod>(
+    virtualMethods := TEnumerable.Select<IGrouping<Integer,TObject>, TObject>(
       virtualMethodsGrouped,
-      function(const group: IGrouping<SmallInt,TRttiMethod>): TRttiMethod
+      function(const group: IGrouping<Integer,TObject>): TObject
       begin
         Result := group.First;
       end);
     Result := virtualMethods.Any(
-      function(const method: TRttiMethod): Boolean
+      function(const method: TObject): Boolean
       begin
-        Result := method.IsAbstract;
+        Result := TRttiMethod(method).IsAbstract;
       end);
   end;
 

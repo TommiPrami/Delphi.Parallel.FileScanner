@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -429,7 +429,7 @@ type
     procedure TrimExcess;
 
     property Capacity: Integer read GetCapacity write SetCapacity;
-    property Count: Integer read GetCount;
+    property Count: Integer read fCount;
   end;
 
   TRedBlackTree<T> = class(TRedBlackTreeBase<T>, IInterface, IBinaryTree<T>, IRedBlackTree<T>)
@@ -534,7 +534,7 @@ begin
   n := DynArrayLength(fItems) + 1;
   Inc(fCapacity, BlockSize);
   DynArraySetLength(fItems, arrayType, 1, @n);
-  elemType := Pointer(PDynArrayTypeInfo(PByte(arrayType) + Byte(PDynArrayTypeInfo(arrayType).name)).elType^);
+  elemType := GetTypeInfoData(arrayType).elType^;
   blockLength := BlockSize;
   DynArraySetLength(TArray<Pointer>(fItems)[n-1], elemType, 1, @blockLength);
 end;
@@ -550,11 +550,13 @@ begin
     Inc(newLength);
   fCapacity := newLength * BlockSize;
   DynArraySetLength(fItems, arrayType, 1, @newLength);
-  elemType := Pointer(PDynArrayTypeInfo(PByte(arrayType) + Byte(PDynArrayTypeInfo(arrayType).name)).elType^);
+  elemType := GetTypeInfoData(arrayType).elType^;
   blockLength := BlockSize;
   for i := oldLength to newLength - 1 do
     DynArraySetLength(TArray<Pointer>(fItems)[i], elemType, 1, @blockLength);
 end;
+
+{$ENDREGION}
 
 
 {$REGION 'TBlockAllocatedArray<T>'}
@@ -791,6 +793,7 @@ procedure TRedBlackTree.Clear;
 begin
   fRoot := nil;
   fCount := 0;
+  fFreeNode := nil;
 end;
 
 procedure TRedBlackTree.Delete(node: PNode);

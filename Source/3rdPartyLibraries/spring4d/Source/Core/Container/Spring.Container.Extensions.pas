@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -33,7 +33,8 @@ uses
 
 type
   /// <summary>
-  ///   Base class for all <see cref="TContainer" /> extension objects.
+  ///   Base class for all <see cref="Spring.Container|TContainer" /> extension
+  ///   objects.
   /// </summary>
   TContainerExtension = class(TInterfacedObject, IContainerExtension)
   private

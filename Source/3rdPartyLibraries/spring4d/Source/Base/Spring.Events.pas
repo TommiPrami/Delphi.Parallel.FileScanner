@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -370,11 +370,19 @@ constructor TEvent.TMethodInfo.Create(typeData: PTypeData);
     Result := P;
   end;
 
-  function PassByRef(typeInfo: PTypeInfo; paramFlags: TParamFlags): Boolean;
+  {$IFDEF CPUX86}
+  function CanPassInRegister(typeInfo: PTypeInfo; paramFlags: TParamFlags): Boolean;
   begin
-    Result := (paramFlags * [pfVar, pfAddress, pfReference, pfOut] <> [])
-      and not (typeInfo.Kind in [tkFloat, tkMethod, tkInt64]);
+    if paramFlags * [pfVar, pfAddress, pfReference, pfOut] = [] then
+      case typeInfo.Kind of
+        tkFloat, tkMethod, tkInt64:
+          Exit(False);
+        tkArray, tkRecord:
+          Exit(GetTypeSize(typeInfo) in [1, 2, 4]);
+      end;
+    Result := True;
   end;
+  {$ENDIF}
 
   function Align4(value: Integer): Integer; inline;
   begin
@@ -413,7 +421,7 @@ begin
     if not Assigned(ParamInfos[i]) then
       raise EInvalidOperationException.CreateRes(@SNoTypeInfo);
 {$IFNDEF CPUX64}
-    if PassByRef(ParamInfos[i]^, TParamFlags(P[0])) then
+    if CanPassInRegister(ParamInfos[i]^, TParamFlags(P[0])) then
     begin
       if curReg < paStack then
         Inc(curReg)
@@ -423,10 +431,7 @@ begin
     else
     begin
       Size := GetTypeSize(ParamInfos[i]^);
-      if (curReg < paStack) and (Size in [1, 2, 4]) and (ParamInfos[i]^.Kind <> tkFloat) then
-        Inc(curReg)
-      else
-        Inc(StackSize, Align4(Size));
+      Inc(StackSize, Align4(Size));
     end;
 {$ELSE}
     Inc(StackSize, PointerSize);
@@ -446,33 +451,32 @@ end;
 procedure TEvent.InvokeEventHandlerStub;
 {$IFNDEF CPUX64}
 asm
-  bt [eax].fRefCount,30                 // if Enabled then
-  jc @@exit
-
   // push registers - order is important, they are part of the TParameters record
   push eax
   push ecx
   push edx
 
+  // IMPORTANT: don't move this up before the push
+  // Because that will cause the debugger to not properly show the call stack
+  bt [eax].fRefCount,30                 // if Enabled then
+  jc @@skipCall
+
   mov edx,esp                           // put address to stack into Params
   mov ecx,[eax].fMethodInfo.StackSize   // put StackSize
   call [eax].fMethodInvoke
 
+@@skipCall:
   // pop registers - don't care for preserving EAX as we don't support result
   pop edx
   pop ecx
   pop eax
 
-  mov ecx,[eax].fMethodInfo.StackSize
-  test ecx,ecx        // if StackSize > 0
-  jz @@exit
-
   // clean up the stack - like the "ret n" instruction does
-  mov eax,[esp]       // load the return address
-  mov [esp+ecx],eax   // write return address for ret
-  add esp,ecx         // pop from the stack
-
-@@exit:
+  // if StackSize = 0 this is basically a no op but not worth a conditional jump
+  mov ecx,[eax].fMethodInfo.StackSize   // load the StackSize
+  mov edx,[esp]                         // load the return address
+  mov [esp+ecx],edx                     // write return address for ret
+  add esp,ecx                           // pop from the stack
 end;
 {$ELSE}
 
@@ -512,7 +516,9 @@ end;
 constructor TEvent.Create(typeInfo: PTypeInfo);
 var
   method: TRttiMethod;
-{$IFNDEF USE_RTTI_FOR_PROXY}
+{$IFDEF USE_RTTI_FOR_PROXY}
+  rttiType: TRttiType;
+{$ELSE}
   typeData: PTypeData;
   invokeEvent: procedure(Params: PParameters; StackSize: Integer) of object;
 {$ENDIF}
@@ -527,8 +533,9 @@ begin
     tkMethod:
     begin
 {$IFDEF USE_RTTI_FOR_PROXY}
-      TMethodImplementation(fProxy) := TRttiInvokableType(typeInfo.RttiType)
-        .CreateImplementation(nil, InternalInvokeMethod);
+      rttiType := typeInfo.RttiType;
+      TMethodImplementation(fProxy) := TRttiInvokableType(rttiType)
+        .CreateImplementation(rttiType, InternalInvokeMethod);
       TMethod(fInvoke) := TMethodImplementation(fProxy).AsMethod;
 {$ELSE}
       typeData := typeInfo.TypeData;
@@ -580,7 +587,7 @@ procedure TEvent.InternalInvokeMethod(UserData: Pointer;
   const Args: TArray<TValue>;
   out Result: TValue); //FI:O804
 var
-  argsWithoutSelf: TArray<TValue>;
+  argCountWithoutSelf: Integer;
   guard: GuardedPointer;
   handlers: PMethodArray;
   i: Integer;
@@ -588,14 +595,17 @@ var
 begin
   if CanInvoke then
   begin
-    argsWithoutSelf := Copy(Args, 1);
+    argCountWithoutSelf := Length(Args) - 1;
     guard := AcquireGuard(fHandlers);
     handlers := guard;
     try
       for i := 0 to DynArrayHigh(handlers) do
       begin
         TValue.Make(@TMethod(handlers[i]), TRttiInvokableType(UserData).Handle, value);
-        TRttiInvokableType(UserData).Invoke(value, argsWithoutSelf);
+        {$R-}
+        // we want to directly pass the given Args further without the first one
+        TRttiInvokableType(UserData).Invoke(value, Slice(TSlice<TValue>((@Args[1])^), argCountWithoutSelf));
+        {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
       end;
     finally
       guard.Release;

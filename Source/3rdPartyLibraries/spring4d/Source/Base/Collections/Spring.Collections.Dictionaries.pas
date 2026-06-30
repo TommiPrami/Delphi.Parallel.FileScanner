@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -97,7 +97,7 @@ type
     function TryInsert(const key: TKey; const value: TValue; behavior: Byte): Boolean;
     function DoRemove(const entry: THashTableEntry; action: TCollectionChangedAction): Boolean;
   public
-    constructor Create(capacity: Integer;
+    constructor Create(elementType: PTypeInfo; capacity: Integer;
       const keyComparer: IEqualityComparer<TKey>;
       const valueComparer: IEqualityComparer<TValue>;
       ownerships: TDictionaryOwnerships);
@@ -131,8 +131,9 @@ type
   {$REGION 'Implements IDictionary<TKey, TValue>'}
     procedure AddOrSetValue(const key: TKey; const value: TValue);
     function Extract(const key: TKey): TValue; overload;
-    function GetValueOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
-    function GetValueOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey; const defaultValue: TValue; out exists: Boolean): Ref<TValue>.PT; overload;
     function GetValueOrDefault(const key: TKey): TValue; overload;
     function GetValueOrDefault(const key: TKey; const defaultValue: TValue): TValue; overload;
     function TryExtract(const key: TKey; var value: TValue): Boolean;
@@ -237,8 +238,9 @@ type
     {$REGION 'Implements IDictionary<TValue, TKey>'}
       procedure AddOrSetValue(const value: TValue; const key: TKey);
       function Extract(const value: TValue): TKey; overload;
-      function GetValueOrAddDefault(const value: TValue): Ref<TKey>.PT; overload;
-      function GetValueOrAddDefault(const value: TValue; const defaultKey: TKey): Ref<TKey>.PT; overload;
+      function GetValueRefOrAddDefault(const value: TValue): Ref<TKey>.PT; overload;
+      function GetValueRefOrAddDefault(const value: TValue; const defaultKey: TKey): Ref<TKey>.PT; overload;
+      function GetValueRefOrAddDefault(const value: TValue; const defaultKey: TKey; out exists: Boolean): Ref<TKey>.PT; overload;
       function GetValueOrDefault(const value: TValue): TKey; overload;
       function GetValueOrDefault(const value: TValue; const defaultKey: TKey): TKey; overload;
       function TryExtract(const value: TValue; var key: TKey): Boolean;
@@ -366,7 +368,7 @@ type
     procedure ValueChanged(const item: TValue; action: TCollectionChangedAction);
     property Capacity: Integer read GetCapacity;
   public
-    constructor Create(capacity: Integer;
+    constructor Create(elementType: PTypeInfo; capacity: Integer;
       const keyComparer: IEqualityComparer<TKey>;
       const valueComparer: IEqualityComparer<TValue>;
       ownerships: TDictionaryOwnerships);
@@ -400,8 +402,9 @@ type
   {$REGION 'Implements IDictionary<TKey, TValue>'}
     procedure AddOrSetValue(const key: TKey; const value: TValue);
     function Extract(const key: TKey): TValue; overload;
-    function GetValueOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
-    function GetValueOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey; const defaultValue: TValue; out exists: Boolean): Ref<TValue>.PT; overload;
     function GetValueOrDefault(const key: TKey): TValue; overload;
     function GetValueOrDefault(const key: TKey; const defaultValue: TValue): TValue; overload;
     function TryExtract(const key: TKey; var value: TValue): Boolean;
@@ -502,8 +505,9 @@ type
   {$REGION 'Implements IDictionary<TKey, TValue>'}
     procedure AddOrSetValue(const key: TKey; const value: TValue);
     function Extract(const key: TKey): TValue; overload;
-    function GetValueOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
-    function GetValueOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey; const defaultValue: TValue): Ref<TValue>.PT; overload;
+    function GetValueRefOrAddDefault(const key: TKey; const defaultValue: TValue; out exists: Boolean): Ref<TValue>.PT; overload;
     function GetValueOrDefault(const key: TKey): TValue; overload;
     function GetValueOrDefault(const key: TKey; const defaultValue: TValue): TValue; overload;
     function TryExtract(const key: TKey; var value: TValue): Boolean;
@@ -517,40 +521,6 @@ type
 
   end;
 
-  TFoldedDictionary<TKey, TValue> = class(TDictionary<TKey, TValue>)
-  private
-    fElementType: PTypeInfo;
-    fKeyType: PTypeInfo;
-    fValueType: PTypeInfo;
-  protected
-    function GetElementType: PTypeInfo; override;
-    function GetKeyType: PTypeInfo; override;
-    function GetValueType: PTypeInfo; override;
-  public
-    constructor Create(keyType, valueType, elementType: PTypeInfo;
-      capacity: Integer;
-      const keyComparer: IEqualityComparer<TKey>;
-      const valueComparer: IEqualityComparer<TValue>;
-      ownerships: TDictionaryOwnerships);
-  end;
-
-  TFoldedBidiDictionary<TKey, TValue> = class(TBidiDictionary<TKey, TValue>)
-  private
-    fElementType: PTypeInfo;
-    fKeyType: PTypeInfo;
-    fValueType: PTypeInfo;
-  protected
-    function GetElementType: PTypeInfo; override;
-    function GetKeyType: PTypeInfo; override;
-    function GetValueType: PTypeInfo; override;
-  public
-    constructor Create(keyType, valueType, elementType: PTypeInfo;
-      capacity: Integer;
-      const keyComparer: IEqualityComparer<TKey>;
-      const valueComparer: IEqualityComparer<TValue>;
-      ownerships: TDictionaryOwnerships);
-  end;
-
 procedure ValidateParams(keyType, valueType: PTypeInfo; capacity: Integer; ownerships: TDictionaryOwnerships);
 
 implementation
@@ -558,9 +528,7 @@ implementation
 uses
   Types,
   TypInfo,
-  Spring.Comparers,
-  Spring.Hash,
-  Spring.ResourceStrings;
+  Spring.Comparers;
 
 procedure ValidateParams(keyType, valueType: PTypeInfo; capacity: Integer; ownerships: TDictionaryOwnerships);
 begin
@@ -578,11 +546,12 @@ end;
 
 {$REGION 'TDictionary<TKey, TValue>'}
 
-constructor TDictionary<TKey, TValue>.Create(capacity: Integer;
-  const keyComparer: IEqualityComparer<TKey>;
+constructor TDictionary<TKey, TValue>.Create(elementType: PTypeInfo;
+  capacity: Integer; const keyComparer: IEqualityComparer<TKey>;
   const valueComparer: IEqualityComparer<TValue>;
   ownerships: TDictionaryOwnerships);
 begin
+  fElementType := elementType;
   ValidateParams(TypeInfo(TKey), TypeInfo(TValue), capacity, ownerships);
 
   fHashTable.Comparer := keyComparer;
@@ -595,21 +564,41 @@ end;
 
 procedure TDictionary<TKey, TValue>.AfterConstruction;
 var
+  pairType: PPairFieldTable;
   keyType, valueType: PTypeInfo;
 begin
   inherited AfterConstruction;
 
-  keyType := GetKeyType;
-  valueType := GetValueType;
+  pairType := GetPairFieldTable(fElementType);
+  keyType := pairType.KeyType^;
+  valueType := pairType.ValueType^;
   if not Assigned(fValueComparer) then
     fValueComparer := IEqualityComparer<TValue>(_LookupVtableInfo(giEqualityComparer, valueType, SizeOf(TValue)));
-  fHashTable.Initialize(@TComparerThunks<TKey>.Equals, @TComparerThunks<TKey>.GetHashCode, keyType);
+  {$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(TKey) of
+    tkClass: fHashTable.Initialize(TComparerThunks<TObject>.Equals, TComparerThunks<TObject>.GetHashCode, keyType);
+    tkInterface: fHashTable.Initialize(TComparerThunks<IInterface>.Equals, TComparerThunks<IInterface>.GetHashCode, keyType);
+  else{$ELSE}begin{$ENDIF}
+    fHashTable.Initialize(TComparerThunks<TKey>.Equals, TComparerThunks<TKey>.GetHashCode, keyType);
+  end;
+
   {$IFDEF DELPHIXE7_UP}
   if fHashTable.DefaultComparer then
-    fHashTable.Find := @THashTable<TKey>.FindWithoutComparer
+    case GetTypeKind(TKey) of
+      tkClass: fHashTable.Find := @THashTable<TObject>.FindWithoutComparer;
+      tkInterface: fHashTable.Find := @THashTable<IInterface>.FindWithoutComparer;
+    else
+      fHashTable.Find := @THashTable<TKey>.FindWithoutComparer;
+    end
   else
   {$ENDIF}
-    fHashTable.Find := @THashTable<TKey>.FindWithComparer;
+    {$IFDEF DELPHIXE7_UP}
+    case GetTypeKind(TKey) of
+      tkClass: fHashTable.Find := @THashTable<TObject>.FindWithComparer;
+      tkInterface: fHashTable.Find := @THashTable<IInterface>.FindWithComparer;
+    else{$ELSE}begin{$ENDIF}
+      fHashTable.Find := @THashTable<TKey>.FindWithComparer;
+    end;
 
   {$IFDEF DELPHIXE7_UP}
   case GetTypeKind(TKey) of
@@ -1005,23 +994,34 @@ begin
     Result := Default(TValue);
 end;
 
-function TDictionary<TKey, TValue>.GetValueOrAddDefault(
+function TDictionary<TKey, TValue>.GetValueRefOrAddDefault(
   const key: TKey): Ref<TValue>.PT;
+var
+  exists: Boolean;
 begin
   if {$IFDEF DELPHIXE7_UP}GetTypeKind(TValue){$ELSE}PTypeInfo(TypeInfo(TValue)).Kind{$ENDIF} = tkMethod then
-    Result := GetValueOrAddDefault(key, PValue(@DefaultMethod)^)
+    Result := GetValueRefOrAddDefault(key, PValue(@DefaultMethod)^, exists)
   else
-    Result := GetValueOrAddDefault(key, Default(TValue));
+    Result := GetValueRefOrAddDefault(key, Default(TValue), exists);
 end;
 
-function TDictionary<TKey, TValue>.GetValueOrAddDefault(const key: TKey;
+function TDictionary<TKey, TValue>.GetValueRefOrAddDefault(const key: TKey;
   const defaultValue: TValue): Ref<TValue>.PT;
+var
+  exists: Boolean;
+begin
+  Result := GetValueRefOrAddDefault(key, defaultValue, exists);
+end;
+
+function TDictionary<TKey, TValue>.GetValueRefOrAddDefault(const key: TKey;
+  const defaultValue: TValue; out exists: Boolean): Ref<TValue>.PT;
 var
   item: PItem;
 begin
   item := IHashTable<TKey>(@fHashTable).Find(key, InsertNonExisting or MarkNonExisting);
   if item.HashCode < 0 then
   begin
+    exists := False;
     item.HashCode := item.HashCode and not RemovedFlag;
     item.Key := key;
     item.Value := defaultValue;
@@ -1032,7 +1032,9 @@ begin
       Invoke(Self, item.Key, caAdded);
     with fOnValueChanged do if CanInvoke then
       Invoke(Self, item.Value, caAdded);
-  end;
+  end
+  else
+    exists := True;
   Result := @item.Value;
 end;
 
@@ -1115,11 +1117,12 @@ end;
 
 {$REGION 'TBidiDictionary<TKey, TValue>'}
 
-constructor TBidiDictionary<TKey, TValue>.Create(capacity: Integer;
-  const keyComparer: IEqualityComparer<TKey>;
+constructor TBidiDictionary<TKey, TValue>.Create(elementType: PTypeInfo;
+  capacity: Integer; const keyComparer: IEqualityComparer<TKey>;
   const valueComparer: IEqualityComparer<TValue>;
   ownerships: TDictionaryOwnerships);
 begin
+  fElementType := elementType;
   ValidateParams(TypeInfo(TKey), TypeInfo(TValue), capacity, ownerships);
 
   fOwnerships := ownerships;
@@ -1131,12 +1134,14 @@ end;
 
 procedure TBidiDictionary<TKey, TValue>.AfterConstruction;
 var
+  pairType: PPairFieldTable;
   keyType, valueType: PTypeInfo;
 begin
   inherited AfterConstruction;
 
-  keyType := GetKeyType;
-  valueType := GetValueType;
+  pairType := GetPairFieldTable(fElementType);
+  keyType := pairType.KeyType^;
+  valueType := pairType.ValueType^;
   if not Assigned(fKeyComparer) then
     fKeyComparer := IEqualityComparer<TKey>(_LookupVtableInfo(giEqualityComparer, keyType, SizeOf(TKey)));
   if not Assigned(fValueComparer) then
@@ -1150,7 +1155,7 @@ begin
   TPairComparer.Create(@fInverse.fComparer,
     @TValueKeyPairComparer.Comparer_Vtable,
     @TValueKeyPairComparer.Compare,
-    valueType, keyType);
+    fInverse.fElementType);
 end;
 
 procedure TBidiDictionary<TKey, TValue>.BeforeDestruction;
@@ -1235,7 +1240,7 @@ begin
   Inc(fVersion);
   {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
 
-  newBucketCount := NextPowerOf2(newCapacity * 4 div 3 - 1); // 75% load factor
+  newBucketCount := RoundUpToPowerOf2(NativeUInt(newCapacity) * 4 div 3); // 75% load factor
 
   // compact the items array, if necessary
   if fItemCount > fCount then
@@ -1260,7 +1265,7 @@ begin
   Assert(Capacity >= fCount);
 
   // repopulate the bucket array
-  Assert(IsPowerOf2(newBucketCount));
+  Assert(IsPowerOf2(NativeUInt(newBucketCount)));
   SetLength(fKeyBuckets, newBucketCount);
   for bucketIndex := 0 to newBucketCount - 1 do
     fKeyBuckets[bucketIndex] := EmptyBucket;
@@ -1827,21 +1832,33 @@ begin
   TryGetValue(key, Result);
 end;
 
-function TBidiDictionary<TKey, TValue>.GetValueOrAddDefault(
+function TBidiDictionary<TKey, TValue>.GetValueRefOrAddDefault(
   const key: TKey): Ref<TValue>.PT;
+var
+  exists: Boolean;
 begin
   if {$IFDEF DELPHIXE7_UP}GetTypeKind(TValue){$ELSE}PTypeInfo(TypeInfo(TValue)).Kind{$ENDIF} = tkMethod then
-    Result := GetValueOrAddDefault(key, PValue(@DefaultMethod)^)
+    Result := GetValueRefOrAddDefault(key, PValue(@DefaultMethod)^, exists)
   else
-    Result := GetValueOrAddDefault(key, Default(TValue));
+    Result := GetValueRefOrAddDefault(key, Default(TValue), exists);
 end;
 
-function TBidiDictionary<TKey, TValue>.GetValueOrAddDefault(const key: TKey;
+function TBidiDictionary<TKey, TValue>.GetValueRefOrAddDefault(const key: TKey;
   const defaultValue: TValue): Ref<TValue>.PT;
+var
+  exists: Boolean;
+begin
+  Result := GetValueRefOrAddDefault(key, defaultValue, exists);
+end;
+
+function TBidiDictionary<TKey, TValue>.GetValueRefOrAddDefault(const key: TKey;
+  const defaultValue: TValue; out exists: Boolean): Ref<TValue>.PT;
 begin
   // TODO implement
   RaiseHelper.NotSupported;
+  {$IFNDEF SUPPORTS_NORETURN}
   Result := nil;
+  {$ENDIF}
 end;
 
 function TBidiDictionary<TKey, TValue>.GetValueOrDefault(const key: TKey;
@@ -2070,21 +2087,33 @@ begin
   TryGetValue(value, Result);
 end;
 
-function TBidiDictionary<TKey, TValue>.TInverse.GetValueOrAddDefault(
+function TBidiDictionary<TKey, TValue>.TInverse.GetValueRefOrAddDefault(
   const value: TValue): Ref<TKey>.PT;
+var
+  exists: Boolean;
 begin
   if {$IFDEF DELPHIXE7_UP}GetTypeKind(TKey){$ELSE}PTypeInfo(TypeInfo(TKey)).Kind{$ENDIF} = tkMethod then
-    Result := GetValueOrAddDefault(value, PKey(@DefaultMethod)^)
+    Result := GetValueRefOrAddDefault(value, PKey(@DefaultMethod)^, exists)
   else
-    Result := GetValueOrAddDefault(value, Default(TKey));
+    Result := GetValueRefOrAddDefault(value, Default(TKey), exists);
 end;
 
-function TBidiDictionary<TKey, TValue>.TInverse.GetValueOrAddDefault(
+function TBidiDictionary<TKey, TValue>.TInverse.GetValueRefOrAddDefault(
   const value: TValue; const defaultKey: TKey): Ref<TKey>.PT;
+var
+  exists: Boolean;
+begin
+  Result := GetValueRefOrAddDefault(value, defaultKey, exists);
+end;
+
+function TBidiDictionary<TKey, TValue>.TInverse.GetValueRefOrAddDefault(
+  const value: TValue; const defaultKey: TKey; out exists: Boolean): Ref<TKey>.PT;
 begin
   // TODO implement
   RaiseHelper.NotSupported;
+  {$IFNDEF SUPPORTS_NORETURN}
   Result := nil;
+  {$ENDIF}
 end;
 
 function TBidiDictionary<TKey, TValue>.TInverse.GetValueOrDefault(
@@ -2345,6 +2374,7 @@ end;
 constructor TBidiDictionary<TKey, TValue>.TKeyCollection.Create(
   const source: TBidiDictionary<TKey, TValue>);
 begin
+  fElementType := source.GetKeyType;
   fSource := source;
 end;
 
@@ -2428,6 +2458,7 @@ end;
 constructor TBidiDictionary<TKey, TValue>.TValueCollection.Create(
   const source: TBidiDictionary<TKey, TValue>);
 begin
+  fElementType := source.GetValueType;
   fSource := source;
 end;
 
@@ -2522,12 +2553,14 @@ end;
 
 procedure TSortedDictionary<TKey, TValue>.AfterConstruction;
 var
+  pairType: PPairFieldTable;
   keyType, valueType: PTypeInfo;
 begin
   inherited AfterConstruction;
 
-  keyType := GetKeyType;
-  valueType := GetValueType;
+  pairType := GetPairFieldTable(fElementType);
+  keyType := pairType.KeyType^;
+  valueType := pairType.ValueType^;
   if not Assigned(fKeyComparer) then
     fKeyComparer := IComparer<TKey>(_LookupVtableInfo(giComparer, keyType, SizeOf(TKey)));
   if not Assigned(fValueComparer) then
@@ -2783,17 +2816,28 @@ begin
     Result := Default(TValue);
 end;
 
-function TSortedDictionary<TKey, TValue>.GetValueOrAddDefault(
+function TSortedDictionary<TKey, TValue>.GetValueRefOrAddDefault(
   const key: TKey): Ref<TValue>.PT;
+var
+  exists: Boolean;
 begin
   if {$IFDEF DELPHIXE7_UP}GetTypeKind(TValue){$ELSE}PTypeInfo(TypeInfo(TValue)).Kind{$ENDIF} = tkMethod then
-    Result := GetValueOrAddDefault(key, PValue(@DefaultMethod)^)
+    Result := GetValueRefOrAddDefault(key, PValue(@DefaultMethod)^, exists)
   else
-    Result := GetValueOrAddDefault(key, Default(TValue));
+    Result := GetValueRefOrAddDefault(key, Default(TValue), exists);
 end;
 
-function TSortedDictionary<TKey, TValue>.GetValueOrAddDefault(const key: TKey;
+function TSortedDictionary<TKey, TValue>.GetValueRefOrAddDefault(const key: TKey;
   const defaultValue: TValue): Ref<TValue>.PT;
+var
+  exists: Boolean;
+begin
+  Result := GetValueRefOrAddDefault(key, defaultValue, exists);
+end;
+
+function TSortedDictionary<TKey, TValue>.GetValueRefOrAddDefault(
+  const key: TKey; const defaultValue: TValue;
+  out exists: Boolean): Ref<TValue>.PT;
 var
   temp: Pointer;
   node: PNode;
@@ -2804,6 +2848,7 @@ begin
 
   if not Odd(IntPtr(temp)) then
   begin
+    exists := False;
     node.Value := defaultValue;
     {$Q-}
     Inc(fVersion);
@@ -2815,7 +2860,9 @@ begin
       Invoke(Self, node.Key, caAdded);
     with fOnValueChanged do if CanInvoke then
       Invoke(Self, node.Value, caAdded);
-  end;
+  end
+  else
+    exists := True;
   Result := @node.Value;
 end;
 
@@ -2893,8 +2940,14 @@ begin
       Notify(Self, PKeyValuePair(@node.Key)^, caRemoved);
     with fOnValueChanged do if CanInvoke then
       Invoke(Self, node.Value, caRemoved);
+  {$IFDEF DELPHIXE7_UP}
+    if GetTypeKind(TKey) = tkClass then
+  {$ENDIF}
+    if doOwnsKeys in fOwnerships then
+      PObject(@node.Key).Free;
   end;
 
+  node.Key := key;
   node.Value := value;
 
   if Assigned(Notify) then
@@ -3033,85 +3086,6 @@ begin
   item := fItem;
   Result.Key := item.Key;
   Result.Value := item.Value;
-end;
-
-{$ENDREGION}
-
-
-{$REGION 'TFoldedDictionary<TKey, TValue>'}
-
-constructor TFoldedDictionary<TKey, TValue>.Create(keyType,
-  valueType, elementType: PTypeInfo; capacity: Integer;
-  const keyComparer: IEqualityComparer<TKey>;
-  const valueComparer: IEqualityComparer<TValue>;
-  ownerships: TDictionaryOwnerships);
-begin
-  ValidateParams(keyType, valueType, capacity, ownerships);
-
-  fHashTable.Comparer := keyComparer;
-  fHashTable.Ownerships := ownerships;
-  fValueComparer := valueComparer;
-
-  fHashTable.ItemsInfo := TypeInfo(TItems);
-  fHashTable.Capacity := capacity;
-
-  fElementType := elementType;
-  fKeyType := keyType;
-  fValueType := valueType;
-end;
-
-function TFoldedDictionary<TKey, TValue>.GetElementType: PTypeInfo;
-begin
-  Result := fElementType;
-end;
-
-function TFoldedDictionary<TKey, TValue>.GetKeyType: PTypeInfo;
-begin
-  Result := fKeyType;
-end;
-
-function TFoldedDictionary<TKey, TValue>.GetValueType: PTypeInfo;
-begin
-  Result := fValueType;
-end;
-
-{$ENDREGION}
-
-
-{$REGION 'TFoldedBidiDictionary<TKey, TValue>'}
-
-constructor TFoldedBidiDictionary<TKey, TValue>.Create(keyType, valueType,
-  elementType: PTypeInfo; capacity: Integer;
-  const keyComparer: IEqualityComparer<TKey>;
-  const valueComparer: IEqualityComparer<TValue>;
-  ownerships: TDictionaryOwnerships);
-begin
-  ValidateParams(TypeInfo(TKey), TypeInfo(TValue), capacity, ownerships);
-
-  fOwnerships := ownerships;
-  fKeyComparer := keyComparer;
-  fValueComparer := valueComparer;
-
-  SetCapacity(capacity);
-
-  fElementType := elementType;
-  fKeyType := keyType;
-  fValueType := valueType;
-end;
-
-function TFoldedBidiDictionary<TKey, TValue>.GetElementType: PTypeInfo;
-begin
-  Result := fElementType;
-end;
-
-function TFoldedBidiDictionary<TKey, TValue>.GetKeyType: PTypeInfo;
-begin
-  Result := fKeyType;
-end;
-
-function TFoldedBidiDictionary<TKey, TValue>.GetValueType: PTypeInfo;
-begin
-  Result := fValueType;
 end;
 
 {$ENDREGION}

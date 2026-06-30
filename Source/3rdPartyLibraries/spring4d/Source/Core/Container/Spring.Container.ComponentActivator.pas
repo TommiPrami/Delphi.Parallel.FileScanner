@@ -2,7 +2,7 @@
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
-{           Copyright (c) 2009-2024 Spring4D Team                           }
+{           Copyright (c) 2009-2026 Spring4D Team                           }
 {                                                                           }
 {           http://www.spring4d.org                                         }
 {                                                                           }
@@ -133,6 +133,7 @@ begin
         begin
           instance.AsObject.Free;
           instance := nil;
+          doRefCountRelease := False;
         end;
         if E is EContainerException then
           raise
@@ -183,6 +184,38 @@ begin
   ExecuteInjections(Result, context);
 end;
 
+procedure LogCandidate(kernel: TKernel; const candidate: IInjection; const text: string);
+var
+  method: TRttiMethod;
+  classType: TClass;
+  msg, s: string;
+  parameters: TArray<TRttiParameter>;
+  i: NativeInt;
+begin
+  method := TRttiMethod(candidate.Target);
+  classType := PTypeInfo(TRttiObject(method).Parent.Handle).TypeData.ClassType;
+  msg := text + ' constructor ';
+  s := classType.UnitName;
+  msg := msg + s;
+  s := classType.ClassName;
+  msg := msg + '.' + s;
+  parameters := method.GetParameters;
+  if Assigned(parameters) then
+  begin
+    msg := msg + '(';
+    for i := 0 to High(parameters) do
+    begin
+      s := parameters[i].ToString;
+      msg := msg + s + '; ';
+    end;
+    {$POINTERMATH ON}
+    PChar(Pointer(msg))[PInteger(msg)[-1]-2] := ')';
+    Dec(PInteger(msg)[-1]);
+    {$POINTERMATH OFF}
+  end;
+  kernel.Logger.Log(msg);
+end;
+
 function TReflectionComponentActivator.SelectEligibleConstructor(
   const context: ICreationContext): IInjection;
 var
@@ -194,11 +227,9 @@ begin
 
   for candidate in Model.ConstructorInjections do
   begin
-    if candidate.Target.HasCustomAttribute<InjectAttribute> then
+    if candidate.Target.HasCustomAttribute(InjectAttribute) then
     begin
-      fKernel.Logger.Log('selected by [Inject] attribute ' +
-        StringReplace(candidate.Target.ToString,
-        ' ', ' ' + candidate.Target.Parent.DefaultName + '.', []));
+      LogCandidate(fKernel, candidate, 'selected by [Inject] attribute');
       winner := candidate;
       Break;
     end;
@@ -211,11 +242,11 @@ end;
 
 function TReflectionComponentActivator.TryHandle(const context: ICreationContext;
   const candidate: IInjection; var winner: IInjection): Boolean;
+
 var
   injection: IInjection;
 begin
-  fKernel.Logger.Log('inspecting ' + StringReplace(candidate.Target.ToString,
-    ' ', ' ' + candidate.Target.Parent.DefaultName + '.', []));
+  LogCandidate(fKernel, candidate, 'inspecting');
   Result := context.TryHandle(candidate, injection)
     and Kernel.Resolver.CanResolve(
     context, injection.Dependencies, injection.Arguments);
