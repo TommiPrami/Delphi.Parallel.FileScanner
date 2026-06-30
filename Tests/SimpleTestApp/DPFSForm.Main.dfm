@@ -10,6 +10,7 @@ object DPFSMainForm: TDPFSMainForm
   Font.Height = -12
   Font.Name = 'Segoe UI'
   Font.Style = []
+  ShowHint = True
   OnCreate = FormCreate
   DesignSize = (
     624
@@ -23,6 +24,7 @@ object DPFSMainForm: TDPFSMainForm
     Height = 25
     Align = alTop
     Caption = 'Default Parallel Scan'
+    Hint = 'Scan directories in parallel and collect the results in a standard RTL TStringList.'
     TabOrder = 0
     OnClick = ButtonParallelScanClick
   end
@@ -36,6 +38,7 @@ object DPFSMainForm: TDPFSMainForm
     Margins.Right = 8
     Align = alTop
     Caption = 'Spring container parallel scan'
+    Hint = 'Scan directories in parallel and collect the results in a Spring4D IList<string>.'
     TabOrder = 1
     OnClick = ButtonParallelScanSpringClick
   end
@@ -64,6 +67,7 @@ object DPFSMainForm: TDPFSMainForm
     Margins.Right = 8
     Align = alTop
     Caption = 'OTL Queue parallel scan'
+    Hint = 'Scan directories in parallel, streaming the results through an OmniThreadLibrary value queue.'
     TabOrder = 3
     OnClick = ButtonOtlQueueClick
   end

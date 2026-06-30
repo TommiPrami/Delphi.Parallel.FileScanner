@@ -4,6 +4,7 @@ interface
 
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
 
+{$IFDEF USE_SPRING4D}
 uses
   System.Classes, System.IOUtils, DPFSUnit.Parallel.FileScanner, Spring.Collections
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -26,9 +27,11 @@ type
         ; const APriority: TOTLThreadPriority = tpNormal
       {$ENDIF}): Boolean; reintroduce; overload;
   end;
+{$ENDIF}
 
 implementation
 
+{$IFDEF USE_SPRING4D}
 uses
   System.Diagnostics, System.SysUtils
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -49,15 +52,15 @@ var
   LTaskConfig: IOmniTaskConfig;
 {$ENDIF}
   LCurrentRootPath: string;
-  LListsOfFilelists: IList<IList<string>>;
+  LListOfFileLists: IList<IList<string>>;
   LFileScanStopWatch: TStopwatch;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
 
   FExclusions := AExclusions;
-  FSkippedFilesCount := 0;
+  ResetCounters;
 
-  LListsOfFilelists := TCollections.CreateList<IList<string>>;
+  LListOfFileLists := TCollections.CreateList<IList<string>>;
   try
     for LCurrentRootPath in ADirectories do
     begin
@@ -86,9 +89,9 @@ begin
 
           LTempFileNames := TCollections.CreateList<string>;
 
-          // Seems that this GetFiles ripped from the RTL, ported to use Spring container. MAYBE it is not faster after all.
-          // Should make two version, one using standard RTL and one using this. Time them, which is faster.
-          // This is now about 450ms so maybe no use to optimize much
+          // This GetFiles was ripped from the RTL and ported to use a Spring container. MAYBE it is not faster after all.
+          // Should make two versions, one using the standard RTL and one using this, then time
+          // them to see which is faster. This is now about 450ms so maybe no use to optimize much.
           GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
 
           if ConvertRelativePathsToAbsolute then
@@ -98,7 +101,7 @@ begin
           begin
             FLock.Acquire;
             try
-              LListsOfFilelists.Add(LTempFileNames);
+              LListOfFileLists.Add(LTempFileNames);
             finally
               FLock.Release;
             end;
@@ -111,7 +114,7 @@ begin
 
     FLock.Acquire;
     try
-      MergeResultLists(LListsOfFilelists, AFileNamesList);
+      MergeResultLists(LListOfFileLists, AFileNamesList);
 
       if SortResultList then
         AFileNamesList.Sort;
@@ -119,7 +122,7 @@ begin
       FLock.Release;
     end;
   finally
-    LListsOfFilelists := nil;
+    LListOfFileLists := nil;
   end;
 
   Result := AFileNamesList.Count > 0;
@@ -174,24 +177,20 @@ procedure TParallelFileScannerSpring.MergeResultLists(const AResultList: IList<I
 var
   I: Integer;
   J: Integer;
-  LFileName: string;
   LUniqueFiles: ISet<string>;
 begin
-  LUniqueFiles := TCollections.CreateSortedSet<string>;
+  // Unordered set: Add already ignores duplicates, and the caller sorts the result
+  // afterwards when SortResultList is set.
+  LUniqueFiles := TCollections.CreateSet<string>;
   LUniqueFiles.Capacity := 2000;
 
   for I := 0 to AResultList.Count - 1 do
-  begin
     for J := 0 to AResultList[I].Count - 1 do
-    begin
-      LFileName := AResultList[I][J];
-
-      if not LUniqueFiles.Contains(LFileName) then
-        LUniqueFiles.Add(LFileName);
-    end;
-  end;
+      LUniqueFiles.Add(AResultList[I][J]);
 
   AResult.AddRange(LUniqueFiles);
 end;
+
+{$ENDIF}
 
 end.

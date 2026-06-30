@@ -2,7 +2,7 @@
 
 interface
 
-{TODO: Could we move more code to the to the TParallelFileScannerCustom? Have to think about it.
+{TODO: Could we move more code to the TParallelFileScannerCustom? Have to think about it.
        Still way too much duplicate code between "regular" and Spring4D version }
 
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
@@ -16,7 +16,7 @@ uses
 type
   TDirectoryWalkProc = reference to procedure(const AFileName: string);
 
-  TExclusionArray = (eaPathPrefixes, eaPathSuffixes);
+  TExclusionKind = (ekPathPrefixes, ekPathSuffixes);
 
   TFileScanExclusions = record
   strict private
@@ -41,7 +41,7 @@ type
     property PathSuffixes: TArray<string> read FPathSuffixes write SetPathSuffixes;
     property PathSuffixesString: string read GetPathSuffixesString;
   public
-    procedure InitArrayFromStrings(const AArray: TExclusionArray; const AArrayData: TStrings);
+    procedure InitArrayFromStrings(const AKind: TExclusionKind; const AArrayData: TStrings);
     property UpperPathPrefixes: TArray<string> read GetUpperPathPrefixes;
     property UpperPathSuffixes: TArray<string> read GetUpperPathSuffixes;
   end;
@@ -65,7 +65,8 @@ type
     FLock: TCriticalSection;
     FSkippedFilesCount: Integer;
     FSortResultList: Boolean;
-    function ExcludedFilenameByuSuffix(const AFileName: string): Boolean;
+    procedure ResetCounters;
+    function ExcludedFileNameBySuffix(const AFileName: string): Boolean;
     function ExcludedPathByPrefix(const APath: string): Boolean;
     procedure CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
     procedure DoConvertRelativePathsToAbsolute(const AFileNames: TStringList); virtual;
@@ -92,7 +93,7 @@ type
     destructor Destroy; override;
 
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
-    property SkippedFilesCount: Integer read GetSkippedFilesCount write FSkippedFilesCount;
+    property SkippedFilesCount: Integer read GetSkippedFilesCount;
     property SortResultList: Boolean read FSortResultList write FSortResultList;
     property ConvertRelativePathsToAbsolute: Boolean read FConvertRelativePathsToAbsolute write FConvertRelativePathsToAbsolute;
   end;
@@ -189,11 +190,11 @@ begin
   ADest.FUpdateCount := 0;
 end;
 
-procedure TFileScanExclusions.InitArrayFromStrings(const AArray: TExclusionArray; const AArrayData: TStrings);
+procedure TFileScanExclusions.InitArrayFromStrings(const AKind: TExclusionKind; const AArrayData: TStrings);
 begin
-  case AArray of
-    eaPathPrefixes: InitArrayDataFromStrings(FPathPrefixes, AArrayData);
-    eaPathSuffixes: InitArrayDataFromStrings(FPathSuffixes, AArrayData);
+  case AKind of
+    ekPathPrefixes: InitArrayDataFromStrings(FPathPrefixes, AArrayData);
+    ekPathSuffixes: InitArrayDataFromStrings(FPathSuffixes, AArrayData);
   end;
 end;
 
@@ -217,14 +218,21 @@ end;
 
 procedure TParallelFileScannerCustom.AddSkippedDirectories(const APath: string);
 begin
-  for var LIndex := 0 to FSkippedDirectories.Count - 1 do
-  begin
-    if APath.StartsWith(FSkippedDirectories[LIndex]) then
-      Exit;
-  end;
+  // Called from WalkThroughDirectory, which runs on multiple worker threads, so
+  // access to the shared FSkippedDirectories list must be serialized.
+  FLock.Acquire;
+  try
+    for var LIndex := 0 to FSkippedDirectories.Count - 1 do
+    begin
+      if APath.StartsWith(FSkippedDirectories[LIndex]) then
+        Exit;
+    end;
 
-  if FSkippedDirectories.IndexOf(APath) = -1 then
-    FSkippedDirectories.Add(APath);
+    if FSkippedDirectories.IndexOf(APath) = -1 then
+      FSkippedDirectories.Add(APath);
+  finally
+    FLock.Release;
+  end;
 end;
 
 procedure TParallelFileScannerCustom.CheckGetFilesParameters(const APath: string; const ASearchPattern: string);
@@ -234,9 +242,9 @@ begin
   LPath := TPath.GetFullPath(APath);
 
   if Trim(ASearchPattern) = '' then
-    raise EInOutArgumentException.Create('Empty Search pattern')
+    raise EInOutArgumentException.Create('Empty search pattern')
   else if not TPath.HasValidFileNameChars(ASearchPattern, True) then
-    raise EInOutArgumentException.Create('Search pattern Has invalid characters');
+    raise EInOutArgumentException.Create('Search pattern has invalid characters');
 
   InternalCheckDirPathParam(LPath, True);
 end;
@@ -274,6 +282,13 @@ begin
   inherited Destroy;
 end;
 
+procedure TParallelFileScannerCustom.ResetCounters;
+begin
+  FSkippedFilesCount := 0;
+  FSkippedDirectories.Clear;
+  FCachedSkippedDirectoriesFileCount := 0;
+end;
+
 function TParallelFileScannerCustom.ExcludedPathByPrefix(const APath: string): Boolean;
 var
   LPath: string;
@@ -291,7 +306,7 @@ begin
   end;
 end;
 
-function TParallelFileScannerCustom.ExcludedFilenameByuSuffix(const AFileName: string): Boolean;
+function TParallelFileScannerCustom.ExcludedFileNameBySuffix(const AFileName: string): Boolean;
 var
   LCurrentFilename: string;
   LCurrentExcludedFilename: string;
@@ -335,15 +350,15 @@ var
   LTaskConfig: IOmniTaskConfig;
 {$ENDIF}
   LCurrentRootPath: string;
-  LListsOfFilelists: TObjectList<TStringList>;
+  LListOfFileLists: TObjectList<TStringList>;
   LFileScanStopWatch: TStopwatch;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
   FExclusions := AExclusions;
 
-  FSkippedFilesCount := 0;
+  ResetCounters;
 
-  LListsOfFilelists := TObjectList<TStringList>.Create(True);
+  LListOfFileLists := TObjectList<TStringList>.Create(True);
   try
     for LCurrentRootPath in ADirectories do
     begin
@@ -370,33 +385,35 @@ begin
         begin
           LExtension := FExtensions[AIndex];
           LTempFileNames := TStringList.Create;
+          try
+            // This GetFiles was ripped from the RTL and adapted. MAYBE it is not faster after all.
+            // Should make two versions, one using the standard RTL and one using this, then time
+            // them to see which is faster. This is now about 650ms so maybe no use to optimize much.
+            GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
 
-          // Seems that this GetFiles ripped from the RTL, ported to use Spring container. MAYBE it is not faster after all.
-          // Should make two version, one using standard RTL and one using this. Time them, which is faster.
-          // This is now about 650ms so maybe no use to optimize much
-          GetFiles(LCurrentRootPath, LExtension, TSearchOption.soAllDirectories, LTempFileNames);
+            if ConvertRelativePathsToAbsolute then
+              DoConvertRelativePathsToAbsolute(LTempFileNames);
 
-          if ConvertRelativePathsToAbsolute then
-            DoConvertRelativePathsToAbsolute(LTempFileNames);
-
-          if LTempFileNames.Count > 0 then
-          begin
-            FLock.Acquire;
-            try
-              LListsOfFilelists.Add(LTempFileNames);
-            finally
-              FLock.Release;
+            if LTempFileNames.Count > 0 then
+            begin
+              FLock.Acquire;
+              try
+                LListOfFileLists.Add(LTempFileNames);
+                LTempFileNames := nil; // ownership transferred to the list
+              finally
+                FLock.Release;
+              end;
             end;
-          end
-          else
-            LTempFileNames.Free;
+          finally
+            LTempFileNames.Free; // no-op if ownership was transferred above
+          end;
         end
       );
     end;
 
     FLock.Acquire;
     try
-      MergeResultLists(LListsOfFilelists, AFileNamesList);
+      MergeResultLists(LListOfFileLists, AFileNamesList);
 
       if FSortResultList then
         AFileNamesList.Sort;
@@ -404,7 +421,7 @@ begin
       FLock.Release;
     end;
   finally
-    LListsOfFilelists.Free;
+    LListOfFileLists.Free;
   end;
 
   Result := AFileNamesList.Count > 0;
@@ -431,13 +448,12 @@ var
   LTaskConfig: IOmniTaskConfig;
   LCurrentRootPath: string;
   LFileScanStopWatch: TStopwatch;
-  LOmniValue: TOmniValue;
   LFileCount: TGp4AlignedInt;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
   FExclusions := AExclusions;
 
-  FSkippedFilesCount := 0;
+  ResetCounters;
   AFileCount := 0;
   LFileCount.Value := 0;
 
@@ -459,6 +475,7 @@ begin
         LExtension: string;
         LTempFileNames: TStringList;
         LIndex: Integer;
+        LOmniValue: TOmniValue;
       begin
         LExtension := FExtensions[AIndex];
         LTempFileNames := TStringList.Create;
@@ -470,16 +487,10 @@ begin
 
           for LIndex := 0 to LTempFileNames.Count - 1 do
           begin
-            FLock.Acquire;
-            try
-              var LFileName: string;
-              LFileName := LTempFileNames[LIndex];
-
-              LOmniValue.AsString := LFileName;
-              AFileNamesOmniValueQueue.Enqueue(LOmniValue);
-            finally
-              FLock.Release;
-            end;
+            // IOmniValueQueue is thread-safe and LOmniValue is local to this task,
+            // so no external lock is needed around the enqueue.
+            LOmniValue.AsString := LTempFileNames[LIndex];
+            AFileNamesOmniValueQueue.Enqueue(LOmniValue);
 
             LFileCount.Increment;
           end;
@@ -528,7 +539,7 @@ end;
 procedure TParallelFileScannerCustom.InternalCheckDirPathParam(const APath: string; const AExistsCheck: Boolean);
 begin
   if Trim(APath) = '' then
-    raise EInOutArgumentException.Create('Emptyy path')
+    raise EInOutArgumentException.Create('Empty path')
   else if not TPath.HasValidPathChars(APath, False) then
     raise EInOutArgumentException.Create('Path has invalid characters')
   else if AExistsCheck and (not TDirectory.Exists(APath)) then
@@ -588,12 +599,11 @@ begin
           // call the pre-order callback method
           var LFilename := TPath.Combine(APath, LSearchRec.Name, False); // Weirdly "APath + PathDelim..." is slower than TPath.Combine
 
-          if not ExcludedFilenameByuSuffix(LFilename) then
-          begin
-            Inc(FSkippedFilesCount);
-
+          // Runs on multiple worker threads, so the skipped counter must be incremented atomically.
+          if ExcludedFileNameBySuffix(LFilename) then
+            AtomicIncrement(FSkippedFilesCount)
+          else
             APreCallback(LFilename);
-          end;
         end;
       end;
 

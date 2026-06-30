@@ -33,9 +33,17 @@ var
 
 implementation
 
+{$IF DEFINED(USE_SPRING4D) or DEFINED(USE_OMNI_THREAD_LIBRARY)}
 uses
-  DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections
-  {$IFDEF USE_OMNI_THREAD_LIBRARY}, OtlTaskControl, OtlContainers, OtlCommon {$ENDIF};
+{$IF DEFINED(USE_SPRING4D) and DEFINED(USE_OMNI_THREAD_LIBRARY)}
+  DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections,
+  OtlTaskControl, OtlContainers, OtlCommon;
+{$ELSEIF DEFINED(USE_SPRING4D)}
+  DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections;
+{$ELSE}
+  OtlTaskControl, OtlContainers, OtlCommon;
+{$IFEND}
+{$IFEND}
 
 {$R *.dfm}
 
@@ -44,7 +52,7 @@ procedure TDPFSMainForm.ButtonOtlQueueClick(Sender: TObject);
 var
   LParallelScanner: TParallelFileScanner;
   LOTLValueQueue: IOmniValueQueue;
-  LExludes: TFileScanExclusions;
+  LExcludes: TFileScanExclusions;
   LResultFileName: string;
   LFileCount: Integer;
 {$ENDIF}
@@ -58,9 +66,9 @@ begin
     LParallelScanner := TParallelFileScanner.Create(GetExtensions);
     try
       LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
-      LExludes := GetExcludes;
+      LExcludes := GetExcludes;
 
-      if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LOTLValueQueue, LFileCount, tpIdle) then
+      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount, tpIdle) then
       begin
         var LValue: TOmniValue;
 
@@ -91,7 +99,7 @@ procedure TDPFSMainForm.ButtonParallelScanClick(Sender: TObject);
 var
   LParallelScanner: TParallelFileScanner;
   LFilesList: TStringList;
-  LExludes: TFileScanExclusions;
+  LExcludes: TFileScanExclusions;
 begin
   UpdateGUIState(Sender as TControl, False);
   try
@@ -99,9 +107,9 @@ begin
     LParallelScanner := TParallelFileScanner.Create(GetExtensions);
     try
       LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
-      LExludes := GetExcludes;
+      LExcludes := GetExcludes;
 
-      if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList
+      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList
       {$IFDEF USE_OMNI_THREAD_LIBRARY}, tpIdle {$ENDIF}) then
       begin
         MemoLog.Lines.AddStrings(LFilesList);
@@ -122,20 +130,23 @@ begin
 end;
 
 procedure TDPFSMainForm.ButtonParallelScanSpringClick(Sender: TObject);
+{$IFDEF USE_SPRING4D}
 var
   LParallelScanner: TParallelFileScannerSpring;
   LFilesList: IList<string>;
-  LExludes: TFileScanExclusions;
+  LExcludes: TFileScanExclusions;
+{$ENDIF}
 begin
+{$IFDEF USE_SPRING4D}
   UpdateGUIState(Sender as TControl, False);
   try
     LFilesList := TCollections.CreateList<string>;
     LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions);
     try
       LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
-      LExludes := GetExcludes;
+      LExcludes := GetExcludes;
 
-      if LParallelScanner.GetFileList(GetSearchDirectories, LExludes, LFilesList
+      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList
         {$IFDEF USE_OMNI_THREAD_LIBRARY}, tpIdle {$ENDIF}) then
       begin
         MemoLog.Lines.AddStrings(LFilesList.ToArray);
@@ -152,12 +163,23 @@ begin
   finally
     UpdateGUIState(Sender as TControl, True);
   end;
+{$ENDIF}
 end;
 
 procedure TDPFSMainForm.FormCreate(Sender: TObject);
 begin
-  ButtonOtlQueue.Enabled := {$IFDEF USE_OMNI_THREAD_LIBRARY}True; {$ELSE}False;{$ENDIF};
-  ButtonOtlQueue.Visible := ButtonOtlQueue.Enabled;
+  // Keep every scan variant visible so they stay discoverable; just disable the ones whose
+  // backend was not compiled into this build. The missing define is shown in the caption
+  // because VCL does not display hints for disabled windowed controls.
+  {$IFNDEF USE_OMNI_THREAD_LIBRARY}
+  ButtonOtlQueue.Enabled := False;
+  ButtonOtlQueue.Caption := ButtonOtlQueue.Caption + ' (needs USE_OMNI_THREAD_LIBRARY)';
+  {$ENDIF}
+
+  {$IFNDEF USE_SPRING4D}
+  ButtonParallelScanSpring.Enabled := False;
+  ButtonParallelScanSpring.Caption := ButtonParallelScanSpring.Caption + ' (needs USE_SPRING4D)';
+  {$ENDIF}
 end;
 
 function TDPFSMainForm.GetExcludes: TFileScanExclusions;
