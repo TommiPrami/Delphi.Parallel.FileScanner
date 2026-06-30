@@ -22,9 +22,15 @@ The threading backend is selected at compile time in
 - Define `USE_OMNI_THREAD_LIBRARY` to use OmniThreadLibrary (the default).
 - Leave it undefined to use the RTL PPL (`System.Threading`).
 
+## Tests
+
+`Tests/ScannerTests` is a console regression test: it checks that every result-container
+API (RTL `TStringList`, the OmniThreadLibrary value queue, and the Spring4D `IList<string>`)
+returns the same file set as a straightforward flat enumeration, and that prefix exclusion
+keeps excluded subtrees out. It exits with a non-zero code on failure.
+
 ## TODO
 
-- Reduce the remaining duplication between the RTL (`TParallelFileScanner`) and
-  Spring4D (`TParallelFileScannerSpring`) variants &mdash; only the result container
-  really differs now.
+- `GetFileCounts` (used only for the lazy "skipped files in excluded directories" count)
+  still walks each skipped directory once per extension; it could share the single-pass walk.
 - ...
