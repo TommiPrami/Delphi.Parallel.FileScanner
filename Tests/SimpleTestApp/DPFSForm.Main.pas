@@ -184,12 +184,7 @@ end;
 
 function TDPFSMainForm.GetExcludes: TFileScanExclusions;
 begin
-  Result.BeginUpdate;
-  try
-    Result.PathPrefixes := ['..\..\..\..\Source\3rdPartyLibraries\OmniThreadLibrary\'];
-  finally
-    Result.EndUpdate;
-  end;
+  Result.PathPrefixes := ['..\..\..\..\Source\3rdPartyLibraries\OmniThreadLibrary\'];
 end;
 
 function TDPFSMainForm.GetExtensions: TArray<string>;

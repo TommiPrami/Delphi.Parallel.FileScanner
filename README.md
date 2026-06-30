@@ -6,9 +6,10 @@ Currently more or less a one-trick pony: it collects files matching a list of
 extensions from a list of root directories. You can exclude files by path prefix
 and by filename suffix.
 
-It scans the given list of folders in parallel. This pays off when you can split
-the work into several smaller pieces (e.g. there is little benefit when scanning
-just one large folder).
+It walks each root directory once and spreads the work across CPU cores by splitting
+every root into its immediate subdirectories (plus the root's own files). That means
+it scales both with the number of root directories and with the number of
+subdirectories inside a single large root.
 
 ## Variants
 
@@ -23,7 +24,7 @@ The threading backend is selected at compile time in
 
 ## TODO
 
-- Code needs further refactoring.
-- Filtering should be done while searching &mdash; at least for prefixes, since
-  there is no point starting to scan a folder that will be ignored.
+- Reduce the remaining duplication between the RTL (`TParallelFileScanner`) and
+  Spring4D (`TParallelFileScannerSpring`) variants &mdash; only the result container
+  really differs now.
 - ...
