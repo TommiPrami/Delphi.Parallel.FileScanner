@@ -1236,7 +1236,6 @@ var
 begin
   if IsClass then
   begin
-    guids := TCollections.CreateSet<TGUID>;
     list := TCollections.CreateList<TRttiInterfaceType>;
     classType := AsInstance.MetaclassType;
     while Assigned(classType) do

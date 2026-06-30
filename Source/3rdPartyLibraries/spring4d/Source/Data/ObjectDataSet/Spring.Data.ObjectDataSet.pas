@@ -426,14 +426,15 @@ end;
 procedure TObjectDataSet.DoPostRecord(Index: Integer; Append: Boolean);
 var
   newItem: TObject;
-  sortNeeded: Boolean;
+  isInsert, sortNeeded: Boolean;
   i: Integer;
   field: TField;
   fieldValue: Variant;
   value: TValue;
   prop: TRttiProperty;
 begin
-  if State = dsInsert then
+  isInsert := State = dsInsert;
+  if isInsert then
     newItem := TActivator.CreateInstance(fItemTypeInfo)
   else
     newItem := IndexList.Items[Index];
@@ -460,12 +461,12 @@ begin
       end;
     end;
   except
-    if State = dsInsert then
+    if isInsert then
       newItem.Free;
     raise;
   end;
 
-  if State = dsInsert then
+  if isInsert then
     if Append then
       Index := IndexList.AddItem(newItem)
     else
@@ -636,7 +637,10 @@ procedure TObjectDataSet.InternalInitFieldDefs;
 begin
   FieldDefs.Clear;
   if Fields.Count > 0 then
-    LoadFieldDefsFromFields(Fields, FieldDefs)
+  begin
+    fProperties.Clear;
+    LoadFieldDefsFromFields(Fields, FieldDefs);
+  end
   else
     LoadFieldDefsFromItemType;
 end;

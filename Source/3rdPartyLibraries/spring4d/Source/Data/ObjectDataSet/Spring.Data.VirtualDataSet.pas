@@ -49,8 +49,11 @@ type
   PRecordBufferData = ^TRecordBufferData;
   TRecordBufferData = record
     Index: Integer;
+    FieldCount: Integer;
     BookmarkFlag: TBookmarkFlag;
     Values: array[0..0] of Variant;
+    procedure FinalizeValues;
+    procedure InitializeValues;
   end;
 
   TBaseVirtualDataSet = class;
@@ -415,6 +418,27 @@ end;
 {$IFEND}
 
 
+{$REGION 'TRecordBufferData'}
+
+procedure TRecordBufferData.FinalizeValues;
+begin
+  FinalizeArray(@Values, TypeInfo(Variant), FieldCount);
+end;
+
+procedure TRecordBufferData.InitializeValues;
+var
+  i: Integer;
+begin
+  for i := 0 to FieldCount - 1 do
+  begin
+    VarClearProc(TVarData(Values[i]));
+    TVarData(Values[i]).VType := varNull;
+  end;
+end;
+
+{$ENDREGION}
+
+
 {$REGION 'TBaseVirtualDataSet'}
 
 constructor TBaseVirtualDataSet.Create(AOwner: TComponent);
@@ -438,7 +462,10 @@ end;
 function TBaseVirtualDataSet.AllocRecordBuffer: TRecordBuffer;
 begin
   if not (csDestroying in ComponentState) then
-    Pointer(Result) := AllocMem(SizeOf(TRecordBufferData) + Fields.Count * SizeOf(Variant))
+  begin
+    Pointer(Result) := AllocMem(SizeOf(TRecordBufferData) + Fields.Count * SizeOf(Variant));
+    PRecordBufferData(Result).FieldCount := Fields.Count;
+  end
   else
     Pointer(Result) := nil;
 end;
@@ -508,7 +535,7 @@ begin
   if Pointer(fOldValueBuffer) = nil then
     fOldValueBuffer := AllocRecordBuffer
   else
-    FinalizeArray(@PRecordBufferData(fOldValueBuffer).Values, TypeInfo(Variant), Fields.Count);
+    PRecordBufferData(fOldValueBuffer).FinalizeValues;
 
   InitRecord({$IFDEF DELPHIXE4_UP}NativeInt(fOldValueBuffer){$ELSE}fOldValueBuffer{$ENDIF});
   inherited DoOnNewRecord;
@@ -533,7 +560,7 @@ end;
 
 procedure TBaseVirtualDataSet.FreeRecordBuffer(var Buffer: TRecordBuffer);
 begin
-  FinalizeArray(@PRecordBufferData(Buffer).Values, TypeInfo(Variant), Fields.Count);
+  PRecordBufferData(Buffer).FinalizeValues;
   FreeMem(Pointer(Buffer));
 end;
 
@@ -1021,7 +1048,7 @@ begin
   if Pointer(fOldValueBuffer) = nil then
     fOldValueBuffer := AllocRecordBuffer
   else
-    FinalizeArray(@PRecordBufferData(fOldValueBuffer).Values, TypeInfo(Variant), Fields.Count);
+    PRecordBufferData(fOldValueBuffer).FinalizeValues;
 end;
 
 procedure TBaseVirtualDataSet.InternalFirst;
@@ -1072,7 +1099,7 @@ begin
       PRecordBufferData(Buffer).Index := fCurrent;
       PRecordBufferData(Buffer).BookmarkFlag := bfCurrent;
 
-      FinalizeArray(@PRecordBufferData(Buffer).Values, TypeInfo(Variant), Fields.Count);
+      PRecordBufferData(Buffer).FinalizeValues;
       GetCalcFields({$IFDEF DELPHIXE4_UP}NativeInt(Buffer){$ELSE}Buffer{$ENDIF});
     end;
   except
@@ -1133,14 +1160,8 @@ begin
 end;
 
 procedure TBaseVirtualDataSet.InternalInitRecord(Buffer: TRecordBuffer);
-var
-  i: Integer;
 begin
-  for i := 0 to Fields.Count - 1 do
-  begin
-    System.VarClearProc(TVarData(PRecordBufferData(Buffer).Values[i]));
-    TVarData(PRecordBufferData(Buffer).Values[i]).VType := varNull;
-  end;
+  PRecordBufferData(Buffer).InitializeValues;
 end;
 
 procedure TBaseVirtualDataSet.InternalLast;
