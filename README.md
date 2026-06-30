@@ -31,6 +31,13 @@ keeps excluded subtrees out. It exits with a non-zero code on failure.
 
 ## TODO
 
+- Better parallel load balancing (work stealing). Today each root is split into one
+  recursive job per immediate subdirectory, so when a single subtree dominates (e.g. a
+  vendored library folder) it becomes one recursive job on one thread &mdash; and the scan
+  can even be slower than single-threaded, because the other workers idle while that thread
+  does all the work. A dynamic work-stealing walk (workers pull subdirectories from a shared
+  queue as they are discovered) would spread the load; the tricky part is termination
+  detection (knowing when the queue is empty *and* no worker will add more).
 - `GetFileCounts` (used only for the lazy "skipped files in excluded directories" count)
   still walks each skipped directory once per extension; it could share the single-pass walk.
 - ...
