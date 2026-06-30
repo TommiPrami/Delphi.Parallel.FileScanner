@@ -1,3 +1,51 @@
+3.08: 2026-04-08
+
+- New features:
+  - Implemented TLightweightMREWEx extension to TLightweightMREW (Delphi 11+ only).
+    This class adds support for nested BeginWrite/EndWrite calls.
+    See https://www.thedelphigeek.com/2021/02/readers-writ-47358-48721-45511-46172.html
+    for more information.
+  - Implemented interface ILightweightMREWEx with the same public
+    methods as TLightweightMREWEx and implementing class
+    TLightweightMREWExImpl that wraps TLightweightMREWEx.
+  - Added methods Enter: T and Leave to Locked<T>.
+  - Added methods BeginRead, TryBeginRead, EndRead, BeginWrite,
+    TryBeginWrite, EndWrite to Locked<T> (Delphi 11+ only).
+  - Locked<T>.Access/Release now implement locking with a
+    SRW lock (when available) in 'write' access mode. This is functionally
+    identical to the old implementation (critical section).
+  - Implemented Locked<T>.IsInitialized.
+  - On Windows, SetThreadName from OtlCommon.Utils also calls 
+    SetThreadDescription Windows API.
+
+- Bug fixes:
+  - Fixed bad 64-bit pointer casts in OtlTaskControl. Now works with Delph 13.1.
+
+3.07.11: 2025-10-22
+
+- New features:
+  - Added Delphi 13 packages supporting 64-bit IDE.
+  - Implemented TOmniValue.AsUInt64.
+  
+- Bug fixes:
+  - [SMelnyk64] Fix: AV in TOmniParallelLoopBase.InternalExecute when taskFinalizer is not provided.
+  - Fixed TOmniGroupAffinity.Create with 64 processors on 64-bit.    
+  - Use correct time-measurement functions in OtlEventMonitor.
+  - [Anton Alisov] Fixed critical section handling in TOmniValueQueue.DoWithCritSec. 
+  - Avoid range check in OtlThreadPool on 64 CPU systems.
+
+3.07.10: 2023-11-27
+
+- New features:
+  - Implemented TOmniValue.AsUInt64.
+
+- Bug fixes:
+  - Fixed TOmniGroupAffinity.Create with 64 processors on 64-bit.
+  - TOmniValue.TryCastToInt64 was casting Variant into integer insted of int64.
+  - TOmniEventMonitor uses correct time-measurement functions.
+  - IOmniTaskGroup.WaitForAll/.TerminateAll no longer crashes if the group is empty.
+  - [SMelnyk64] Prevent potential AV in TOmniParallelLoopBase.InternalExecute.
+
 3.07.9: 2021-10-25
 
 - New features:
