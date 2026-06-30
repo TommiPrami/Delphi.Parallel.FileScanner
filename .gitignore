@@ -69,4 +69,7 @@ __recovery/
 
 # Boss dependency manager vendor folder https://github.com/HashLoad/boss
 modules/
-*.dsv
+*TestInsightSettings.ini
+
+# DUnitX test run reports
+dunitx-results.xml
