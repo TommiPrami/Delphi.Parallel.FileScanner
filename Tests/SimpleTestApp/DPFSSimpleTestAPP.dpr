@@ -1,6 +1,7 @@
 ﻿program DPFSSimpleTestAPP;
 
 uses
+  FastMM5,
   Vcl.Forms,
   DPFSForm.Main in 'DPFSForm.Main.pas' {DPFSMainForm},
   DPFSUnit.Parallel.FileScanner in '..\..\Source\Units\DPFSUnit.Parallel.FileScanner.pas',

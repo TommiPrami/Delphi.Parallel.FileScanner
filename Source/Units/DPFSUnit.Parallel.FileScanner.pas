@@ -44,6 +44,7 @@ type
     FConvertRelativePathsToAbsolute: Boolean;
     FFastExtensions: TArray<string>;  // extensions (with dot, e.g. '.pas') for simple "*.ext" patterns
     FComplexPatterns: TArray<string>; // patterns that still need full TPath.MatchesPattern
+    function GetThreadCount(const ATaskCount: Integer): Integer;
     function GetSkippedFilesCount: Integer;
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     procedure AddSkippedDirectories(const APath: string);
@@ -55,14 +56,14 @@ type
     FDiskScanTimeForFiles: Double;
     FExclusions: TFileScanExclusions;
     FExtensions: TStringList;
-    FLock: TCriticalSection;
+    FLock: TMonitor;
     FSkippedFilesCount: Integer;
     FSortResultList: Boolean;
     procedure ResetCounters;
     procedure PrepareExtensions;
-    function ExcludedFileNameBySuffix(const AFileName: string): Boolean;
-    function ExcludedPathByPrefix(const APath: string): Boolean;
-    function MatchesAnyExtension(const AFileName: string): Boolean;
+    function ExcludedFileNameBySuffix(const AFileName: string): Boolean; inline;
+    function ExcludedPathByPrefix(const APath: string): Boolean; inline;
+    function MatchesAnyExtension(const AFileName: string): Boolean; inline;
     function BuildScanJobs(const ADirectories: TArray<string>): TArray<TScanJob>;
     procedure WalkThroughDirectory(const APath: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
     // Shared scan/merge core for both the RTL and Spring4D result containers; fills AResult.
@@ -97,13 +98,13 @@ type
   TParallelFileScanner = class(TParallelFileScannerCustom)
   public
     function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): Boolean; overload; override;
+      {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+      {$ENDIF}): Boolean; overload; override;
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): Boolean; overload; override;
+      {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+      {$ENDIF}): Boolean; overload; override;
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
       const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; override;
@@ -115,7 +116,7 @@ type
 implementation
 
 uses
-  System.Diagnostics
+  System.Diagnostics, System.Math
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   , OtlCollections, OtlComm, OtlCommon, OtlParallel, OtlTask, GpStuff
 {$ELSE}
@@ -159,7 +160,7 @@ procedure TParallelFileScannerCustom.AddSkippedDirectories(const APath: string);
 begin
   // Called from WalkThroughDirectory, which runs on multiple worker threads, so
   // access to the shared FSkippedDirectories list must be serialized.
-  FLock.Acquire;
+  FLock.Enter(FSkippedDirectories);
   try
     for var LIndex := 0 to FSkippedDirectories.Count - 1 do
     begin
@@ -170,25 +171,26 @@ begin
     if FSkippedDirectories.IndexOf(APath) = -1 then
       FSkippedDirectories.Add(APath);
   finally
-    FLock.Release;
+    FLock.Exit(FSkippedDirectories);
   end;
 end;
 
 function TParallelFileScannerCustom.BuildScanJobs(const ADirectories: TArray<string>): TArray<TScanJob>;
-var
-  LJobs: TList<TScanJob>;
-  LSearchRec: TSearchRec;
-  LRoot: string;
 
-  procedure AddJob(const ADirectory: string; const ARecursive: Boolean);
+  procedure AddJob(const AJobs: TList<TScanJob>; const ADirectory: string; const ARecursive: Boolean);
   var
     LJob: TScanJob;
   begin
     LJob.Directory := ADirectory;
     LJob.Recursive := ARecursive;
-    LJobs.Add(LJob);
+
+    AJobs.Add(LJob);
   end;
 
+var
+  LJobs: TList<TScanJob>;
+  LSearchRec: TSearchRec;
+  LRoot: string;
 begin
   LJobs := TList<TScanJob>.Create;
   try
@@ -206,7 +208,7 @@ begin
 
       // The root itself is scanned non-recursively for its own files; each immediate
       // subdirectory becomes a recursive job of its own so a single root still parallelizes.
-      AddJob(LRoot, False);
+      AddJob(LJobs, LRoot, False);
 
       if FindFirst(TPath.Combine(LRoot, '*', False), faAnyFile, LSearchRec) = 0 then
       try
@@ -222,7 +224,7 @@ begin
           if ExcludedPathByPrefix(LSubDirectory) then
             AddSkippedDirectories(LSubDirectory)
           else
-            AddJob(LSubDirectory, True);
+            AddJob(LJobs, LSubDirectory, True);
         until FindNext(LSearchRec) <> 0;
       finally
         FindClose(LSearchRec);
@@ -283,7 +285,6 @@ begin
   FSkippedDirectories := TStringList.Create;
   FSkippedDirectories.Sorted := True;
   FSortResultList := ASortResultList;
-  FLock := TCriticalSection.Create;
   FExtensions := TStringList.Create;
   FExtensions.AddStrings(AExtensions);
 end;
@@ -292,7 +293,6 @@ destructor TParallelFileScannerCustom.Destroy;
 begin
   FSkippedDirectories.Free;
   FExtensions.Free;
-  FLock.Free;
 
   inherited Destroy;
 end;
@@ -307,6 +307,9 @@ end;
 function TParallelFileScannerCustom.ExcludedPathByPrefix(const APath: string): Boolean;
 begin
   Result := False;
+
+  if Length(FExclusions.PathPrefixes) = 0 then
+    Exit; // no prefixes configured: skip the work entirely (called once per subdirectory)
 
   var LPath := ExcludeTrailingPathDelimiter(APath);
 
@@ -391,7 +394,7 @@ begin
       Parallel
         .&for(0, High(LScanJobs))
         .TaskConfig(LTaskConfig)
-        .NumTasks(TThread.ProcessorCount)
+        .NumTasks(GetThreadCount(Length(LScanJobs)))
         .Execute(
 {$ELSE}
       TParallel
@@ -412,12 +415,12 @@ begin
 
             if LTempFileNames.Count > 0 then
             begin
-              FLock.Acquire;
+              FLock.Enter(LListOfFileLists);
               try
                 LListOfFileLists.Add(LTempFileNames);
                 LTempFileNames := nil; // ownership transferred to the list
               finally
-                FLock.Release;
+                FLock.Exit(LListOfFileLists);
               end;
             end;
           finally
@@ -433,8 +436,10 @@ begin
     // Deduplicate across the per-job lists (only matters when scanned roots overlap),
     // preserving first-seen order; sorting is applied only when SortResultList is set.
     LUpperBound := 0;
+
     for var LList in LListOfFileLists do
       Inc(LUpperBound, LList.Count);
+
     AResult.Capacity := AResult.Count + LUpperBound;
 
     for var LList in LListOfFileLists do
@@ -506,7 +511,7 @@ begin
     Parallel
       .&for(0, High(LScanJobs))
       .TaskConfig(LTaskConfig)
-      .NumTasks(TThread.ProcessorCount)
+      .NumTasks(GetThreadCount(Length(LScanJobs)))
       .Execute(
       procedure(AIndex: Integer)
       begin
@@ -534,6 +539,11 @@ begin
 end;
 {$ENDIF}
 
+function TParallelFileScannerCustom.GetThreadCount(const ATaskCount: Integer): Integer;
+begin
+  Result := Min(ATaskCount, TTHread.ProcessorCount);
+end;
+
 function TParallelFileScannerCustom.GetSkippedFilesCount: Integer;
 begin
   if (FSkippedDirectories.Count > 0) and (FCachedSkippedDirectoriesFileCount = 0) then
@@ -542,13 +552,18 @@ begin
   Result := FSkippedFilesCount + FCachedSkippedDirectoriesFileCount;
 end;
 
-procedure TParallelFileScannerCustom.WalkThroughDirectory(const APath: string;
-  const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
+procedure TParallelFileScannerCustom.WalkThroughDirectory(const APath: string; const APreCallback: TDirectoryWalkProc;
+  const ARecursive: Boolean);
 var
   LSearchRec: TSearchRec;
   LIsDirectory: Boolean;
+  LDirPrefix: string;
 begin
-  if FindFirst(TPath.Combine(APath, '*', False), faAnyFile, LSearchRec) = 0 then
+  // Build "APath\" once so each entry below is a single concatenation rather than a
+  // TPath.Combine call (which re-checks the trailing delimiter for every entry).
+  LDirPrefix := IncludeTrailingPathDelimiter(APath);
+
+  if FindFirst(LDirPrefix + '*', faAnyFile, LSearchRec) = 0 then
   try
     repeat
       if (LSearchRec.Name = CURRENT_DIR) or (LSearchRec.Name = PARENT_DIR) then
@@ -561,7 +576,7 @@ begin
         // go recursive into subdirectories
         if ARecursive then
         begin
-          var LNewPath := TPath.Combine(APath, LSearchRec.Name, False);
+          var LNewPath := LDirPrefix + LSearchRec.Name;
 
           if ExcludedPathByPrefix(LNewPath) then
             AddSkippedDirectories(LNewPath)
@@ -571,7 +586,7 @@ begin
       end
       else if MatchesAnyExtension(LSearchRec.Name) then
       begin
-        var LFilename := TPath.Combine(APath, LSearchRec.Name, False); // Weirdly "APath + PathDelim..." is slower than TPath.Combine
+        var LFilename := LDirPrefix + LSearchRec.Name;
 
         // Runs on multiple worker threads, so the skipped counter must be incremented atomically.
         if ExcludedFileNameBySuffix(LFilename) then

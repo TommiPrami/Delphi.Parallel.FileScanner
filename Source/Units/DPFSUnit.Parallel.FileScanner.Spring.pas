@@ -18,11 +18,11 @@ type
   public
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
       {$IFDEF USE_OMNI_THREAD_LIBRARY}
-        ; const APriority: TOTLThreadPriority = tpNormal
+      ; const APriority: TOTLThreadPriority = tpNormal
       {$ENDIF}): Boolean; reintroduce; overload;
     function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
       {$IFDEF USE_OMNI_THREAD_LIBRARY}
-        ; const APriority: TOTLThreadPriority = tpNormal
+      ; const APriority: TOTLThreadPriority = tpNormal
       {$ENDIF}): Boolean; reintroduce; overload;
   end;
 {$ENDIF}
