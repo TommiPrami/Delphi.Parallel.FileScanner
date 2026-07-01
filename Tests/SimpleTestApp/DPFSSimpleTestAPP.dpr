@@ -10,6 +10,14 @@ uses
 {$R *.res}
 
 begin
+  FastMM_DeleteEventLogFile;
+{$IFDEF DEBUG}
+  FastMM_EnterDebugMode;
+{$ELSE}
+  FastMM_EnterMinimumAddressAlignment(maa16Bytes);
+  FastMM_SetOptimizationStrategy(mmosOptimizeForSpeed);
+{$ENDIF}
+
   Application.Initialize;
   Application.MainFormOnTaskbar := True;
   Application.CreateForm(TDPFSMainForm, DPFSMainForm);

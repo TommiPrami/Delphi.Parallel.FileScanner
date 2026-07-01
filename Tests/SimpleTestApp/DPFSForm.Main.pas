@@ -7,7 +7,7 @@ interface
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, System.Diagnostics,
   System.Generics.Collections, Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls,
-  DPFSUnit.Parallel.FileScanner;
+  DPFSUnit.Parallel.FileScanner, Vcl.ExtCtrls;
 
 type
   // Runs one scan and returns its elapsed time in milliseconds (and the file count via the out param).
@@ -17,10 +17,12 @@ type
     ButtonOtlQueue: TButton;
     ButtonParallelScan: TButton;
     ButtonParallelScanSpring: TButton;
-    ButtonSpeedTest: TButton;
     CheckBoxConvertRelativePathsToAbsolute: TCheckBox;
     ComboBoxDirectories: TComboBox;
     MemoLog: TMemo;
+    PanelSpeedTest: TPanel;
+    ButtonSpeedTest: TButton;
+    EditLoopCount: TEdit;
     procedure ButtonOtlQueueClick(ASender: TObject);
     procedure ButtonParallelScanClick(ASender: TObject);
     procedure ButtonParallelScanSpringClick(ASender: TObject);
@@ -31,7 +33,7 @@ type
     function GetExtensions: TArray<string>;
     function GetSearchDirectories: TArray<string>;
     function TimedRtlScan(var AFileCount: Integer): Double;
-    procedure BenchmarkScan(const ACaption: string; const ATimedScan: TTimedScan);
+    procedure BenchmarkScan(const ACaption: string; const ATimedScan: TTimedScan; const ALoopCount: Integer);
     procedure LogCommon(const AParallelScanner: TParallelFileScannerCustom);
     procedure UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -47,15 +49,16 @@ var
 
 implementation
 
-{$IF DEFINED(USE_SPRING4D) or DEFINED(USE_OMNI_THREAD_LIBRARY)}
 uses
-{$IF DEFINED(USE_SPRING4D) and DEFINED(USE_OMNI_THREAD_LIBRARY)}
-  DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections, OtlTaskControl, OtlContainers, OtlCommon;
-{$ELSEIF DEFINED(USE_SPRING4D)}
-  DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections;
+  FastMM5
+{$IF DEFINED(USE_SPRING4D) or DEFINED(USE_OMNI_THREAD_LIBRARY)}
+  {$IF DEFINED(USE_SPRING4D) and DEFINED(USE_OMNI_THREAD_LIBRARY)}
+  , DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections, OtlTaskControl, OtlContainers, OtlCommon;
+  {$ELSEIF DEFINED(USE_SPRING4D)}
+  , DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections;
 {$ELSE}
-  OtlTaskControl, OtlContainers, OtlCommon;
-{$IFEND}
+  , OtlTaskControl, OtlContainers, OtlCommon;
+  {$IFEND}
 {$IFEND}
 
 {$R *.dfm}
@@ -180,33 +183,41 @@ begin
 end;
 
 procedure TDPFSMainForm.ButtonSpeedTestClick(ASender: TObject);
+var
+  LLoopCount: Integer;
 begin
   UpdateGUIState(ASender as TControl, False);
   try
+    LLoopCount := StrToIntDef(EditLoopCount.Text, -1);
+    if LLoopCount <= 0 then
+    begin
+      LLoopCount := 100;
+      EditLoopCount.Text := LLoopCount.ToString;
+    end;
+
     MemoLog.Lines.Clear;
-    MemoLog.Lines.Add('Speed test - 5 warm-up runs (discarded) then 100 timed runs per scan.');
+    MemoLog.Lines.Add('Speed test - 5 warm-up runs (discarded) then ' + LLoopCount.ToString + ' timed runs per scan.');
     MemoLog.Lines.Add('Directories: ' + string.Join('; ', GetSearchDirectories));
     MemoLog.Lines.Add('Extensions : ' + string.Join(' ', GetExtensions));
     MemoLog.Lines.Add('');
 
-    BenchmarkScan('Default (RTL TStringList)', TimedRtlScan);
+    BenchmarkScan('Default (RTL TStringList)', TimedRtlScan, LLoopCount);
     Application.ProcessMessages; // keep the app responsive between the (frozen) timed loops
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    BenchmarkScan('OTL value queue', TimedOtlQueueScan);
+    BenchmarkScan('OTL value queue', TimedOtlQueueScan, LLoopCount);
     Application.ProcessMessages;
     {$ENDIF}
     {$IFDEF USE_SPRING4D}
-    BenchmarkScan('Spring4D IList', TimedSpringScan);
+    BenchmarkScan('Spring4D IList', TimedSpringScan, LLoopCount);
     {$ENDIF}
   finally
     UpdateGUIState(ASender as TControl, True);
   end;
 end;
 
-procedure TDPFSMainForm.BenchmarkScan(const ACaption: string; const ATimedScan: TTimedScan);
+procedure TDPFSMainForm.BenchmarkScan(const ACaption: string; const ATimedScan: TTimedScan; const ALoopCount: Integer);
 const
   WARMUP_RUNS = 5;
-  TIMED_RUNS = 100;
 var
   LFileCount: Integer;
   LTimes: TList<Double>;
@@ -221,7 +232,8 @@ begin
   try
     LBest := 0;
     LSum := 0;
-    for LIndex := 1 to TIMED_RUNS do
+
+    for LIndex := 1 to ALoopCount do
     begin
       LElapsed := ATimedScan(LFileCount);
       LTimes.Add(LElapsed);
@@ -234,7 +246,7 @@ begin
     LTimes.Sort; // for the median
 
     MemoLog.Lines.Add(Format('%-26s files=%-5d best=%7.2f ms   avg=%7.2f ms   median=%7.2f ms',
-      [ACaption, LFileCount, LBest, LSum / TIMED_RUNS, LTimes[LTimes.Count div 2]]));
+      [ACaption, LFileCount, LBest, LSum / ALoopCount, LTimes[LTimes.Count div 2]]));
   finally
     LTimes.Free;
   end;

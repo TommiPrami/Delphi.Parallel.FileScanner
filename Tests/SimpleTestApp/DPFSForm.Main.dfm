@@ -19,15 +19,14 @@ object DPFSMainForm: TDPFSMainForm
   object ComboBoxDirectories: TComboBox
     AlignWithMargins = True
     Left = 8
-    Top = 1
+    Top = 3
     Width = 916
     Height = 23
+    Hint = 'Semicolon-separated list of root directories to scan (editable).'
     Margins.Left = 8
     Margins.Right = 8
     Align = alTop
-    Style = csDropDown
-    Hint = 'Semicolon-separated list of root directories to scan (editable).'
-    TabOrder = 6
+    TabOrder = 5
     Text = '..\..\..\..\Source\;..\..\..\..\Tests\'
     Items.Strings = (
       '..\..\..\..\Source\;..\..\..\..\Tests\'
@@ -39,7 +38,7 @@ object DPFSMainForm: TDPFSMainForm
   object ButtonParallelScan: TButton
     AlignWithMargins = True
     Left = 3
-    Top = 3
+    Top = 32
     Width = 926
     Height = 25
     Hint = 
@@ -53,7 +52,7 @@ object DPFSMainForm: TDPFSMainForm
   object ButtonParallelScanSpring: TButton
     AlignWithMargins = True
     Left = 8
-    Top = 34
+    Top = 63
     Width = 916
     Height = 25
     Hint = 
@@ -88,7 +87,7 @@ object DPFSMainForm: TDPFSMainForm
   object ButtonOtlQueue: TButton
     AlignWithMargins = True
     Left = 8
-    Top = 65
+    Top = 94
     Width = 916
     Height = 25
     Hint = 
@@ -101,26 +100,10 @@ object DPFSMainForm: TDPFSMainForm
     TabOrder = 3
     OnClick = ButtonOtlQueueClick
   end
-  object ButtonSpeedTest: TButton
-    AlignWithMargins = True
-    Left = 8
-    Top = 96
-    Width = 916
-    Height = 25
-    Hint = 
-      'Run each available scan many times and report the fastest, avera' +
-      'ge and median time.'
-    Margins.Left = 8
-    Margins.Right = 8
-    Align = alTop
-    Caption = 'Speed test (run all scans, warm-up + 100 timed runs)'
-    TabOrder = 5
-    OnClick = ButtonSpeedTestClick
-  end
   object CheckBoxConvertRelativePathsToAbsolute: TCheckBox
     AlignWithMargins = True
     Left = 8
-    Top = 127
+    Top = 166
     Width = 916
     Height = 17
     Margins.Left = 8
@@ -128,5 +111,44 @@ object DPFSMainForm: TDPFSMainForm
     Align = alTop
     Caption = 'Convert Relative Paths To Absolute'
     TabOrder = 4
+  end
+  object PanelSpeedTest: TPanel
+    AlignWithMargins = True
+    Left = 3
+    Top = 125
+    Width = 926
+    Height = 35
+    Align = alTop
+    BevelOuter = bvNone
+    TabOrder = 6
+    DesignSize = (
+      926
+      35)
+    object ButtonSpeedTest: TButton
+      AlignWithMargins = True
+      Left = 11
+      Top = 4
+      Width = 778
+      Height = 25
+      Hint = 
+        'Run each available scan many times and report the fastest, avera' +
+        'ge and median time.'
+      Margins.Left = 8
+      Margins.Right = 8
+      Anchors = [akLeft, akTop, akRight]
+      Caption = 'Speed test (run all scans, warm-up + n timed runs)'
+      TabOrder = 0
+      OnClick = ButtonSpeedTestClick
+    end
+    object EditLoopCount: TEdit
+      Left = 800
+      Top = 5
+      Width = 121
+      Height = 23
+      Alignment = taRightJustify
+      Anchors = [akTop, akRight]
+      TabOrder = 1
+      Text = '100'
+    end
   end
 end
