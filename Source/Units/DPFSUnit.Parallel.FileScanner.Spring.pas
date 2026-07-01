@@ -6,14 +6,15 @@ interface
 
 {$IFDEF USE_SPRING4D}
 uses
-  System.Classes, DPFSUnit.Parallel.FileScanner, Spring.Collections
+  System.Classes, System.SysUtils, System.Diagnostics, System.Generics.Collections,
+  DPFSUnit.Parallel.FileScanner, Spring.Collections
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   , OtlTaskControl
 {$ENDIF};
 
 type
-  // Spring4D-flavoured result container. The actual scanning/merging lives in the base
-  // class (ScanInto); these overloads only adapt the result into an IList<string>.
+  // Spring4D-flavoured scanner: shares the parallel walk (RunScanJobs) with the base class,
+  // then dedups + sorts natively into an IList<string> using Spring4D collections.
   TParallelFileScannerSpring = class(TParallelFileScannerCustom)
   public
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
@@ -38,20 +39,44 @@ function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<strin
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   ; const APriority: TOTLThreadPriority = tpNormal
 {$ENDIF}): Boolean;
+const
+  MERGE_INITIAL_CAPACITY = 2000;
 var
-  LResults: TStringList;
+  LListOfFileLists: TObjectList<TStringList>;
+  LUniqueFiles: ISet<string>;
+  LFileScanStopWatch: TStopwatch;
 begin
-  // Scan into a plain TStringList in the base, then bulk-copy into the Spring4D list once.
-  LResults := TStringList.Create;
+  LFileScanStopWatch := TStopwatch.StartNew;
+
+  LListOfFileLists := TObjectList<TStringList>.Create(True);
   try
-    ScanInto(ADirectories, AExclusions, LResults
+    // Shared parallel walk (same as the RTL path); merge natively into the Spring4D list below.
+    RunScanJobs(ADirectories, AExclusions, LListOfFileLists
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
       , APriority
 {$ENDIF});
-    AFileNamesList.AddRange(LResults.ToStringArray);
+
+    // Deduplicate with a Spring4D hash set and fill AFileNamesList directly (no RTL round-trip),
+    // preserving first-seen order; sorting is applied only when SortResultList is set.
+    LUniqueFiles := TCollections.CreateSet<string>(MERGE_INITIAL_CAPACITY);
+
+    for var LList in LListOfFileLists do
+      for var LFileName in LList do
+        if LUniqueFiles.Add(LFileName) then
+          AFileNamesList.Add(LFileName);
+
+    if FSortResultList then
+      AFileNamesList.Sort(
+        function(const ALeft, ARight: string): Integer
+        begin
+          Result := CompareText(ALeft, ARight); // case-insensitive, matching the RTL variant
+        end);
   finally
-    LResults.Free;
+    LListOfFileLists.Free;
   end;
+
+  LFileScanStopWatch.Stop;
+  FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
 
   Result := AFileNamesList.Count > 0;
 end;
