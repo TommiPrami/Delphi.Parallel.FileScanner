@@ -61,12 +61,18 @@ type
     FSortResultList: Boolean;
     procedure ResetCounters;
     procedure PrepareExtensions;
-    function ExcludedFileNameBySuffix(const AFileName: string): Boolean; inline;
-    function ExcludedPathByPrefix(const APath: string): Boolean; inline;
-    function MatchesAnyExtension(const AFileName: string): Boolean; inline;
+    function ExcludedFileNameBySuffix(const AFileName: string): Boolean;
+    function ExcludedPathByPrefix(const APath: string): Boolean;
+    function MatchesAnyExtension(const AFileName: string): Boolean;
     function BuildScanJobs(const ADirectories: TArray<string>): TArray<TScanJob>;
     procedure WalkThroughDirectory(const APath: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
-    // Shared scan/merge core for both the RTL and Spring4D result containers; fills AResult.
+    // Shared parallel walk: fills AResultLists with one TStringList per scan job (deduping/sorting
+    // is left to the caller, so each result-container flavour can merge in its own way).
+    procedure RunScanJobs(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AResultLists: TObjectList<TStringList>
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF});
+    // RTL scan/merge core (TStringList result). Spring4D has its own native merge.
     procedure ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AResult: TStringList
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
       ; const APriority: TOTLThreadPriority = tpNormal
@@ -364,6 +370,72 @@ begin
   Result := CompareText(AList[AIndex1], AList[AIndex2]);
 end;
 
+procedure TParallelFileScannerCustom.RunScanJobs(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+  const AResultLists: TObjectList<TStringList>
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF});
+var
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  LTaskConfig: IOmniTaskConfig;
+{$ENDIF}
+  LScanJobs: TArray<TScanJob>;
+begin
+  FExclusions := AExclusions;
+
+  ResetCounters;
+  PrepareExtensions;
+
+  LScanJobs := BuildScanJobs(ADirectories);
+
+  if Length(LScanJobs) > 0 then
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  begin
+    LTaskConfig := Parallel.TaskConfig;
+    LTaskConfig.SetPriority(APriority);
+
+    Parallel
+      .&for(0, High(LScanJobs))
+      .TaskConfig(LTaskConfig)
+      .NumTasks(GetThreadCount(Length(LScanJobs)))
+      .Execute(
+{$ELSE}
+    TParallel
+      .&for(0, High(LScanJobs),
+{$ENDIF}
+      procedure(AIndex: Integer)
+      var
+        LTempFileNames: TStringList;
+      begin
+        LTempFileNames := TStringList.Create;
+        try
+          WalkThroughDirectory(LScanJobs[AIndex].Directory,
+            procedure(const AFileName: string)
+            begin
+              LTempFileNames.Add(AFileName);
+            end,
+            LScanJobs[AIndex].Recursive);
+
+          if LTempFileNames.Count > 0 then
+          begin
+            FLock.Enter(AResultLists);
+            try
+              AResultLists.Add(LTempFileNames);
+              LTempFileNames := nil; // ownership transferred to the list
+            finally
+              FLock.Exit(AResultLists);
+            end;
+          end;
+        finally
+          LTempFileNames.Free; // no-op if ownership was transferred above
+        end;
+      end
+    );
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  end;
+{$ENDIF}
+end;
+
 procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
   const AResult: TStringList
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -372,74 +444,21 @@ procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>
 const
   MERGE_INITIAL_CAPACITY = 2000;
 var
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  LTaskConfig: IOmniTaskConfig;
-{$ENDIF}
   LListOfFileLists: TObjectList<TStringList>;
-  LScanJobs: TArray<TScanJob>;
   LFileScanStopWatch: TStopwatch;
   LUniqueFiles: TDictionary<string, Boolean>;
   LUpperBound: Integer;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
-  FExclusions := AExclusions;
-
-  ResetCounters;
-  PrepareExtensions;
-
-  LScanJobs := BuildScanJobs(ADirectories);
 
   LListOfFileLists := TObjectList<TStringList>.Create(True);
   LUniqueFiles := TDictionary<string, Boolean>.Create(MERGE_INITIAL_CAPACITY);
   try
-    if Length(LScanJobs) > 0 then
+    RunScanJobs(ADirectories, AExclusions, LListOfFileLists
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    begin
-      LTaskConfig := Parallel.TaskConfig;
-      LTaskConfig.SetPriority(APriority);
+      , APriority
+{$ENDIF});
 
-      Parallel
-        .&for(0, High(LScanJobs))
-        .TaskConfig(LTaskConfig)
-        .NumTasks(GetThreadCount(Length(LScanJobs)))
-        .Execute(
-{$ELSE}
-      TParallel
-        .&for(0, High(LScanJobs),
-{$ENDIF}
-        procedure(AIndex: Integer)
-        var
-          LTempFileNames: TStringList;
-        begin
-          LTempFileNames := TStringList.Create;
-          try
-            WalkThroughDirectory(LScanJobs[AIndex].Directory,
-              procedure(const AFileName: string)
-              begin
-                LTempFileNames.Add(AFileName);
-              end,
-              LScanJobs[AIndex].Recursive);
-
-            if LTempFileNames.Count > 0 then
-            begin
-              FLock.Enter(LListOfFileLists);
-              try
-                LListOfFileLists.Add(LTempFileNames);
-                LTempFileNames := nil; // ownership transferred to the list
-              finally
-                FLock.Exit(LListOfFileLists);
-              end;
-            end;
-          finally
-            LTempFileNames.Free; // no-op if ownership was transferred above
-          end;
-        end
-      );
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-    end;
-{$ENDIF}
-
-    // All worker tasks have finished here (Execute blocks), so no lock is needed.
     // Deduplicate across the per-job lists (only matters when scanned roots overlap),
     // preserving first-seen order; sorting is applied only when SortResultList is set.
     LUpperBound := 0;
