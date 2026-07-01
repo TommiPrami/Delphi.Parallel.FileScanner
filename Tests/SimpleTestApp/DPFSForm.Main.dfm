@@ -16,6 +16,26 @@ object DPFSMainForm: TDPFSMainForm
     932
     441)
   TextHeight = 15
+  object ComboBoxDirectories: TComboBox
+    AlignWithMargins = True
+    Left = 8
+    Top = 1
+    Width = 916
+    Height = 23
+    Margins.Left = 8
+    Margins.Right = 8
+    Align = alTop
+    Style = csDropDown
+    Hint = 'Semicolon-separated list of root directories to scan (editable).'
+    TabOrder = 6
+    Text = '..\..\..\..\Source\;..\..\..\..\Tests\'
+    Items.Strings = (
+      '..\..\..\..\Source\;..\..\..\..\Tests\'
+      'C:\Program Files;C:\Program Files (x86)'
+      'C:\Windows\System32'
+      'C:\Windows'
+      'C:\Users')
+  end
   object ButtonParallelScan: TButton
     AlignWithMargins = True
     Left = 3
@@ -49,9 +69,9 @@ object DPFSMainForm: TDPFSMainForm
   object MemoLog: TMemo
     AlignWithMargins = True
     Left = 3
-    Top = 158
+    Top = 189
     Width = 916
-    Height = 280
+    Height = 249
     Margins.Left = 8
     Margins.Top = 8
     Margins.Right = 8

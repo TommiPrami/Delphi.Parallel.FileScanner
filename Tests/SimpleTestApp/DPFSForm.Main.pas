@@ -19,6 +19,7 @@ type
     ButtonParallelScanSpring: TButton;
     ButtonSpeedTest: TButton;
     CheckBoxConvertRelativePathsToAbsolute: TCheckBox;
+    ComboBoxDirectories: TComboBox;
     MemoLog: TMemo;
     procedure ButtonOtlQueueClick(ASender: TObject);
     procedure ButtonParallelScanClick(ASender: TObject);
@@ -353,8 +354,23 @@ begin
 end;
 
 function TDPFSMainForm.GetSearchDirectories: TArray<string>;
+var
+  LDirectories: TStringList;
 begin
-  Result := ['..\..\..\..\Source\', '..\..\..\..\Tests\'];
+  // The combo box holds a semicolon-separated list of root directories (editable).
+  LDirectories := TStringList.Create;
+  try
+    LDirectories.StrictDelimiter := True;
+    LDirectories.Delimiter := ';';
+    LDirectories.DelimitedText := ComboBoxDirectories.Text;
+
+    for var LIndex := 0 to LDirectories.Count - 1 do
+      LDirectories[LIndex] := Trim(LDirectories[LIndex]);
+
+    Result := LDirectories.ToStringArray;
+  finally
+    LDirectories.Free;
+  end;
 end;
 
 procedure TDPFSMainForm.LogCommon(const AParallelScanner: TParallelFileScannerCustom);
