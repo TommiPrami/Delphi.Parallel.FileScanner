@@ -357,6 +357,13 @@ begin
   end;
 end;
 
+function ComparePathsCI(AList: TStringList; AIndex1, AIndex2: Integer): Integer;
+begin
+  // Case-insensitive ordinal compare (CompareText) instead of the locale-aware AnsiCompareText
+  // that TStringList.Sort uses by default - the latter dominates the scan time on large results.
+  Result := CompareText(AList[AIndex1], AList[AIndex2]);
+end;
+
 procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
   const AResult: TStringList
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -448,7 +455,7 @@ begin
           AResult.Add(LFileName);
 
     if FSortResultList then
-      AResult.Sort;
+      AResult.CustomSort(ComparePathsCI);
   finally
     LUniqueFiles.Free;
     LListOfFileLists.Free;
