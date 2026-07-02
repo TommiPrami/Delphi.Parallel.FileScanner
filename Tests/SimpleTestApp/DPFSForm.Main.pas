@@ -210,6 +210,11 @@ begin
     {$IFDEF USE_SPRING4D}
     BenchmarkScan('Spring4D IList', TimedSpringScan, LLoopCount);
     {$ENDIF}
+
+    MemoLog.Lines.Add('');
+    MemoLog.Lines.Add('FastMM5 Thread contentions: SmallBlock=' + FastMM_SmallBlockThreadContentionCount.ToString
+      + ' MediumBlock=' + FastMM_MediumBlockThreadContentionCount.ToString + ' LargeBlock='
+      + FastMM_LargeBlockThreadContentionCount.ToString);
   finally
     UpdateGUIState(ASender as TControl, True);
   end;
