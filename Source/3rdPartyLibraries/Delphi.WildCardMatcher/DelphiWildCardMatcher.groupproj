@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{AE901258-0228-44D4-8BB8-A01054B33C48}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="Benchmarks\Delphi.WildCardMatcher.Benchmark.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Unittests\Delphi.WildCardMatcher.Tests.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="Delphi_WildCardMatcher_Benchmark">
+        <MSBuild Projects="Benchmarks\Delphi.WildCardMatcher.Benchmark.dproj"/>
+    </Target>
+    <Target Name="Delphi_WildCardMatcher_Benchmark:Clean">
+        <MSBuild Projects="Benchmarks\Delphi.WildCardMatcher.Benchmark.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Delphi_WildCardMatcher_Benchmark:Make">
+        <MSBuild Projects="Benchmarks\Delphi.WildCardMatcher.Benchmark.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Delphi_WildCardMatcher_Tests">
+        <MSBuild Projects="Unittests\Delphi.WildCardMatcher.Tests.dproj"/>
+    </Target>
+    <Target Name="Delphi_WildCardMatcher_Tests:Clean">
+        <MSBuild Projects="Unittests\Delphi.WildCardMatcher.Tests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Delphi_WildCardMatcher_Tests:Make">
+        <MSBuild Projects="Unittests\Delphi.WildCardMatcher.Tests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="Delphi_WildCardMatcher_Benchmark;Delphi_WildCardMatcher_Tests"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="Delphi_WildCardMatcher_Benchmark:Clean;Delphi_WildCardMatcher_Tests:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="Delphi_WildCardMatcher_Benchmark:Make;Delphi_WildCardMatcher_Tests:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
