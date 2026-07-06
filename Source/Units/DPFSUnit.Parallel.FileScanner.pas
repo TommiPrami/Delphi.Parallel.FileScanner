@@ -12,6 +12,11 @@ uses
 
 type
   TDirectoryWalkProc = reference to procedure(const AFileName: string);
+  // Streaming ScanFiles callback, two flavours:
+  // - TFileFoundCallbackProc: anonymous method / method reference (same signature as the internal walk callback)
+  // - TFileFoundCallback: classic "of object" event-handler style method pointer
+  TFileFoundCallbackProc = TDirectoryWalkProc;
+  TFileFoundCallback = procedure(const AFileName: string) of object;
 
   TExclusionKind = (ekPathPrefixes, ekPathSuffixes);
 
@@ -94,6 +99,21 @@ type
     constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload;
     constructor Create(const AExtensions: TStringList; const ASortResultList: Boolean = True); overload;
     destructor Destroy; override;
+
+    // Streaming scan: AFileFoundCallback fires for every matching file AS IT IS FOUND, from
+    // multiple worker threads concurrently - the callback MUST be thread-safe. Results are
+    // not deduplicated or sorted (delivery order is nondeterministic); SortResultList does
+    // not apply here. Available on both the RTL and Spring4D scanner classes.
+    function ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): Boolean; overload;
+    function ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): Boolean; overload;
 
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
     property SkippedFilesCount: Integer read GetSkippedFilesCount;
@@ -482,6 +502,86 @@ begin
 
   LFileScanStopWatch.Stop;
   FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
+end;
+
+function TParallelFileScannerCustom.ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+  const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF}): Boolean;
+var
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  LTaskConfig: IOmniTaskConfig;
+{$ENDIF}
+  LScanJobs: TArray<TScanJob>;
+  LFileScanStopWatch: TStopwatch;
+  LFileCount: Integer;
+begin
+  LFileScanStopWatch := TStopwatch.StartNew;
+  FExclusions := AExclusions;
+
+  ResetCounters;
+  PrepareExtensions;
+
+  LScanJobs := BuildScanJobs(ADirectories);
+  LFileCount := 0; // local because anonymous methods cannot capture var parameters
+
+  if Length(LScanJobs) > 0 then
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  begin
+    LTaskConfig := Parallel.TaskConfig;
+    LTaskConfig.SetPriority(APriority);
+
+    Parallel
+      .&for(0, High(LScanJobs))
+      .TaskConfig(LTaskConfig)
+      .NumTasks(GetThreadCount(Length(LScanJobs)))
+      .Execute(
+{$ELSE}
+    TParallel
+      .&for(0, High(LScanJobs),
+{$ENDIF}
+      procedure(AIndex: Integer)
+      begin
+        WalkThroughDirectory(LScanJobs[AIndex].Directory,
+          procedure(const AFileName: string)
+          begin
+            // Fires on worker threads as files are found; the callback's own thread
+            // safety is the caller's responsibility.
+            AFileFoundCallback(AFileName);
+            AtomicIncrement(LFileCount);
+          end,
+          LScanJobs[AIndex].Recursive);
+      end
+    );
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  end;
+{$ENDIF}
+
+  AFileCount := LFileCount;
+  Result := AFileCount > 0;
+
+  LFileScanStopWatch.Stop;
+  FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
+end;
+
+function TParallelFileScannerCustom.ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+  const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF}): Boolean;
+var
+  LCallbackProc: TFileFoundCallbackProc;
+begin
+  // Wrap the "of object" method pointer into a method reference and delegate. The explicit
+  // local forces overload resolution to the method-reference overload (passing the parameter
+  // straight through would resolve right back into this overload).
+  LCallbackProc := AFileFoundCallback;
+
+  Result := ScanFiles(ADirectories, AExclusions, LCallbackProc, AFileCount
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+    , APriority
+{$ENDIF});
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;

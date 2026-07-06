@@ -29,6 +29,42 @@ uses
 const
   EXTENSION_PATTERNS: array[0..4] of string = ('*.pas', '*.inc', '*.dfm', '*.dpr', '*.dproj');
 
+type
+  // Exercises the "of object" ScanFiles overload; FileFound runs on worker threads.
+  TCallbackCollector = class(TObject)
+  strict private
+    FFiles: TStringList;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure FileFound(const AFileName: string);
+    property Files: TStringList read FFiles;
+  end;
+
+constructor TCallbackCollector.Create;
+begin
+  inherited Create;
+
+  FFiles := TStringList.Create;
+end;
+
+destructor TCallbackCollector.Destroy;
+begin
+  FFiles.Free;
+
+  inherited Destroy;
+end;
+
+procedure TCallbackCollector.FileFound(const AFileName: string);
+begin
+  TMonitor.Enter(FFiles);
+  try
+    FFiles.Add(AFileName);
+  finally
+    TMonitor.Exit(FFiles);
+  end;
+end;
+
 var
   GFailures: Integer = 0;
   GScanRoots: TArray<string>;
@@ -41,6 +77,7 @@ end;
 function MatchesAnyExtension(const AName: string): Boolean;
 begin
   Result := False;
+
   for var LExt in EXTENSION_PATTERNS do
     if TPath.MatchesPattern(AName, LExt, False) then
       Exit(True);
@@ -52,6 +89,7 @@ begin
   Result := TStringList.Create;
   Result.Sorted := True;
   Result.Duplicates := dupIgnore;
+
   for var LItem in AItems do
     Result.Add(TPath.GetFullPath(LItem).ToLower);
 end;
@@ -79,9 +117,11 @@ var
   LDiff, LIndex: Integer;
 begin
   LDiff := 0;
+
   for LIndex := 0 to ABaseline.Count - 1 do
     if AActual.IndexOf(ABaseline[LIndex]) < 0 then
       Inc(LDiff);
+
   for LIndex := 0 to AActual.Count - 1 do
     if ABaseline.IndexOf(AActual[LIndex]) < 0 then
       Inc(LDiff);
@@ -106,6 +146,7 @@ begin
   try
     LScanner.ConvertRelativePathsToAbsolute := True;
     LScanner.GetFileList(GScanRoots, LExclusions, LList);
+
     Result := NormalizedSet(LList.ToStringArray);
   finally
     LList.Free;
@@ -154,12 +195,76 @@ begin
     LScanner.ConvertRelativePathsToAbsolute := True;
     LList := TCollections.CreateList<string>;
     LScanner.GetFileList(GScanRoots, LExclusions, LList);
+
     Result := NormalizedSet(LList.ToArray);
   finally
     LScanner.Free;
   end;
 end;
 {$ENDIF}
+
+// Streaming callback API: files are delivered from worker threads as they are found, so the
+// callback locks the shared list - exactly what real calling code must do.
+function ScanViaCallback: TStringList;
+var
+  LScanner: TParallelFileScanner;
+  LExclusions: TFileScanExclusions;
+  LRaw: TStringList;
+  LFileCount: Integer;
+begin
+  LScanner := TParallelFileScanner.Create(Extensions);
+  LRaw := TStringList.Create;
+  try
+    LScanner.ConvertRelativePathsToAbsolute := True;
+    LFileCount := 0;
+
+    LScanner.ScanFiles(GScanRoots, LExclusions,
+      procedure(const AFileName: string)
+      begin
+        TMonitor.Enter(LRaw);
+        try
+          LRaw.Add(AFileName);
+        finally
+          TMonitor.Exit(LRaw);
+        end;
+      end,
+      LFileCount);
+
+    if LFileCount <> LRaw.Count then
+    begin
+      Writeln(Format('[FAIL] %-22s AFileCount=%d but callback delivered %d', ['callback count', LFileCount, LRaw.Count]));
+      Inc(GFailures);
+    end;
+
+    Result := NormalizedSet(LRaw.ToStringArray);
+  finally
+    LRaw.Free;
+    LScanner.Free;
+  end;
+end;
+
+// Same scan through the classic "of object" method-pointer overload.
+function ScanViaObjectCallback: TStringList;
+var
+  LScanner: TParallelFileScanner;
+  LExclusions: TFileScanExclusions;
+  LCollector: TCallbackCollector;
+  LFileCount: Integer;
+begin
+  LScanner := TParallelFileScanner.Create(Extensions);
+  LCollector := TCallbackCollector.Create;
+  try
+    LScanner.ConvertRelativePathsToAbsolute := True;
+    LFileCount := 0;
+
+    LScanner.ScanFiles(GScanRoots, LExclusions, LCollector.FileFound, LFileCount);
+
+    Result := NormalizedSet(LCollector.Files.ToStringArray);
+  finally
+    LCollector.Free;
+    LScanner.Free;
+  end;
+end;
 
 procedure CheckExclusion;
 var
@@ -233,6 +338,20 @@ begin
         LSpring.Free;
       end;
       {$ENDIF}
+
+      var LCallback := ScanViaCallback;
+      try
+        CheckSameAsBaseline('streaming callback', LCallback, LBaseline);
+      finally
+        LCallback.Free;
+      end;
+
+      var LObjectCallback := ScanViaObjectCallback;
+      try
+        CheckSameAsBaseline('of-object callback', LObjectCallback, LBaseline);
+      finally
+        LObjectCallback.Free;
+      end;
     finally
       LBaseline.Free;
     end;
