@@ -129,11 +129,18 @@ end;
 function TClassProxy.CreateInstance(
   const constructorArguments: array of TValue): TObject;
 var
+  obj: TObject;
   table: PInterfaceTable;
   i: Integer;
 begin
   Result := TActivator.CreateInstance(ProxyClass, constructorArguments);
-  fProxies.Add(Result, Self);
+  obj := fProxies.AsObject;
+  TMonitor.Enter(obj);
+  try
+    fProxies.Add(Result, Self);
+  finally
+    TMonitor.Exit(obj);
+  end;
 
   table := ProxyClassData.IntfTable;
   for i := 1 to table.EntryCount - 1 do
@@ -281,17 +288,33 @@ begin
 end;
 
 function TClassProxy.GetProxyTargetAccessor: IProxyTargetAccessor;
+var
+  obj: TObject;
 begin
   // Do not access any instance members here!!!
   // Self is not a TClassProxy but this method needs to be compatible with
   // function: IInterface of object as declared in System.InvokeImplGetter
-  Result := TProxyTargetAccessor.Create(Self, fProxies[Self].fInterceptors);
+  obj := fProxies.AsObject;
+  TMonitor.Enter(obj);
+  try
+    Result := TProxyTargetAccessor.Create(Self, fProxies[Self].fInterceptors);
+  finally
+    TMonitor.Exit(obj);
+  end;
 end;
 
 class procedure TClassProxy.ProxyFreeInstance(const Self: TObject);
+var
+  obj: TObject;
 begin
   GetClassData(ClassParent).FreeInstance(Self); // inherited
-  fProxies.Remove(Self);
+  obj := fProxies.AsObject;
+  TMonitor.Enter(obj);
+  try
+    fProxies.Remove(Self);
+  finally
+    TMonitor.Exit(obj);
+  end;
 end;
 
 {$ENDREGION}
