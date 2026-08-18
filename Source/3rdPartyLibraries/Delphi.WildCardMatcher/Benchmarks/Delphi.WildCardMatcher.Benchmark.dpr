@@ -21,7 +21,9 @@
 {$APPTYPE CONSOLE}
 
 uses
+  FastMM5 in '..\Source\3rdPArty\FastMM5\FastMM5.pas',
   System.SysUtils,
+  Delphi.ProcessAffinity.Utils in '..\Source\3rdPArty\Delphi.ProcessAffinity.Utils\Delphi.ProcessAffinity.Utils.pas',
   Delphi.WildCardMatcher in '..\Source\Delphi.WildCardMatcher.pas',
   Delphi.WildCardMatcher.Benchmark.Types in 'Delphi.WildCardMatcher.Benchmark.Types.pas',
   Delphi.WildCardMatcher.Benchmark.Utils in 'Delphi.WildCardMatcher.Benchmark.Utils.pas',
@@ -29,6 +31,8 @@ uses
 
 begin
   try
+    SetPerformanceCoreAffinity;
+
     RunParitySuite;
     RunBenchmarkScenarios;
 

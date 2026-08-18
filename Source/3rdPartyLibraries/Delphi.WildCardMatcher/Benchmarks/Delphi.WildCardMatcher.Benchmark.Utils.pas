@@ -11,7 +11,6 @@ interface
 uses
   Delphi.WildCardMatcher.Benchmark.Types;
 
-
   // Writes ALine to the console AND appends it to the log file (created
   // fresh on the first call, next to the exe).  If the file cannot be
   // created, logging silently continues console-only.
@@ -24,16 +23,31 @@ uses
   // Runs ARun BENCH_ROUNDS times, validates the match count every round and
   // logs the BEST (minimum) time as ns/op.
   procedure TimeVariant(const AVariant: string; const ATotalOps, AExpectedTotal: Int64; const ARun: TBenchRun);
+  procedure SetPerformanceCoreAffinity;
 
 implementation
 
 uses
-  System.Diagnostics, System.SysUtils;
+  Winapi.Windows, System.Diagnostics, System.SysUtils, Delphi.ProcessAffinity.Utils;
 
 var
   GLogFile: TextFile;
   GLogOpen: Boolean = False;
   GLogFailed: Boolean = False;
+
+procedure SetPerformanceCoreAffinity;
+var
+  LProcessHandle: THandle;
+  LPerformanceCoreMask: NativeUInt;
+begin
+  LProcessHandle := GetCurrentProcess;
+
+  LPerformanceCoreMask := GetPerformanceAffinityMask(LProcessHandle, False);
+  SetAffinityMask(LProcessHandle, LPerformanceCoreMask);
+
+  SetPriorityClass(LProcessHandle, HIGH_PRIORITY_CLASS);
+end;
+
 
 function LogFileName: string;
 const

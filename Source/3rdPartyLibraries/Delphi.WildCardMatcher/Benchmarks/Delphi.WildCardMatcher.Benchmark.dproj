@@ -80,6 +80,8 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="..\Source\3rdPArty\FastMM5\FastMM5.pas"/>
+        <DCCReference Include="..\Source\3rdPArty\Delphi.ProcessAffinity.Utils\Delphi.ProcessAffinity.Utils.pas"/>
         <DCCReference Include="..\Source\Delphi.WildCardMatcher.pas"/>
         <DCCReference Include="Delphi.WildCardMatcher.Benchmark.Types.pas"/>
         <DCCReference Include="Delphi.WildCardMatcher.Benchmark.Utils.pas"/>

@@ -216,6 +216,80 @@ type
     procedure FilterQuotedAltPatternsTest;
     [Test]
     procedure FilterDefaultInitialisedRecordAcceptsEverythingTest;
+
+    { ValidatePattern }
+    [Test]
+    procedure ValidatePatternAcceptsGoodPatternsTest;
+    [Test]
+    procedure ValidatePatternRejectsMalformedPatternsTest;
+
+    { Match attribution: MatchIndex / AcceptsEx }
+    [Test]
+    procedure MatchIndexTest;
+    [Test]
+    procedure FilterAcceptsExTest;
+
+    { Path mode (wcoPathMode) }
+    [Test]
+    procedure PathModeSegmentStarTest;
+    [Test]
+    procedure PathModeGlobstarTest;
+    [Test]
+    procedure PathModeQuestionMarkTest;
+    [Test]
+    procedure PathModeTrailingSegmentStarTest;
+    [Test]
+    procedure PathModeCaseSensitiveComboTest;
+    [Test]
+    procedure PathModeAdhocMatchesRegisteredTest;
+    [Test]
+    procedure PathModeOffIsDefaultBehaviourTest;
+
+    { Differential fuzzing: registered vs ad-hoc engine, all modes }
+    [Test]
+    procedure DifferentialFuzzTest;
+
+    { Lint: compiler-style warnings and hints }
+    [Test]
+    procedure LintPatternMalformedTest;
+    [Test]
+    procedure LintPatternStarRunTest;
+    [Test]
+    procedure LintPatternClassAndAlternationTest;
+    [Test]
+    procedure LintPatternEmptyTest;
+    [Test]
+    procedure LintSetDuplicatesAndShadowingTest;
+    [Test]
+    procedure FilterLintIncludeAlsoExcludedTest;
+    [Test]
+    procedure FilterLintMatchAllTest;
+    [Test]
+    procedure FilterLintCleanFilterTest;
+
+    { API additions }
+    [Test]
+    procedure PatternMatchesEverythingTest;
+    [Test]
+    procedure PatternCountAndFilterCountsTest;
+    [Test]
+    procedure FilterBulkFilterTest;
+
+    { Additional matcher coverage }
+    [Test]
+    procedure LiteralMetacharacterTricksTest;
+    [Test]
+    procedure UnicodeNonAsciiSimdCandidateTest;
+    [Test]
+    procedure LongLiteralPatternsTest;
+    [Test]
+    procedure QuotedAltUnicodeCaseInsensitiveTest;
+    [Test]
+    procedure PathModeClassAndQuotedAltSeparatorsTest;
+    [Test]
+    procedure PathModeMixedSeparatorsTest;
+    [Test]
+    procedure FilterPathModeOptionsTest;
   end;
 
 implementation
@@ -1335,6 +1409,657 @@ begin
   Assert.AreEqual(0, Length(LFilter.ExcludePatterns));
   Assert.IsTrue(LFilter.Accepts('anything'));
   Assert.IsTrue(LFilter.Accepts(''));
+end;
+
+{ ValidatePattern }
+
+procedure TWildCardMatcherDUnitX.ValidatePatternAcceptsGoodPatternsTest;
+var
+  LError: string;
+begin
+  Assert.IsTrue(TWildCard.ValidatePattern('', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('*', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('*.pas', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('Test_###.log', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('b[ae]ll', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('[]abc]', LError), 'leading ] is a literal member');
+  Assert.IsTrue(TWildCard.ValidatePattern('[-x]', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('[!a-z]', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('["a"|"b"]', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('[!"foo"|"bar"]', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('foo[""]', LError), 'empty alternative is legal');
+  Assert.IsTrue(TWildCard.ValidatePattern('a|b', LError), '| outside a class is a literal');
+
+  Assert.AreEqual('', LError, 'no error message for valid patterns');
+end;
+
+procedure TWildCardMatcherDUnitX.ValidatePatternRejectsMalformedPatternsTest;
+var
+  LError: string;
+begin
+  Assert.IsFalse(TWildCard.ValidatePattern('[abc', LError));
+  Assert.IsTrue(LError.Contains('position 1'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('a[bc', LError));
+  Assert.IsTrue(LError.Contains('position 2'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('[]', LError), 'bare [] is an unterminated class');
+  Assert.IsTrue(LError.Contains('position 1'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('["foo', LError), 'unterminated quoted alternative');
+  Assert.IsTrue(LError.Contains('position 2'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('["a"x"b"]', LError), 'garbage between alternatives');
+  Assert.IsTrue(LError.Contains('position 5'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('["a"|"b', LError), 'unterminated second alternative');
+  Assert.IsTrue(LError.Contains('position 6'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('["a"', LError), 'class never closed after alternative');
+  Assert.IsTrue(LError.Contains('position 1'), LError);
+end;
+
+{ Match attribution: MatchIndex / AcceptsEx }
+
+procedure TWildCardMatcherDUnitX.MatchIndexTest;
+var
+  LMask: TWildCard;
+begin
+  LMask := TWildCard.Create(TArray<string>.Create('*.txt', '*.pas', '*.dpr'));
+
+  Assert.AreEqual(0, LMask.MatchIndex('readme.txt'));
+  Assert.AreEqual(1, LMask.MatchIndex('Unit1.pas'));
+  Assert.AreEqual(2, LMask.MatchIndex('Project.dpr'));
+  Assert.AreEqual(-1, LMask.MatchIndex('image.png'));
+
+  // First hit wins - the catch-all registered first shadows the rest.
+  LMask := TWildCard.Create(TArray<string>.Create('*', '*.pas'));
+  Assert.AreEqual(0, LMask.MatchIndex('Unit1.pas'));
+
+  // Empty registered set never matches.
+  LMask := Default(TWildCard);
+  Assert.AreEqual(-1, LMask.MatchIndex('anything'));
+end;
+
+procedure TWildCardMatcherDUnitX.FilterAcceptsExTest;
+var
+  LFilter: TWildCardFilter;
+  LIncludeIndex, LExcludeIndex: Integer;
+begin
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.pas', '*.dpr'),
+    TArray<string>.Create('*_test*', '*backup*'));
+
+  Assert.IsTrue(LFilter.AcceptsEx('Project.dpr', LIncludeIndex, LExcludeIndex));
+  Assert.AreEqual(1, LIncludeIndex, 'matched by the .dpr include');
+  Assert.AreEqual(-1, LExcludeIndex);
+
+  Assert.IsFalse(LFilter.AcceptsEx('Unit_test.pas', LIncludeIndex, LExcludeIndex));
+  Assert.AreEqual(0, LIncludeIndex, 'was included by .pas ...');
+  Assert.AreEqual(0, LExcludeIndex, '... but rejected by *_test*');
+
+  Assert.IsFalse(LFilter.AcceptsEx('Notes.txt', LIncludeIndex, LExcludeIndex));
+  Assert.AreEqual(-1, LIncludeIndex, 'not included at all');
+  Assert.AreEqual(-1, LExcludeIndex, 'exclude never consulted a match');
+
+  // Exclude-only filter: include index stays -1 for accepted inputs.
+  LFilter := TWildCardFilter.Create(TArray<string>.Create(), TArray<string>.Create('*backup*'));
+
+  Assert.IsTrue(LFilter.AcceptsEx('Unit1.pas', LIncludeIndex, LExcludeIndex));
+  Assert.AreEqual(-1, LIncludeIndex);
+  Assert.AreEqual(-1, LExcludeIndex);
+
+  Assert.IsFalse(LFilter.AcceptsEx('Unit1_backup.pas', LIncludeIndex, LExcludeIndex));
+  Assert.AreEqual(0, LExcludeIndex);
+end;
+
+{ Path mode (wcoPathMode) }
+
+procedure TWildCardMatcherDUnitX.PathModeSegmentStarTest;
+begin
+  // '*' stays inside one path segment ('\' and '/' both count).
+  Assert.IsTrue (TWildCard.Create('*.pas', [wcoPathMode]).Match('Unit1.pas'));
+  Assert.IsFalse(TWildCard.Create('*.pas', [wcoPathMode]).Match('src\Unit1.pas'), '* must not cross a backslash');
+  Assert.IsFalse(TWildCard.Create('*.pas', [wcoPathMode]).Match('src/Unit1.pas'), '* must not cross a forward slash');
+
+  Assert.IsTrue (TWildCard.Create('src\*.pas', [wcoPathMode]).Match('src\Unit1.pas'));
+  Assert.IsFalse(TWildCard.Create('src\*.pas', [wcoPathMode]).Match('src\sub\Unit1.pas'));
+
+  Assert.IsTrue (TWildCard.Create('*\*.pas', [wcoPathMode]).Match('src\Unit1.pas'));
+  Assert.IsFalse(TWildCard.Create('*\*.pas', [wcoPathMode]).Match('a\b\Unit1.pas'), 'exactly one directory level');
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeGlobstarTest;
+begin
+  // A run of two or more stars crosses separators.
+  Assert.IsTrue(TWildCard.Create('**.pas', [wcoPathMode]).Match('a\b\c\Unit1.pas'));
+  Assert.IsTrue(TWildCard.Create('**.pas', [wcoPathMode]).Match('Unit1.pas'));
+
+  Assert.IsTrue (TWildCard.Create('src\**\final.txt', [wcoPathMode]).Match('src\a\b\final.txt'));
+  Assert.IsTrue (TWildCard.Create('src\**\final.txt', [wcoPathMode]).Match('src\a\final.txt'));
+  Assert.IsFalse(TWildCard.Create('src\**\final.txt', [wcoPathMode]).Match('src\final.txt'),
+    'the separators around ** are literal - at least one directory level required');
+  Assert.IsFalse(TWildCard.Create('src\**\final.txt', [wcoPathMode]).Match('other\a\final.txt'));
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeQuestionMarkTest;
+begin
+  Assert.IsTrue (TWildCard.Create('a?b', [wcoPathMode]).Match('axb'));
+  Assert.IsFalse(TWildCard.Create('a?b', [wcoPathMode]).Match('a\b'), '? must not match a separator');
+  Assert.IsFalse(TWildCard.Create('a?b', [wcoPathMode]).Match('a/b'));
+
+  // Without path mode '?' matches separators like any other char.
+  Assert.IsTrue(TWildCard.Create('a?b').Match('a\b'));
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeTrailingSegmentStarTest;
+begin
+  Assert.IsTrue (TWildCard.Create('src\*', [wcoPathMode]).Match('src\file.txt'));
+  Assert.IsTrue (TWildCard.Create('src\*', [wcoPathMode]).Match('src\'), 'trailing * matches the empty segment');
+  Assert.IsFalse(TWildCard.Create('src\*', [wcoPathMode]).Match('src\a\b'), 'trailing * must not cross into deeper segments');
+  Assert.IsTrue (TWildCard.Create('src\**', [wcoPathMode]).Match('src\a\b'), 'trailing ** crosses');
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeCaseSensitiveComboTest;
+begin
+  Assert.IsTrue (TWildCard.Create('src\*.pas', [wcoCaseSensitive, wcoPathMode]).Match('src\unit.pas'));
+  Assert.IsFalse(TWildCard.Create('src\*.pas', [wcoCaseSensitive, wcoPathMode]).Match('SRC\unit.pas'));
+  Assert.IsFalse(TWildCard.Create('src\*.pas', [wcoCaseSensitive, wcoPathMode]).Match('src\sub\unit.pas'));
+
+  Assert.IsTrue(TWildCard.Create('src\*.pas', [wcoPathMode]).Match('SRC\UNIT.PAS'), 'CI + path mode');
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeAdhocMatchesRegisteredTest;
+const
+  PATTERNS: array[0..5] of string = ('*.pas', 'src\*.pas', '**.pas', 'a?b', 'src\**', '*\*.pas');
+  INPUTS: array[0..5] of string = ('src\unit.pas', 'src\unit.pas', 'a\b\c.pas', 'a\b', 'src\a\b', 'src\unit.pas');
+var
+  LIndex: Integer;
+  LAdhoc: TWildCard;
+  LAdhocResult, LRegisteredResult: Boolean;
+begin
+  // The interpreting (ad-hoc) and compiled (registered) engines must
+  // agree on path-mode semantics.
+  LAdhoc := TWildCard.Create([wcoPathMode]);
+
+  for LIndex := 0 to High(PATTERNS) do
+  begin
+    LAdhocResult := LAdhoc.Match(INPUTS[LIndex], PATTERNS[LIndex]);
+    LRegisteredResult := TWildCard.Create(PATTERNS[LIndex], [wcoPathMode]).Match(INPUTS[LIndex]);
+
+    Assert.IsTrue(LAdhocResult = LRegisteredResult,
+      Format('engines disagree in path mode: pattern=<%s> input=<%s> ad-hoc=%s registered=%s',
+      [PATTERNS[LIndex], INPUTS[LIndex], BoolToStr(LAdhocResult, True), BoolToStr(LRegisteredResult, True)]));
+  end;
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeOffIsDefaultBehaviourTest;
+begin
+  // Options [] behaves exactly like the classic Boolean constructors.
+  Assert.IsTrue(TWildCard.Create('*.pas', []).Match('src\Unit1.pas'), 'without wcoPathMode, * crosses separators');
+  Assert.IsTrue(TWildCard.Create('*.pas', []).Match('SRC\UNIT1.PAS'), 'case-insensitive by default');
+
+  Assert.IsFalse(TWildCard.Create('*.pas').PathMode);
+  Assert.IsFalse(TWildCard.Create('*.pas', []).PathMode);
+  Assert.IsTrue (TWildCard.Create('*.pas', [wcoPathMode]).PathMode);
+  Assert.IsTrue (TWildCard.Create('*.pas', [wcoCaseSensitive]).CaseSensitive);
+end;
+
+{ Differential fuzzing helpers }
+
+function FuzzNextRandom(var ASeed: Cardinal; const ARange: Cardinal): Cardinal;
+begin
+  // Deterministic LCG (Numerical Recipes constants) - keeps the fuzz run
+  // reproducible regardless of the RTL's global Random state.
+  ASeed := (ASeed * 1664525) + 1013904223;
+  Result := (ASeed shr 16) mod ARange;
+end;
+
+function FuzzRandomPattern(var ASeed: Cardinal): string;
+const
+  PATTERN_CHARS: array[0..19] of Char = (
+    'a', 'b', 'c', 'A', 'Z', '0', '7', '*', '?', '#', '[', ']', '!', '"', '|', '-', '\', '/', '.', 'x');
+var
+  LLen, LIndex: Integer;
+begin
+  LLen := FuzzNextRandom(ASeed, 11); // 0..10 chars
+  SetLength(Result, LLen);
+
+  for LIndex := 1 to LLen do
+    Result[LIndex] := PATTERN_CHARS[FuzzNextRandom(ASeed, Length(PATTERN_CHARS))];
+end;
+
+function FuzzRandomInput(var ASeed: Cardinal): string;
+const
+  INPUT_CHARS: array[0..12] of Char = (
+    'a', 'b', 'c', 'A', 'B', 'Z', '0', '7', '\', '/', '.', 'x', 'y');
+var
+  LLen, LIndex: Integer;
+begin
+  LLen := FuzzNextRandom(ASeed, 13); // 0..12 chars
+  SetLength(Result, LLen);
+
+  for LIndex := 1 to LLen do
+    Result[LIndex] := INPUT_CHARS[FuzzNextRandom(ASeed, Length(INPUT_CHARS))];
+end;
+
+function FuzzDerivedInput(const APattern: string; var ASeed: Cardinal): string;
+const
+  FILL_CHARS: array[0..5] of Char = ('a', 'b', 'Z', '0', '\', '.');
+var
+  LIndex, LRun, LRunIndex: Integer;
+begin
+  // Substitutes metacharacters with plausible content so a useful share
+  // of derived inputs actually MATCH their pattern - purely random
+  // inputs almost never do.
+  Result := '';
+
+  for LIndex := 1 to Length(APattern) do
+    case APattern[LIndex] of
+      '*':
+        begin
+          LRun := FuzzNextRandom(ASeed, 4); // 0..3 chars
+          for LRunIndex := 1 to LRun do
+            Result := Result + FILL_CHARS[FuzzNextRandom(ASeed, Length(FILL_CHARS))];
+        end;
+      '?':
+        Result := Result + FILL_CHARS[FuzzNextRandom(ASeed, Length(FILL_CHARS))];
+      '#':
+        Result := Result + Chr(Ord('0') + Integer(FuzzNextRandom(ASeed, 10)));
+      '[', ']', '!', '"', '|':
+        ; // drop class/alternation syntax - close enough for fuzzing
+    else
+      Result := Result + APattern[LIndex];
+    end;
+end;
+
+procedure TWildCardMatcherDUnitX.DifferentialFuzzTest;
+const
+  FUZZ_SEED = 20260715;
+  FUZZ_ITERATIONS = 2000;
+  MODE_COUNT = 4;
+  MODE_OPTIONS: array[0..MODE_COUNT - 1] of TWildCardOptions = (
+    [], [wcoCaseSensitive], [wcoPathMode], [wcoCaseSensitive, wcoPathMode]);
+  MODE_NAMES: array[0..MODE_COUNT - 1] of string = ('CI', 'CS', 'CI+Path', 'CS+Path');
+var
+  LSeed: Cardinal;
+  LIteration, LInputIndex, LMode: Integer;
+  LPattern, LInput, LError: string;
+  LAdhoc: array[0..MODE_COUNT - 1] of TWildCard;
+  LRegistered: TWildCard;
+  LInputs: array[0..4] of string;
+  LPatternIsValid: Boolean;
+  LAdhocResult, LRegisteredResult: Boolean;
+begin
+  // Differential fuzzing: the registered (compiled) and ad-hoc
+  // (interpreting) engines are independent implementations of the same
+  // semantics - random patterns and inputs must never make them disagree,
+  // in any mode.  Deterministic seed, so a failure is reproducible.
+  LSeed := FUZZ_SEED;
+
+  for LMode := 0 to MODE_COUNT - 1 do
+    LAdhoc[LMode] := TWildCard.Create(MODE_OPTIONS[LMode]);
+
+  for LIteration := 1 to FUZZ_ITERATIONS do
+  begin
+    LPattern := FuzzRandomPattern(LSeed);
+    LPatternIsValid := TWildCard.ValidatePattern(LPattern, LError);
+
+    LInputs[0] := FuzzRandomInput(LSeed);
+    LInputs[1] := FuzzRandomInput(LSeed);
+    LInputs[2] := FuzzRandomInput(LSeed);
+    LInputs[3] := FuzzDerivedInput(LPattern, LSeed);
+    LInputs[4] := '';
+
+    for LMode := 0 to MODE_COUNT - 1 do
+    begin
+      LRegistered := TWildCard.Create(LPattern, MODE_OPTIONS[LMode]);
+
+      for LInputIndex := 0 to High(LInputs) do
+      begin
+        LInput := LInputs[LInputIndex];
+
+        LAdhocResult := LAdhoc[LMode].Match(LInput, LPattern);
+        LRegisteredResult := LRegistered.Match(LInput);
+
+        Assert.IsTrue(LAdhocResult = LRegisteredResult,
+          Format('Engines disagree: mode=%s pattern=<%s> input=<%s> iteration=%d seed=%d ad-hoc=%s registered=%s',
+          [MODE_NAMES[LMode], LPattern, LInput, LIteration, FUZZ_SEED,
+           BoolToStr(LAdhocResult, True), BoolToStr(LRegisteredResult, True)]));
+
+        // A pattern rejected by ValidatePattern must never match anything.
+        if not LPatternIsValid then
+          Assert.IsFalse(LRegisteredResult,
+            Format('Malformed pattern matched: pattern=<%s> input=<%s> (%s)', [LPattern, LInput, LError]));
+      end;
+    end;
+  end;
+end;
+
+{ Lint helpers }
+
+function DiagnosticsContain(const ADiagnostics: TArray<TWildCardDiagnostic>; const AKind: TWildCardDiagnosticKind;
+  const AMessagePart: string): Boolean;
+var
+  LIndex: Integer;
+begin
+  for LIndex := 0 to High(ADiagnostics) do
+    if (ADiagnostics[LIndex].Kind = AKind) and ADiagnostics[LIndex].Message.Contains(AMessagePart) then
+      Exit(True);
+
+  Result := False;
+end;
+
+{ Lint: compiler-style warnings and hints }
+
+procedure TWildCardMatcherDUnitX.LintPatternMalformedTest;
+var
+  LDiagnostics: TArray<TWildCardDiagnostic>;
+begin
+  LDiagnostics := TWildCard.LintPattern('[abc');
+
+  Assert.AreEqual(1, Length(LDiagnostics));
+  Assert.IsTrue(LDiagnostics[0].Kind = wdkWarning);
+  Assert.IsTrue(LDiagnostics[0].Message.Contains('never matches'), LDiagnostics[0].Message);
+  Assert.AreEqual('[abc', LDiagnostics[0].Pattern);
+  Assert.AreEqual(-1, LDiagnostics[0].PatternIndex, 'no list context for LintPattern');
+end;
+
+procedure TWildCardMatcherDUnitX.LintPatternStarRunTest;
+begin
+  // '**' without path mode collapses to '*' - worth a hint.
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('**.pas'), wdkHint, 'collapse'));
+
+  // With path mode '**' is meaningful - no diagnostics at all.
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('**.pas', [wcoPathMode])));
+
+  // But three or more stars behave like two.
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('***.pas', [wcoPathMode]), wdkHint, 'behaves the same'));
+
+  // A clean everyday mask has nothing to report.
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('*.pas')));
+end;
+
+procedure TWildCardMatcherDUnitX.LintPatternClassAndAlternationTest;
+begin
+  // Empty range (low > high).
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('[z-a]'), wdkHint, 'empty (low > high)'));
+
+  // Duplicate alternatives; case-awareness follows the options.
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('["a"|"a"]'), wdkHint, 'duplicate alternative'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('["a"|"A"]'), wdkHint, 'duplicate alternative'),
+    'CI: a and A are the same alternative');
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('["a"|"A"]', [wcoCaseSensitive])),
+    'CS: a and A are distinct alternatives');
+
+  // Degenerate alternations.
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('foo[""]'), wdkHint, 'no effect'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('[!""]'), wdkWarning, 'never matches'));
+end;
+
+procedure TWildCardMatcherDUnitX.LintPatternEmptyTest;
+begin
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern(''), wdkHint, 'empty'));
+end;
+
+procedure TWildCardMatcherDUnitX.LintSetDuplicatesAndShadowingTest;
+var
+  LMask: TWildCard;
+begin
+  // Case-insensitive: '*.pas' and '*.PAS' are the same pattern.
+  LMask := TWildCard.Create(TArray<string>.Create('*.pas', '*.PAS'));
+  Assert.IsTrue(DiagnosticsContain(LMask.Lint, wdkWarning, 'duplicates pattern #0'));
+
+  // Case-sensitive: they are distinct - nothing to report.
+  LMask := TWildCard.Create(TArray<string>.Create('*.pas', '*.PAS'), True);
+  Assert.AreEqual(0, Length(LMask.Lint));
+
+  // A match-everything pattern makes later ones unreachable.
+  LMask := TWildCard.Create(TArray<string>.Create('*', '*.pas'));
+  Assert.IsTrue(DiagnosticsContain(LMask.Lint, wdkWarning, 'unreachable'));
+
+  // Clean set.
+  LMask := TWildCard.Create(TArray<string>.Create('*.pas', '*.dpr', '*.inc'));
+  Assert.AreEqual(0, Length(LMask.Lint));
+end;
+
+procedure TWildCardMatcherDUnitX.FilterLintIncludeAlsoExcludedTest;
+var
+  LFilter: TWildCardFilter;
+  LDiagnostics: TArray<TWildCardDiagnostic>;
+  LIndex: Integer;
+  LFound: Boolean;
+begin
+  // The classic mistake: filter *.bat in AND out - the include is dead.
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.pas', '*.bat'),
+    TArray<string>.Create('*.bat'));
+
+  LDiagnostics := LFilter.Lint;
+  Assert.IsTrue(DiagnosticsContain(LDiagnostics, wdkWarning, 'can never accept anything'));
+
+  LFound := False;
+
+  for LIndex := 0 to High(LDiagnostics) do
+    if LDiagnostics[LIndex].Message.Contains('can never accept anything') then
+    begin
+      Assert.IsTrue(LDiagnostics[LIndex].List = wdlIncludes, 'reported against the include list');
+      Assert.AreEqual(1, LDiagnostics[LIndex].PatternIndex, 'the *.bat include is pattern #1');
+      LFound := True;
+    end;
+
+  Assert.IsTrue(LFound);
+
+  // Case-insensitive filters catch the mismatched-case variant too.
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.BAT'),
+    TArray<string>.Create('*.bat'));
+  Assert.IsTrue(DiagnosticsContain(LFilter.Lint, wdkWarning, 'can never accept anything'));
+
+  // Case-sensitive: '*.BAT' vs '*.bat' are genuinely different patterns.
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.BAT'),
+    TArray<string>.Create('*.bat'), [wcoCaseSensitive]);
+  Assert.AreEqual(0, Length(LFilter.Lint));
+end;
+
+procedure TWildCardMatcherDUnitX.FilterLintMatchAllTest;
+var
+  LFilter: TWildCardFilter;
+begin
+  // A match-everything exclude rejects every input.
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.pas'),
+    TArray<string>.Create('*'));
+  Assert.IsTrue(DiagnosticsContain(LFilter.Lint, wdkWarning, 'the filter accepts nothing'));
+
+  // A match-everything include makes the other includes redundant.
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*', '*.pas'),
+    TArray<string>.Create('*.tmp'));
+  Assert.IsTrue(DiagnosticsContain(LFilter.Lint, wdkHint, 'redundant'));
+
+  // In path mode a single '*' does NOT match everything - no warnings.
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('src\*.pas'),
+    TArray<string>.Create('*'), [wcoPathMode]);
+  Assert.IsFalse(DiagnosticsContain(LFilter.Lint, wdkWarning, 'accepts nothing'));
+end;
+
+procedure TWildCardMatcherDUnitX.FilterLintCleanFilterTest;
+var
+  LFilter: TWildCardFilter;
+begin
+  // A sensible everyday filter produces no diagnostics at all.
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.pas', '*.dpr', '*.inc'),
+    TArray<string>.Create('*\__history\*', '*backup*', '*.tmp'));
+
+  Assert.AreEqual(0, Length(LFilter.Lint));
+end;
+
+{ API additions }
+
+procedure TWildCardMatcherDUnitX.PatternMatchesEverythingTest;
+begin
+  Assert.IsTrue (TWildCard.PatternMatchesEverything('*'));
+  Assert.IsTrue (TWildCard.PatternMatchesEverything('**'));
+  Assert.IsFalse(TWildCard.PatternMatchesEverything(''));
+  Assert.IsFalse(TWildCard.PatternMatchesEverything('*.pas'));
+
+  // Path mode: a single '*' cannot cross separators, '**' can.
+  Assert.IsFalse(TWildCard.PatternMatchesEverything('*', True));
+  Assert.IsTrue (TWildCard.PatternMatchesEverything('**', True));
+end;
+
+procedure TWildCardMatcherDUnitX.PatternCountAndFilterCountsTest;
+var
+  LMask: TWildCard;
+  LFilter: TWildCardFilter;
+begin
+  LMask := TWildCard.Create(TArray<string>.Create('*.pas', '*.dpr'));
+  Assert.AreEqual(2, LMask.PatternCount);
+
+  LMask := Default(TWildCard);
+  Assert.AreEqual(0, LMask.PatternCount);
+
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.pas', '*.dpr', '*.inc'),
+    TArray<string>.Create('*.tmp'));
+  Assert.AreEqual(3, LFilter.IncludeCount);
+  Assert.AreEqual(1, LFilter.ExcludeCount);
+end;
+
+procedure TWildCardMatcherDUnitX.FilterBulkFilterTest;
+var
+  LFilter: TWildCardFilter;
+  LAccepted: TArray<string>;
+begin
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('*.pas'),
+    TArray<string>.Create('*_test*'));
+
+  LAccepted := LFilter.Filter(TArray<string>.Create(
+    'Unit1.pas', 'Notes.txt', 'Unit2.pas', 'Unit_test.pas', 'Unit3.pas'));
+
+  Assert.AreEqual(3, Length(LAccepted));
+  Assert.AreEqual('Unit1.pas', LAccepted[0], 'input order preserved');
+  Assert.AreEqual('Unit2.pas', LAccepted[1]);
+  Assert.AreEqual('Unit3.pas', LAccepted[2]);
+
+  // Empty input list.
+  LAccepted := LFilter.Filter(nil);
+  Assert.AreEqual(0, Length(LAccepted));
+end;
+
+{ Additional matcher coverage }
+
+procedure TWildCardMatcherDUnitX.LiteralMetacharacterTricksTest;
+begin
+  // The README documents these idioms for matching literal metachars -
+  // pin them so the documentation stays true.
+  Assert.IsTrue (TWildCard.Create.Match('#', '[#]'));
+  Assert.IsFalse(TWildCard.Create.Match('5', '[#]'), '[#] is a literal #, not a digit');
+  Assert.IsTrue (TWildCard.Create.Match('[', '[[]'));
+  Assert.IsTrue (TWildCard.Create.Match(']', '[]]'));
+
+  Assert.IsTrue (TWildCard.Create.Match('Track #01.mp3', 'Track [#][0-9][0-9].mp3'));
+  Assert.IsFalse(TWildCard.Create.Match('Track 001.mp3', 'Track [#][0-9][0-9].mp3'));
+end;
+
+procedure TWildCardMatcherDUnitX.UnicodeNonAsciiSimdCandidateTest;
+const
+  A_UML_LOWER = #$00E4; // ä
+  A_UML_UPPER = #$00C4; // Ä
+begin
+  // Pins the SIMD candidate rule: a non-ASCII input char must reach the
+  // scalar Unicode ToUpper check instead of being skipped by the
+  // two-value (ASCII upper/lower) scan - 'ä' equals NEITHER scan value
+  // of the pattern char 'Ä', only FastToUpper makes them meet.
+  // Tail-anchor path:
+  Assert.IsTrue(TWildCard.Create.Match('x' + A_UML_LOWER, '*' + A_UML_UPPER), 'ad-hoc engine, tail anchor');
+  Assert.IsTrue(TWildCard.Create('*' + A_UML_UPPER).Match('x' + A_UML_LOWER), 'registered engine, tail anchor');
+
+  // First-char-skip path ('?' after the literal defeats the tail anchor):
+  Assert.IsTrue(TWildCard.Create.Match('x' + A_UML_LOWER + 'b', '*' + A_UML_UPPER + '?'), 'ad-hoc skip loop');
+  Assert.IsTrue(TWildCard.Create('*' + A_UML_UPPER + '?').Match('x' + A_UML_LOWER + 'b'), 'registered skip loop');
+
+  // Case-sensitive: ordinal compare only.
+  Assert.IsFalse(TWildCard.Create(True).Match('x' + A_UML_LOWER, '*' + A_UML_UPPER));
+  Assert.IsFalse(TWildCard.Create('*' + A_UML_UPPER, True).Match('x' + A_UML_LOWER));
+end;
+
+procedure TWildCardMatcherDUnitX.LongLiteralPatternsTest;
+const
+  LONG_TAIL = 'abcdefghijklmnopqrst'; // 20 chars - exercises SIMD-width compares
+begin
+  // Tail anchor with a literal longer than one vector block.
+  Assert.IsTrue (TWildCard.Create.Match('XX' + LONG_TAIL, '*' + LONG_TAIL));
+  Assert.IsTrue (TWildCard.Create.Match('XX' + UpperCase(LONG_TAIL), '*' + LONG_TAIL), 'CI');
+  Assert.IsFalse(TWildCard.Create.Match('XX' + Copy(LONG_TAIL, 1, 19) + 'X', '*' + LONG_TAIL),
+    'mismatch on the last char of a long tail');
+
+  Assert.IsTrue (TWildCard.Create('*' + LONG_TAIL, True).Match('XX' + LONG_TAIL));
+  Assert.IsFalse(TWildCard.Create('*' + LONG_TAIL, True).Match('XX' + UpperCase(LONG_TAIL)), 'CS');
+
+  // Long literal in the middle (skip loop + literal run compare).
+  Assert.IsTrue (TWildCard.Create.Match('junk' + LONG_TAIL + 'junk.pas', '*' + LONG_TAIL + '*.pas'));
+  Assert.IsFalse(TWildCard.Create.Match('junk' + Copy(LONG_TAIL, 1, 10) + 'junk.pas', '*' + LONG_TAIL + '*.pas'));
+end;
+
+procedure TWildCardMatcherDUnitX.QuotedAltUnicodeCaseInsensitiveTest;
+const
+  A_UMLAUT_LOWER = #$00E4; // ä
+  A_UMLAUT_UPPER = #$00C4; // Ä
+begin
+  Assert.IsTrue (TWildCard.Create.Match(A_UMLAUT_UPPER, '["' + A_UMLAUT_LOWER + '"]'),
+    'CI: quoted alternative must match across Unicode case');
+  Assert.IsTrue (TWildCard.Create('["' + A_UMLAUT_LOWER + '"]').Match(A_UMLAUT_UPPER));
+
+  Assert.IsFalse(TWildCard.Create(True).Match(A_UMLAUT_UPPER, '["' + A_UMLAUT_LOWER + '"]'), 'CS');
+  Assert.IsFalse(TWildCard.Create('["' + A_UMLAUT_LOWER + '"]', True).Match(A_UMLAUT_UPPER));
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeClassAndQuotedAltSeparatorsTest;
+begin
+  // Quoted alternatives are literal - a separator inside one matches
+  // normally even in path mode.
+  Assert.IsTrue(TWildCard.Create('["a\b"]', [wcoPathMode]).Match('a\b'));
+
+  // Character classes are evaluated normally in path mode too - an
+  // explicit separator member may match one.
+  Assert.IsTrue(TWildCard.Create('a[\a]b', [wcoPathMode]).Match('a\b'),
+    'class with an explicit backslash member matches a separator');
+
+  // ...but '?' and '*' never do.
+  Assert.IsFalse(TWildCard.Create('a?b', [wcoPathMode]).Match('a\b'));
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeMixedSeparatorsTest;
+begin
+  // Globstar crosses BOTH separator styles.
+  Assert.IsTrue(TWildCard.Create('**.pas', [wcoPathMode]).Match('a/b\c.pas'));
+
+  // A single segment star crosses neither.
+  Assert.IsFalse(TWildCard.Create('*', [wcoPathMode]).Match('a/b'));
+  Assert.IsFalse(TWildCard.Create('*', [wcoPathMode]).Match('a\b'));
+  Assert.IsTrue (TWildCard.Create('*', [wcoPathMode]).Match('ab'));
+end;
+
+procedure TWildCardMatcherDUnitX.FilterPathModeOptionsTest;
+var
+  LFilter: TWildCardFilter;
+begin
+  LFilter := TWildCardFilter.Create(
+    TArray<string>.Create('src\*.pas'),
+    TArray<string>.Create('src\*_test.pas'), [wcoPathMode]);
+
+  Assert.IsTrue(LFilter.PathMode);
+  Assert.IsFalse(LFilter.CaseSensitive);
+
+  Assert.IsTrue (LFilter.Accepts('src\Unit1.pas'));
+  Assert.IsFalse(LFilter.Accepts('src\deep\Unit1.pas'), 'include * must not cross the separator');
+  Assert.IsFalse(LFilter.Accepts('src\Unit1_test.pas'), 'excluded');
 end;
 
 initialization

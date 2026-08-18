@@ -107,6 +107,39 @@ uses
   System.Classes;
 
 type
+  // Matching options, locked in at Create for the instance lifetime.
+  //   wcoCaseSensitive - ordinal comparison instead of the default
+  //     case-insensitive matching (Windows convention).
+  //   wcoPathMode - glob-style path semantics: '*' and '?' do NOT cross
+  //     path separators ('\' and '/'); a run of two or more stars ('**')
+  //     crosses them.  Without this option '*' is line/path-agnostic.
+  TWildCardOption = (wcoCaseSensitive, wcoPathMode);
+  TWildCardOptions = set of TWildCardOption;
+
+  // === Lint diagnostics ===
+  // Compiler-style warnings and hints about patterns that are legal but
+  // probably not what the author meant.  Produced on demand by
+  // TWildCard.LintPattern / TWildCard.Lint / TWildCardFilter.Lint -
+  // nothing is computed during normal matching.
+  //   wdkWarning - almost certainly a mistake (pattern can never match,
+  //     include also excluded, unreachable pattern, ...)
+  //   wdkHint - suspicious or redundant ('**' without path mode,
+  //     duplicate alternative, empty range, ...)
+  TWildCardDiagnosticKind = (wdkWarning, wdkHint);
+
+  // Which pattern list the diagnostic refers to.  TWildCard reports
+  // wdlPatterns; TWildCardFilter re-tags per-list results with
+  // wdlIncludes / wdlExcludes.
+  TWildCardDiagnosticList = (wdlPatterns, wdlIncludes, wdlExcludes);
+
+  TWildCardDiagnostic = record
+    Kind: TWildCardDiagnosticKind;
+    List: TWildCardDiagnosticList;
+    PatternIndex: Integer;   // 0-based index into the list, -1 = no list context
+    Pattern: string;         // the pattern the diagnostic refers to
+    Message: string;         // human-readable and self-contained
+  end;
+
   TWildCard = record
   strict private
   type
@@ -126,6 +159,7 @@ type
       Kind: TTokenKind;
       Lit: string;                  // tkLiteral: the literal run
       Negate: Boolean;              // tkCharClass / tkAltGroup
+      PathSeg: Boolean;             // path mode: tkStar = segment-only star, tkAnyChar = must not match a separator
       Singles: string;              // tkCharClass: single member chars
       Ranges: TArray<TCharRange>;   // tkCharClass: lo..hi ranges
       Alts: TArray<string>;         // tkAltGroup: alternatives (may contain '')
@@ -148,8 +182,10 @@ type
     FPatterns: TArray<string>;            // pre-upper-cased if CI, originals if CS
     FCompiled: TArray<TCompiledPattern>;  // compiled at Create, one per pattern
     FCaseSensitive: Boolean;
+    FPathMode: Boolean;
     // Case-independent helpers
     class function IsAsciiDigit(const AChar: Char): Boolean; static; inline;
+    class function IsPathSeparator(const AChar: Char): Boolean; static; inline;
     class function FindClassEnd(const APattern: string; const AStart: Integer; var AIsQuotedAlt: Boolean): Integer; static;
     class function PatternTailIsLiteral(const APattern: string; const APatternIndex: Integer): Boolean; static; inline;
     // Compiled engine (registered patterns).  The pattern text handed to
@@ -158,29 +194,38 @@ type
     class procedure FlushLiteralToken(const APattern: string; const AEndExclusive, ALitStart: Integer; var ATokens: TArray<TToken>;
       var ACount: Integer); static;
     class function ParseClassToken(const APattern: string; var AClassIndex: Integer; var AToken: TToken; const ALen: Integer): Boolean; static;
-    class function CompilePattern(const APattern: string): TCompiledPattern; static;
+    class function CompilePattern(const APattern: string; const APathMode: Boolean): TCompiledPattern; static;
     class function CharInCompiledClass(const AToken: TToken; const AChar: Char): Boolean; static;
-    class function LiteralMatchesAtCI(const AInput: string; const AInputIndex: Integer; const ALit: string): Boolean; static; inline;
+    class function LiteralMatchesAtCI(const AInput: string; const AInputIndex: Integer; const ALit: string): Boolean; static;
     class function MatchTokensCS(const ATokens: TArray<TToken>; const AInput: string; AInputIndex, ATokenIndex: Integer): Boolean; static;
     class function MatchTokensCI(const ATokens: TArray<TToken>; const AInput: string; AInputIndex, ATokenIndex: Integer): Boolean; static;
     function MatchCompiled(const ACompiled: TCompiledPattern; const AInput: string): Boolean;
     // Case-sensitive path (direct ordinal compare, no ToUpper calls)
     class function CharInClassCS(const APattern: string; const AStart, AEnd: Integer; const AChar: Char): Boolean; static;
     class function AltMatchesAtCS(const AInput: string; const AInputIndex: Integer;
-      const APattern: string; const AAltStart, AAltLen: Integer): Boolean; static; inline;
+      const APattern: string; const AAltStart, AAltLen: Integer): Boolean; static;
     class function MatchQuotedAltClassCS(const AInput, APattern: string;
-      const AInputIndex, AClassStart, AClassEnd: Integer): Boolean; static;
-    class function MatchRecursiveCS(const AInput, APattern: string; AInputIndex, APatternIndex: Integer): Boolean; static;
+      const AInputIndex, AClassStart, AClassEnd: Integer; const APathMode: Boolean): Boolean; static;
+    class function MatchRecursiveCS(const AInput, APattern: string; AInputIndex, APatternIndex: Integer;
+      const APathMode: Boolean): Boolean; static;
     // Case-insensitive path (ToUpper compare)
     class function CharInClassCI(const APattern: string; const AStart, AEnd: Integer; const AChar: Char): Boolean; static;
     class function AltMatchesAtCI(const AInput: string; const AInputIndex: Integer; const APattern: string; const AAltStart,
-      AAltLen: Integer): Boolean; static; inline;
-    class function MatchQuotedAltClassCI(const AInput, APattern: string; const AInputIndex, AClassStart, AClassEnd: Integer): Boolean; static;
-    class function MatchRecursiveCI(const AInput, APattern: string; AInputIndex, APatternIndex: Integer): Boolean; static;
+      AAltLen: Integer): Boolean; static;
+    class function MatchQuotedAltClassCI(const AInput, APattern: string; const AInputIndex, AClassStart, AClassEnd: Integer;
+      const APathMode: Boolean): Boolean; static;
+    class function MatchRecursiveCI(const AInput, APattern: string; AInputIndex, APatternIndex: Integer;
+      const APathMode: Boolean): Boolean; static;
     // Walks FPatterns and returns True on the first match.  FPatterns are
     // already in the correct form (pre-upper-cased for CI), so no per-call
     // FastUpperString work is needed here.
     function MatchRegistered(const AInput: string): Boolean;
+    // Lint plumbing.  APrepared is the engine-ready pattern text (upper-
+    // cased for CI); ADisplay is what diagnostics should show.
+    class procedure LintSinglePattern(const APrepared, ADisplay: string; const APathMode: Boolean;
+      const AList: TWildCardDiagnosticList; const APatternIndex: Integer;
+      var ADiagnostics: TArray<TWildCardDiagnostic>); static;
+    function GetPatternCount: Integer;
   public
     // === Instance API: pre-register patterns + match many inputs ===
     // ACaseSensitive is locked in for the lifetime of the instance and
@@ -194,14 +239,47 @@ type
     class function Create(const APattern: string; const ACaseSensitive: Boolean = False): TWildCard; overload; static;
     class function Create(const APatterns: TArray<string>; const ACaseSensitive: Boolean = False): TWildCard; overload; static;
     class function Create(const APatterns: TStrings; const ACaseSensitive: Boolean = False): TWildCard; overload; static;
+    // Options-based overloads (wcoCaseSensitive / wcoPathMode).
+    class function Create(const AOptions: TWildCardOptions): TWildCard; overload; static;
+    class function Create(const APattern: string; const AOptions: TWildCardOptions): TWildCard; overload; static;
+    class function Create(const APatterns: TArray<string>; const AOptions: TWildCardOptions): TWildCard; overload; static;
+    class function Create(const APatterns: TStrings; const AOptions: TWildCardOptions): TWildCard; overload; static;
+
+    // Validates pattern syntax without building a matcher.  Returns False
+    // with a human-readable reason (including the 1-based position) for
+    // malformed patterns - unterminated classes, unterminated quoted
+    // alternatives, garbage between alternatives.  A malformed pattern
+    // never matches anything at runtime; use this to reject bad masks at
+    // input time (settings dialogs, config files) instead.
+    class function ValidatePattern(const APattern: string; out AErrorMessage: string): Boolean; static;
+
+    // True when APattern matches every possible input: a run of '*'s
+    // (in path mode a run of at least two - a single '*' cannot cross
+    // separators there).
+    class function PatternMatchesEverything(const APattern: string; const APathMode: Boolean = False): Boolean; static;
+
+    // Compiler-style warnings and hints for a single pattern / for the
+    // registered set.  Empty result = nothing suspicious.  See
+    // TWildCardDiagnostic.  AOptions matter: '**' is meaningful only
+    // with wcoPathMode, duplicate detection is case-aware, etc.
+    class function LintPattern(const APattern: string; const AOptions: TWildCardOptions = []): TArray<TWildCardDiagnostic>; static;
+    function Lint: TArray<TWildCardDiagnostic>;
 
     // Match against the registered set only.
     function Match(const AInput: string): Boolean; overload;
+    // Like Match(AInput), but reports WHICH registered pattern matched:
+    // 0-based index into RegisteredPatterns, or -1 when none matched.
+    // Patterns are tried in registration order; first hit wins.
+    function MatchIndex(const AInput: string): Integer;
     // Match against an ad-hoc pattern (uses the instance's case mode). AAlsoMatchRegistered = True also tries the registered set.
     function Match(const AInput, APattern: string; const AAlsoMatchRegistered: Boolean = False): Boolean; overload;
     function Match(const AInput: string; const APatterns: TArray<string>; const AAlsoMatchRegistered: Boolean = False): Boolean; overload;
     function Match(const AInput: string; const APatterns: TStrings; const AAlsoMatchRegistered: Boolean = False): Boolean; overload;
     property CaseSensitive: Boolean read FCaseSensitive;
+    property PathMode: Boolean read FPathMode;
+    // Number of registered patterns - cheaper than Length(RegisteredPatterns),
+    // which copies the array.
+    property PatternCount: Integer read GetPatternCount;
     property RegisteredPatterns: TArray<string> read FPatterns;
   end;
 
@@ -235,8 +313,11 @@ type
     FExclude: TWildCard;
     FHasIncludes: Boolean;
     FCaseSensitive: Boolean;
+    FPathMode: Boolean;
     function GetIncludePatterns: TArray<string>;
     function GetExcludePatterns: TArray<string>;
+    function GetIncludeCount: Integer;
+    function GetExcludeCount: Integer;
   public
     class function Create(const ACaseSensitive: Boolean = False): TWildCardFilter; overload; static;
     class function Create(const AIncludePattern, AExcludePattern: string; const ACaseSensitive: Boolean = False): TWildCardFilter;
@@ -246,11 +327,37 @@ type
     // TStrings overload tolerates nil for either list (treated as empty).
     class function Create(const AIncludePatterns, AExcludePatterns: TStrings; const ACaseSensitive: Boolean = False): TWildCardFilter;
       overload; static;
+    // Options-based overloads (wcoCaseSensitive / wcoPathMode) - the
+    // options apply to BOTH lists.
+    class function Create(const AIncludePatterns, AExcludePatterns: TArray<string>; const AOptions: TWildCardOptions): TWildCardFilter;
+      overload; static;
+    class function Create(const AIncludePatterns, AExcludePatterns: TStrings; const AOptions: TWildCardOptions): TWildCardFilter;
+      overload; static;
 
     // True when AInput passes the include stage and is not excluded.
     function Accepts(const AInput: string): Boolean;
+    // Like Accepts, but reports WHICH pattern decided the outcome:
+    //   AIncludeIndex - 0-based index of the include pattern that matched,
+    //     or -1 (include list empty, or nothing matched).
+    //   AExcludeIndex - 0-based index of the exclude pattern that rejected
+    //     the input, or -1 when no exclude pattern matched.
+    function AcceptsEx(const AInput: string; out AIncludeIndex, AExcludeIndex: Integer): Boolean;
+
+    // Returns the inputs Accepts would let through, in input order.
+    function Filter(const AInputs: TArray<string>): TArray<string>;
+
+    // Compiler-style warnings and hints about the filter configuration:
+    // per-list pattern problems (re-tagged wdlIncludes / wdlExcludes) plus
+    // cross-list checks - an include pattern that is also excluded can
+    // never accept anything (exclude wins), a match-everything exclude
+    // rejects every input, a match-everything include makes the other
+    // includes redundant.  Empty result = nothing suspicious.
+    function Lint: TArray<TWildCardDiagnostic>;
 
     property CaseSensitive: Boolean read FCaseSensitive;
+    property PathMode: Boolean read FPathMode;
+    property IncludeCount: Integer read GetIncludeCount;
+    property ExcludeCount: Integer read GetExcludeCount;
     property IncludePatterns: TArray<string> read GetIncludePatterns;
     property ExcludePatterns: TArray<string> read GetExcludePatterns;
   end;
@@ -389,10 +496,11 @@ end;
 // ScanCharIndexCI: 0-based index of the first CANDIDATE position in
 // AText[0..ACount-1], or -1.  AChars packs the pre-upper-cased pattern
 // char in the LOW word and its ASCII-lowercase variant in the HIGH word.
-// A candidate is a char equal to either variant, or ANY char >= U+0080
-// (non-ASCII needs the scalar Unicode ToUpper check - e.g. U+017F upper-
-// cases to 'S', which a two-value compare would miss).  The caller MUST
-// re-verify the candidate with the scalar test before recursing.
+// A candidate is a char equal to either variant, or ANY char >= U+0080 -
+// non-ASCII needs the scalar Unicode ToUpper check, e.g. input 'ä' has to
+// match a pattern char 'Ä' even though it equals neither packed value.
+// The caller MUST re-verify the candidate with the scalar test before
+// recursing.
 function ScanCharIndexCI(AText: PChar; const ACount: Integer; const AChars: Cardinal): Integer;
 asm
   // EAX = AText, EDX = ACount, ECX = AChars (low = upper, high = lower)
@@ -467,6 +575,272 @@ end;
 class function TWildCard.IsAsciiDigit(const AChar: Char): Boolean;
 begin
   Result := (AChar >= '0') and (AChar <= '9');
+end;
+
+class function TWildCard.IsPathSeparator(const AChar: Char): Boolean;
+begin
+  Result := (AChar = '\') or (AChar = '/');
+end;
+
+class function TWildCard.ValidatePattern(const APattern: string; out AErrorMessage: string): Boolean;
+var
+  LLen, LIdx, LClassStart, LQuoteStart: Integer;
+begin
+  // Walks the pattern with the same class-parsing rules as the engines
+  // (leading ']' literal, quoted alternation auto-detection) and reports
+  // the first syntax problem with its 1-based position.  Anything this
+  // function accepts compiles to a matching pattern; anything it rejects
+  // never matches at runtime.
+  AErrorMessage := '';
+  LLen := Length(APattern);
+  LIdx := 1;
+
+  while LIdx <= LLen do
+  begin
+    if APattern[LIdx] = '[' then
+    begin
+      LClassStart := LIdx;
+      Inc(LIdx);
+
+      if (LIdx <= LLen) and (APattern[LIdx] = '!') then
+        Inc(LIdx);
+
+      if (LIdx <= LLen) and (APattern[LIdx] = '"') then
+      begin
+        // Quoted alternation form: "alt" ('|' "alt")* ']'
+        while True do
+        begin
+          if LIdx > LLen then
+          begin
+            AErrorMessage := Format('Unterminated quoted alternation class (''['' at position %d)', [LClassStart]);
+            Exit(False);
+          end;
+
+          if APattern[LIdx] = ']' then
+            Break;
+
+          if APattern[LIdx] <> '"' then
+          begin
+            AErrorMessage := Format('Expected ''"'' at position %d (alternatives are quoted strings separated by ''|'')', [LIdx]);
+            Exit(False);
+          end;
+
+          LQuoteStart := LIdx;
+          Inc(LIdx);
+
+          while (LIdx <= LLen) and (APattern[LIdx] <> '"') do
+            Inc(LIdx);
+
+          if LIdx > LLen then
+          begin
+            AErrorMessage := Format('Unterminated quoted alternative (''"'' at position %d)', [LQuoteStart]);
+            Exit(False);
+          end;
+
+          Inc(LIdx); // past the closing quote
+
+          if LIdx > LLen then
+          begin
+            AErrorMessage := Format('Unterminated quoted alternation class (''['' at position %d)', [LClassStart]);
+            Exit(False);
+          end;
+
+          if APattern[LIdx] = '|' then
+            Inc(LIdx)
+          else if APattern[LIdx] <> ']' then
+          begin
+            AErrorMessage := Format('Expected ''|'' or '']'' after quoted alternative at position %d', [LIdx]);
+            Exit(False);
+          end;
+        end;
+
+        Inc(LIdx); // past ']'
+      end
+      else
+      begin
+        // Legacy single-char class: a leading ']' is a literal member.
+        if (LIdx <= LLen) and (APattern[LIdx] = ']') then
+          Inc(LIdx);
+
+        while (LIdx <= LLen) and (APattern[LIdx] <> ']') do
+          Inc(LIdx);
+
+        if LIdx > LLen then
+        begin
+          AErrorMessage := Format('Unterminated character class (''['' at position %d)', [LClassStart]);
+          Exit(False);
+        end;
+
+        Inc(LIdx); // past ']'
+      end;
+    end
+    else
+      Inc(LIdx);
+  end;
+
+  Result := True;
+end;
+
+// Shared by TWildCard and TWildCardFilter lint code - implementation-only.
+procedure AppendWildCardDiagnostic(var ADiagnostics: TArray<TWildCardDiagnostic>; const AKind: TWildCardDiagnosticKind;
+  const AList: TWildCardDiagnosticList; const APatternIndex: Integer; const APattern, AMessage: string);
+begin
+  SetLength(ADiagnostics, Length(ADiagnostics) + 1);
+
+  ADiagnostics[High(ADiagnostics)].Kind := AKind;
+  ADiagnostics[High(ADiagnostics)].List := AList;
+  ADiagnostics[High(ADiagnostics)].PatternIndex := APatternIndex;
+  ADiagnostics[High(ADiagnostics)].Pattern := APattern;
+  ADiagnostics[High(ADiagnostics)].Message := AMessage;
+end;
+
+class function TWildCard.PatternMatchesEverything(const APattern: string; const APathMode: Boolean): Boolean;
+var
+  LIndex: Integer;
+begin
+  if APattern = '' then
+    Exit(False);
+
+  for LIndex := 1 to Length(APattern) do
+    if APattern[LIndex] <> '*' then
+      Exit(False);
+
+  // In path mode a single '*' cannot cross separators; a run of two or
+  // more can (globstar).
+  Result := (not APathMode) or (Length(APattern) >= 2);
+end;
+
+class procedure TWildCard.LintSinglePattern(const APrepared, ADisplay: string; const APathMode: Boolean;
+  const AList: TWildCardDiagnosticList; const APatternIndex: Integer; var ADiagnostics: TArray<TWildCardDiagnostic>);
+var
+  LError: string;
+  LCompiled: TCompiledPattern;
+  LIndex, LRun, LMaxRun: Integer;
+  LTokenIndex, LRangeIndex, LAltIndex, LOtherIndex: Integer;
+begin
+  // Malformed pattern: one warning, nothing else worth analysing.
+  if not ValidatePattern(APrepared, LError) then
+  begin
+    AppendWildCardDiagnostic(ADiagnostics, wdkWarning, AList, APatternIndex, ADisplay,
+      Format('Pattern ''%s'' never matches anything - %s', [ADisplay, LError]));
+    Exit;
+  end;
+
+  if APrepared = '' then
+  begin
+    AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
+      'Pattern is empty - it matches only the empty string');
+    Exit;
+  end;
+
+  // Star runs are collapsed by the tokenizer, so scan the text.
+  LMaxRun := 0;
+  LRun := 0;
+
+  for LIndex := 1 to Length(APrepared) do
+    if APrepared[LIndex] = '*' then
+    begin
+      Inc(LRun);
+
+      if LRun > LMaxRun then
+        LMaxRun := LRun;
+    end
+    else
+      LRun := 0;
+
+  if (LMaxRun >= 2) and not APathMode then
+    AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
+      Format('Pattern ''%s'': consecutive ''*'' collapse to a single ''*'' - ''**'' only has globstar meaning with wcoPathMode',
+      [ADisplay]))
+  else if (LMaxRun >= 3) and APathMode then
+    AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
+      Format('Pattern ''%s'': a run of three or more ''*'' behaves the same as ''**''', [ADisplay]));
+
+  // Token-level checks: empty ranges, duplicate / degenerate alternatives.
+  LCompiled := CompilePattern(APrepared, APathMode);
+
+  for LTokenIndex := 0 to High(LCompiled.Tokens) do
+    case LCompiled.Tokens[LTokenIndex].Kind of
+      tkCharClass:
+        for LRangeIndex := 0 to High(LCompiled.Tokens[LTokenIndex].Ranges) do
+          if LCompiled.Tokens[LTokenIndex].Ranges[LRangeIndex].Lo > LCompiled.Tokens[LTokenIndex].Ranges[LRangeIndex].Hi then
+            AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
+              Format('Pattern ''%s'': range ''%s-%s'' in character class is empty (low > high)',
+              [ADisplay, LCompiled.Tokens[LTokenIndex].Ranges[LRangeIndex].Lo,
+               LCompiled.Tokens[LTokenIndex].Ranges[LRangeIndex].Hi]));
+      tkAltGroup:
+        begin
+          // A negated alternation whose alternatives are all empty can
+          // never match (the empty alternative is a prefix everywhere).
+          if LCompiled.Tokens[LTokenIndex].Negate and (LCompiled.Tokens[LTokenIndex].MaxAltLen = 0) then
+            AppendWildCardDiagnostic(ADiagnostics, wdkWarning, AList, APatternIndex, ADisplay,
+              Format('Pattern ''%s'': ''[!""]'' never matches - the empty alternative is a prefix of everything', [ADisplay]))
+          else if (Length(LCompiled.Tokens[LTokenIndex].Alts) = 1) and (LCompiled.Tokens[LTokenIndex].Alts[0] = '')
+            and not LCompiled.Tokens[LTokenIndex].Negate then
+            AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
+              Format('Pattern ''%s'': ''[""]'' matches zero characters - it has no effect', [ADisplay]));
+
+          for LAltIndex := 1 to High(LCompiled.Tokens[LTokenIndex].Alts) do
+            for LOtherIndex := 0 to LAltIndex - 1 do
+              if LCompiled.Tokens[LTokenIndex].Alts[LAltIndex] = LCompiled.Tokens[LTokenIndex].Alts[LOtherIndex] then
+              begin
+                AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
+                  Format('Pattern ''%s'': duplicate alternative ''%s''',
+                  [ADisplay, LCompiled.Tokens[LTokenIndex].Alts[LAltIndex]]));
+                Break;
+              end;
+        end;
+    end;
+end;
+
+class function TWildCard.LintPattern(const APattern: string; const AOptions: TWildCardOptions): TArray<TWildCardDiagnostic>;
+var
+  LPrepared: string;
+begin
+  Result := nil;
+
+  if wcoCaseSensitive in AOptions then
+    LPrepared := APattern
+  else
+    LPrepared := FastUpperString(APattern);
+
+  LintSinglePattern(LPrepared, APattern, wcoPathMode in AOptions, wdlPatterns, -1, Result);
+end;
+
+function TWildCard.Lint: TArray<TWildCardDiagnostic>;
+var
+  LIndex, LOtherIndex: Integer;
+begin
+  Result := nil;
+
+  for LIndex := 0 to High(FPatterns) do
+    LintSinglePattern(FPatterns[LIndex], FPatterns[LIndex], FPathMode, wdlPatterns, LIndex, Result);
+
+  // Duplicates: the later copy can never be the first match.
+  for LIndex := 1 to High(FPatterns) do
+    for LOtherIndex := 0 to LIndex - 1 do
+      if FPatterns[LIndex] = FPatterns[LOtherIndex] then
+      begin
+        AppendWildCardDiagnostic(Result, wdkWarning, wdlPatterns, LIndex, FPatterns[LIndex],
+          Format('Pattern #%d ''%s'' duplicates pattern #%d - it can never be the first match',
+          [LIndex, FPatterns[LIndex], LOtherIndex]));
+        Break;
+      end;
+
+  // An earlier match-everything pattern makes every later one unreachable.
+  for LIndex := 0 to High(FPatterns) - 1 do
+    if PatternMatchesEverything(FPatterns[LIndex], FPathMode) then
+    begin
+      AppendWildCardDiagnostic(Result, wdkWarning, wdlPatterns, LIndex, FPatterns[LIndex],
+        Format('Pattern #%d ''%s'' matches everything - the %d pattern(s) after it are unreachable',
+        [LIndex, FPatterns[LIndex], High(FPatterns) - LIndex]));
+      Break;
+    end;
+end;
+
+function TWildCard.GetPatternCount: Integer;
+begin
+  Result := Length(FPatterns);
 end;
 
 class function TWildCard.FindClassEnd(const APattern: string; const AStart: Integer; var AIsQuotedAlt: Boolean): Integer;
@@ -604,7 +978,8 @@ begin
   Result := True;
 end;
 
-class function TWildCard.MatchQuotedAltClassCS(const AInput, APattern: string; const AInputIndex, AClassStart, AClassEnd: Integer): Boolean;
+class function TWildCard.MatchQuotedAltClassCS(const AInput, APattern: string; const AInputIndex, AClassStart, AClassEnd: Integer;
+  const APathMode: Boolean): Boolean;
 var
   LIndex: Integer;
   LNegated: Boolean;
@@ -653,7 +1028,7 @@ begin
         Exit(False);
 
       if AltMatchesAtCS(AInput, AInputIndex, APattern, LAltStart, LAltLen) then
-        if MatchRecursiveCS(AInput, APattern, AInputIndex + LAltLen, LAfterClass) then
+        if MatchRecursiveCS(AInput, APattern, AInputIndex + LAltLen, LAfterClass, APathMode) then
           Exit(True);
 
       if LAfterAlt < AClassEnd then
@@ -706,17 +1081,20 @@ begin
     if (LMaxLen > 0) and (AInputIndex + LMaxLen - 1 > Length(AInput)) then
       Exit(False);
 
-    Result := MatchRecursiveCS(AInput, APattern, AInputIndex + LMaxLen, LAfterClass);
+    Result := MatchRecursiveCS(AInput, APattern, AInputIndex + LMaxLen, LAfterClass, APathMode);
   end;
 end;
 
-class function TWildCard.MatchRecursiveCS(const AInput, APattern: string; AInputIndex, APatternIndex: Integer): Boolean;
+class function TWildCard.MatchRecursiveCS(const AInput, APattern: string; AInputIndex, APatternIndex: Integer;
+  const APathMode: Boolean): Boolean;
 var
   LClassEnd: Integer;
   LIsQuotedAlt: Boolean;
   LInputLen, LPatternLen: Integer;
   LTailLen, LTailStart, LIndex: Integer;
   LNextChar: Char;
+  LStarRun: Integer;
+  LSegStar: Boolean;
 {$IF Defined(USE_SSE2) and Defined(WIN32)}
   LRel: Integer;
 {$ENDIF}
@@ -729,11 +1107,53 @@ begin
     case APattern[APatternIndex] of
       '*':
         begin
+          LStarRun := 0;
+
           while (APatternIndex <= LPatternLen) and (APattern[APatternIndex] = '*') do
+          begin
             Inc(APatternIndex);
+            Inc(LStarRun);
+          end;
+
+          // Path mode: a single '*' stays inside one path segment; '**'
+          // (or longer) crosses separators like a normal star.
+          LSegStar := APathMode and (LStarRun = 1);
 
           if APatternIndex > LPatternLen then
+          begin
+            if not LSegStar then
+              Exit(True);
+
+            // Trailing segment star: rest of input must be separator-free.
+            while AInputIndex <= LInputLen do
+            begin
+              if IsPathSeparator(AInput[AInputIndex]) then
+                Exit(False);
+
+              Inc(AInputIndex);
+            end;
+
             Exit(True);
+          end;
+
+          if LSegStar then
+          begin
+            // Segment star: generic bounded scan; candidate positions end
+            // at (and include) the first separator, which the star cannot
+            // consume.  No fast paths here on purpose.
+            while AInputIndex <= LInputLen + 1 do
+            begin
+              if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
+                Exit(True);
+
+              if (AInputIndex <= LInputLen) and IsPathSeparator(AInput[AInputIndex]) then
+                Break;
+
+              Inc(AInputIndex);
+            end;
+
+            Exit(False);
+          end;
 
           // Fast path 1: the rest of the pattern is a plain literal - the
           // dominant '*.ext' file-mask shape.  Anchor the compare at the
@@ -766,7 +1186,7 @@ begin
                 // is a candidate - but end-of-input is not.
                 while AInputIndex <= LInputLen do
                 begin
-                  if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex) then
+                  if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                     Exit(True);
 
                   Inc(AInputIndex);
@@ -777,7 +1197,7 @@ begin
                 while AInputIndex <= LInputLen do
                 begin
                   if IsAsciiDigit(AInput[AInputIndex]) then
-                    if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex) then
+                    if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                       Exit(True);
 
                   Inc(AInputIndex);
@@ -790,7 +1210,7 @@ begin
                 // every position INCLUDING the end-of-input one.
                 while AInputIndex <= LInputLen + 1 do
                 begin
-                  if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex) then
+                  if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                     Exit(True);
 
                   Inc(AInputIndex);
@@ -807,7 +1227,7 @@ begin
 
               Inc(AInputIndex, LRel);
 
-              if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex) then
+              if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                 Exit(True);
 
               Inc(AInputIndex);
@@ -816,7 +1236,7 @@ begin
             while AInputIndex <= LInputLen do
             begin
               if AInput[AInputIndex] = LNextChar then
-                if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex) then
+                if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                   Exit(True);
 
               Inc(AInputIndex);
@@ -829,6 +1249,9 @@ begin
       '?':
         begin
           if AInputIndex > LInputLen then
+            Exit(False);
+
+          if APathMode and IsPathSeparator(AInput[AInputIndex]) then
             Exit(False);
 
           Inc(AInputIndex);
@@ -852,7 +1275,7 @@ begin
             Exit(False);
 
           if LIsQuotedAlt then
-            Exit(MatchQuotedAltClassCS(AInput, APattern, AInputIndex, APatternIndex, LClassEnd));
+            Exit(MatchQuotedAltClassCS(AInput, APattern, AInputIndex, APatternIndex, LClassEnd, APathMode));
 
           if AInputIndex > LInputLen then
             Exit(False);
@@ -947,7 +1370,8 @@ begin
   Result := True;
 end;
 
-class function TWildCard.MatchQuotedAltClassCI(const AInput, APattern: string; const AInputIndex, AClassStart, AClassEnd: Integer): Boolean;
+class function TWildCard.MatchQuotedAltClassCI(const AInput, APattern: string; const AInputIndex, AClassStart, AClassEnd: Integer;
+  const APathMode: Boolean): Boolean;
 var
   LIndex: Integer;
   LNegated: Boolean;
@@ -990,7 +1414,7 @@ begin
         Exit(False);
 
       if AltMatchesAtCI(AInput, AInputIndex, APattern, LAltStart, LAltLen) then
-        if MatchRecursiveCI(AInput, APattern, AInputIndex + LAltLen, LAfterClass) then
+        if MatchRecursiveCI(AInput, APattern, AInputIndex + LAltLen, LAfterClass, APathMode) then
           Exit(True);
 
       if LAfterAlt < AClassEnd then
@@ -1043,17 +1467,20 @@ begin
     if (LMaxLen > 0) and (AInputIndex + LMaxLen - 1 > Length(AInput)) then
       Exit(False);
 
-    Result := MatchRecursiveCI(AInput, APattern, AInputIndex + LMaxLen, LAfterClass);
+    Result := MatchRecursiveCI(AInput, APattern, AInputIndex + LMaxLen, LAfterClass, APathMode);
   end;
 end;
 
-class function TWildCard.MatchRecursiveCI(const AInput, APattern: string; AInputIndex, APatternIndex: Integer): Boolean;
+class function TWildCard.MatchRecursiveCI(const AInput, APattern: string; AInputIndex, APatternIndex: Integer;
+  const APathMode: Boolean): Boolean;
 var
   LClassEnd: Integer;
   LIsQuotedAlt: Boolean;
   LInputLen, LPatternLen: Integer;
   LTailLen, LTailStart, LIndex: Integer;
   LNextChar: Char;
+  LStarRun: Integer;
+  LSegStar: Boolean;
 {$IF Defined(USE_SSE2) and Defined(WIN32)}
   LRel: Integer;
   LCharPair: Cardinal;
@@ -1067,11 +1494,53 @@ begin
     case APattern[APatternIndex] of
       '*':
         begin
+          LStarRun := 0;
+
           while (APatternIndex <= LPatternLen) and (APattern[APatternIndex] = '*') do
+          begin
             Inc(APatternIndex);
+            Inc(LStarRun);
+          end;
+
+          // Path mode: a single '*' stays inside one path segment; '**'
+          // (or longer) crosses separators like a normal star.
+          LSegStar := APathMode and (LStarRun = 1);
 
           if APatternIndex > LPatternLen then
+          begin
+            if not LSegStar then
+              Exit(True);
+
+            // Trailing segment star: rest of input must be separator-free.
+            while AInputIndex <= LInputLen do
+            begin
+              if IsPathSeparator(AInput[AInputIndex]) then
+                Exit(False);
+
+              Inc(AInputIndex);
+            end;
+
             Exit(True);
+          end;
+
+          if LSegStar then
+          begin
+            // Segment star: generic bounded scan; candidate positions end
+            // at (and include) the first separator, which the star cannot
+            // consume.  No fast paths here on purpose.
+            while AInputIndex <= LInputLen + 1 do
+            begin
+              if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
+                Exit(True);
+
+              if (AInputIndex <= LInputLen) and IsPathSeparator(AInput[AInputIndex]) then
+                Break;
+
+              Inc(AInputIndex);
+            end;
+
+            Exit(False);
+          end;
 
           // Fast path 1: the rest of the pattern is a plain literal - the
           // dominant '*.ext' file-mask shape.  Anchor the compare at the
@@ -1105,7 +1574,7 @@ begin
                 // is a candidate - but end-of-input is not.
                 while AInputIndex <= LInputLen do
                 begin
-                  if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex) then
+                  if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                     Exit(True);
 
                   Inc(AInputIndex);
@@ -1116,7 +1585,7 @@ begin
                 while AInputIndex <= LInputLen do
                 begin
                   if IsAsciiDigit(AInput[AInputIndex]) then
-                    if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex) then
+                    if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                       Exit(True);
 
                   Inc(AInputIndex);
@@ -1129,7 +1598,7 @@ begin
                 // every position INCLUDING the end-of-input one.
                 while AInputIndex <= LInputLen + 1 do
                 begin
-                  if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex) then
+                  if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                     Exit(True);
 
                   Inc(AInputIndex);
@@ -1155,7 +1624,7 @@ begin
               // Candidates include non-ASCII chars - re-verify before
               // recursing (see ScanCharIndexCI).
               if (AInput[AInputIndex] = LNextChar) or (FastToUpper(AInput[AInputIndex]) = LNextChar) then
-                if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex) then
+                if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                   Exit(True);
 
               Inc(AInputIndex);
@@ -1164,7 +1633,7 @@ begin
             while AInputIndex <= LInputLen do
             begin
               if (AInput[AInputIndex] = LNextChar) or (FastToUpper(AInput[AInputIndex]) = LNextChar) then
-                if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex) then
+                if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                   Exit(True);
 
               Inc(AInputIndex);
@@ -1177,6 +1646,9 @@ begin
       '?':
         begin
           if AInputIndex > LInputLen then
+            Exit(False);
+
+          if APathMode and IsPathSeparator(AInput[AInputIndex]) then
             Exit(False);
 
           Inc(AInputIndex);
@@ -1200,7 +1672,7 @@ begin
             Exit(False);
 
           if LIsQuotedAlt then
-            Exit(MatchQuotedAltClassCI(AInput, APattern, AInputIndex, APatternIndex, LClassEnd));
+            Exit(MatchQuotedAltClassCI(AInput, APattern, AInputIndex, APatternIndex, LClassEnd, APathMode));
 
           if AInputIndex > LInputLen then
             Exit(False);
@@ -1382,13 +1854,14 @@ begin
   Result := True;
 end;
 
-class function TWildCard.CompilePattern(const APattern: string): TCompiledPattern;
+class function TWildCard.CompilePattern(const APattern: string; const APathMode: Boolean): TCompiledPattern;
 var
   LLen, LIndex, LLitStart: Integer;
   LTokens: TArray<TToken>;
   LCount: Integer;
   LTok: TToken;
   LMin: Integer;
+  LStarRun: Integer;
 begin
   Result.Valid := True;
   Result.Tokens := nil;
@@ -1406,11 +1879,20 @@ begin
         begin
           FlushLiteralToken(APattern, LIndex, LLitStart, LTokens, LCount);
 
+          LStarRun := 0;
+
           while (LIndex <= LLen) and (APattern[LIndex] = '*') do
+          begin
             Inc(LIndex);
+            Inc(LStarRun);
+          end;
 
           LTok := Default(TToken);
           LTok.Kind := tkStar;
+          // Path mode: a single '*' stays inside one path segment; a run
+          // of two or more ('**') crosses separators.  Without path mode
+          // every star crosses everything (PathSeg stays False).
+          LTok.PathSeg := APathMode and (LStarRun = 1);
           AddToken(LTok, LTokens, LCount);
 
           LLitStart := LIndex;
@@ -1421,6 +1903,8 @@ begin
 
           LTok := Default(TToken);
           LTok.Kind := tkAnyChar;
+          // Path mode: '?' must not match a path separator.
+          LTok.PathSeg := APathMode;
           AddToken(LTok, LTokens, LCount);
 
           Inc(LIndex);
@@ -1556,7 +2040,7 @@ begin
         end;
       tkAnyChar:
         begin
-          if AInputIndex > LInputLen then
+          if (AInputIndex > LInputLen) or (LTok.PathSeg and IsPathSeparator(AInput[AInputIndex])) then
             Exit(False);
 
           Inc(AInputIndex);
@@ -1623,6 +2107,43 @@ begin
         end;
       tkStar:
         begin
+          if LTok.PathSeg then
+          begin
+            // Segment star (path mode '*'): consumes non-separator chars
+            // only.  Generic bounded scan - candidate positions end at
+            // (and include) the first separator, which the star cannot
+            // consume.  Deliberately no SIMD/fast paths here.
+            if ATokenIndex = High(ATokens) then
+            begin
+              // Trailing '*': the rest of the input must be separator-free.
+              while AInputIndex <= LInputLen do
+              begin
+                if IsPathSeparator(AInput[AInputIndex]) then
+                  Exit(False);
+
+                Inc(AInputIndex);
+              end;
+
+              Exit(True);
+            end;
+
+            LNext := @ATokens[ATokenIndex + 1];
+            LMaxStart := LInputLen - LNext.MinRemain + 1;
+
+            while AInputIndex <= LMaxStart do
+            begin
+              if MatchTokensCS(ATokens, AInput, AInputIndex, ATokenIndex + 1) then
+                Exit(True);
+
+              if (AInputIndex <= LInputLen) and IsPathSeparator(AInput[AInputIndex]) then
+                Break;
+
+              Inc(AInputIndex);
+            end;
+
+            Exit(False);
+          end;
+
           if ATokenIndex = High(ATokens) then
             Exit(True); // trailing '*' absorbs the rest
 
@@ -1751,7 +2272,7 @@ begin
         end;
       tkAnyChar:
         begin
-          if AInputIndex > LInputLen then
+          if (AInputIndex > LInputLen) or (LTok.PathSeg and IsPathSeparator(AInput[AInputIndex])) then
             Exit(False);
 
           Inc(AInputIndex);
@@ -1814,6 +2335,43 @@ begin
         end;
       tkStar:
         begin
+          if LTok.PathSeg then
+          begin
+            // Segment star (path mode '*'): consumes non-separator chars
+            // only.  Generic bounded scan - candidate positions end at
+            // (and include) the first separator, which the star cannot
+            // consume.  Deliberately no SIMD/fast paths here.
+            if ATokenIndex = High(ATokens) then
+            begin
+              // Trailing '*': the rest of the input must be separator-free.
+              while AInputIndex <= LInputLen do
+              begin
+                if IsPathSeparator(AInput[AInputIndex]) then
+                  Exit(False);
+
+                Inc(AInputIndex);
+              end;
+
+              Exit(True);
+            end;
+
+            LNext := @ATokens[ATokenIndex + 1];
+            LMaxStart := LInputLen - LNext.MinRemain + 1;
+
+            while AInputIndex <= LMaxStart do
+            begin
+              if MatchTokensCI(ATokens, AInput, AInputIndex, ATokenIndex + 1) then
+                Exit(True);
+
+              if (AInputIndex <= LInputLen) and IsPathSeparator(AInput[AInputIndex]) then
+                Break;
+
+              Inc(AInputIndex);
+            end;
+
+            Exit(False);
+          end;
+
           if ATokenIndex = High(ATokens) then
             Exit(True);
 
@@ -1930,36 +2488,69 @@ end;
 
 { TWildCard - instance API: Create overloads }
 
+// The Boolean overloads delegate to the options-based ones - a bare
+// ACaseSensitive=True is just [wcoCaseSensitive].
 class function TWildCard.Create(const ACaseSensitive: Boolean): TWildCard;
+const
+  OPTIONS_MAP: array[Boolean] of TWildCardOptions = ([], [wcoCaseSensitive]);
 begin
-  Result.FCaseSensitive := ACaseSensitive;
+  Result := Create(OPTIONS_MAP[ACaseSensitive]);
+end;
+
+class function TWildCard.Create(const APattern: string; const ACaseSensitive: Boolean): TWildCard;
+const
+  OPTIONS_MAP: array[Boolean] of TWildCardOptions = ([], [wcoCaseSensitive]);
+begin
+  Result := Create(APattern, OPTIONS_MAP[ACaseSensitive]);
+end;
+
+class function TWildCard.Create(const APatterns: TArray<string>; const ACaseSensitive: Boolean): TWildCard;
+const
+  OPTIONS_MAP: array[Boolean] of TWildCardOptions = ([], [wcoCaseSensitive]);
+begin
+  Result := Create(APatterns, OPTIONS_MAP[ACaseSensitive]);
+end;
+
+class function TWildCard.Create(const APatterns: TStrings; const ACaseSensitive: Boolean): TWildCard;
+const
+  OPTIONS_MAP: array[Boolean] of TWildCardOptions = ([], [wcoCaseSensitive]);
+begin
+  Result := Create(APatterns, OPTIONS_MAP[ACaseSensitive]);
+end;
+
+class function TWildCard.Create(const AOptions: TWildCardOptions): TWildCard;
+begin
+  Result.FCaseSensitive := wcoCaseSensitive in AOptions;
+  Result.FPathMode := wcoPathMode in AOptions;
   Result.FPatterns := nil;
   Result.FCompiled := nil;
 end;
 
-class function TWildCard.Create(const APattern: string; const ACaseSensitive: Boolean): TWildCard;
+class function TWildCard.Create(const APattern: string; const AOptions: TWildCardOptions): TWildCard;
 begin
-  Result.FCaseSensitive := ACaseSensitive;
+  Result.FCaseSensitive := wcoCaseSensitive in AOptions;
+  Result.FPathMode := wcoPathMode in AOptions;
   SetLength(Result.FPatterns, 1);
 
-  if ACaseSensitive then
+  if Result.FCaseSensitive then
     Result.FPatterns[0] := APattern
   else
     Result.FPatterns[0] := FastUpperString(APattern);
 
   SetLength(Result.FCompiled, 1);
 
-  Result.FCompiled[0] := CompilePattern(Result.FPatterns[0]);
+  Result.FCompiled[0] := CompilePattern(Result.FPatterns[0], Result.FPathMode);
 end;
 
-class function TWildCard.Create(const APatterns: TArray<string>; const ACaseSensitive: Boolean): TWildCard;
+class function TWildCard.Create(const APatterns: TArray<string>; const AOptions: TWildCardOptions): TWildCard;
 var
   LIndex: Integer;
 begin
-  Result.FCaseSensitive := ACaseSensitive;
+  Result.FCaseSensitive := wcoCaseSensitive in AOptions;
+  Result.FPathMode := wcoPathMode in AOptions;
   SetLength(Result.FPatterns, Length(APatterns));
 
-  if ACaseSensitive then
+  if Result.FCaseSensitive then
   begin
     for LIndex := 0 to High(APatterns) do
       Result.FPatterns[LIndex] := APatterns[LIndex];
@@ -1973,17 +2564,18 @@ begin
   SetLength(Result.FCompiled, Length(Result.FPatterns));
 
   for LIndex := 0 to High(Result.FPatterns) do
-    Result.FCompiled[LIndex] := CompilePattern(Result.FPatterns[LIndex]);
+    Result.FCompiled[LIndex] := CompilePattern(Result.FPatterns[LIndex], Result.FPathMode);
 end;
 
-class function TWildCard.Create(const APatterns: TStrings; const ACaseSensitive: Boolean): TWildCard;
+class function TWildCard.Create(const APatterns: TStrings; const AOptions: TWildCardOptions): TWildCard;
 var
   LIndex: Integer;
 begin
-  Result.FCaseSensitive := ACaseSensitive;
+  Result.FCaseSensitive := wcoCaseSensitive in AOptions;
+  Result.FPathMode := wcoPathMode in AOptions;
   SetLength(Result.FPatterns, APatterns.Count);
 
-  if ACaseSensitive then
+  if Result.FCaseSensitive then
   begin
     for LIndex := 0 to APatterns.Count - 1 do
       Result.FPatterns[LIndex] := APatterns[LIndex];
@@ -1997,7 +2589,7 @@ begin
   SetLength(Result.FCompiled, Length(Result.FPatterns));
 
   for LIndex := 0 to High(Result.FPatterns) do
-    Result.FCompiled[LIndex] := CompilePattern(Result.FPatterns[LIndex]);
+    Result.FCompiled[LIndex] := CompilePattern(Result.FPatterns[LIndex], Result.FPathMode);
 end;
 
 { TWildCard - instance API: Match overloads }
@@ -2022,14 +2614,27 @@ begin
   Result := MatchRegistered(AInput);
 end;
 
+function TWildCard.MatchIndex(const AInput: string): Integer;
+var
+  LIndex: Integer;
+begin
+  // Same walk as MatchRegistered, but reports the 0-based index of the
+  // first registered pattern that matched (-1 when none did).
+  for LIndex := 0 to High(FCompiled) do
+    if MatchCompiled(FCompiled[LIndex], AInput) then
+      Exit(LIndex);
+
+  Result := -1;
+end;
+
 function TWildCard.Match(const AInput, APattern: string; const AAlsoMatchRegistered: Boolean): Boolean;
 begin
   // Try the ad-hoc pattern first (must FastUpperString it because it was
   // not pre-prepared at Create time).
   if FCaseSensitive then
-    Result := MatchRecursiveCS(AInput, APattern, 1, 1)
+    Result := MatchRecursiveCS(AInput, APattern, 1, 1, FPathMode)
   else
-    Result := MatchRecursiveCI(AInput, FastUpperString(APattern), 1, 1);
+    Result := MatchRecursiveCI(AInput, FastUpperString(APattern), 1, 1, FPathMode);
 
   if Result then
     Exit;
@@ -2045,13 +2650,13 @@ begin
   if FCaseSensitive then
   begin
     for LPattern in APatterns do
-      if MatchRecursiveCS(AInput, LPattern, 1, 1) then
+      if MatchRecursiveCS(AInput, LPattern, 1, 1, FPathMode) then
         Exit(True);
   end
   else
   begin
     for LPattern in APatterns do
-      if MatchRecursiveCI(AInput, FastUpperString(LPattern), 1, 1) then
+      if MatchRecursiveCI(AInput, FastUpperString(LPattern), 1, 1, FPathMode) then
         Exit(True);
   end;
 
@@ -2068,13 +2673,13 @@ begin
   if FCaseSensitive then
   begin
     for LIndex := 0 to APatterns.Count - 1 do
-      if MatchRecursiveCS(AInput, APatterns[LIndex], 1, 1) then
+      if MatchRecursiveCS(AInput, APatterns[LIndex], 1, 1, FPathMode) then
         Exit(True);
   end
   else
   begin
     for LIndex := 0 to APatterns.Count - 1 do
-      if MatchRecursiveCI(AInput, FastUpperString(APatterns[LIndex]), 1, 1) then
+      if MatchRecursiveCI(AInput, FastUpperString(APatterns[LIndex]), 1, 1, FPathMode) then
         Exit(True);
   end;
 
@@ -2089,6 +2694,7 @@ end;
 class function TWildCardFilter.Create(const ACaseSensitive: Boolean): TWildCardFilter;
 begin
   Result.FCaseSensitive := ACaseSensitive;
+  Result.FPathMode := False;
   Result.FInclude := TWildCard.Create(ACaseSensitive);
   Result.FExclude := TWildCard.Create(ACaseSensitive);
   Result.FHasIncludes := False;
@@ -2100,6 +2706,7 @@ begin
   // for that side" (an empty include pattern would otherwise register a
   // pattern that matches only the empty input - never the intent here).
   Result.FCaseSensitive := ACaseSensitive;
+  Result.FPathMode := False;
 
   if AIncludePattern <> '' then
     Result.FInclude := TWildCard.Create(AIncludePattern, ACaseSensitive)
@@ -2117,6 +2724,7 @@ end;
 class function TWildCardFilter.Create(const AIncludePatterns, AExcludePatterns: TArray<string>; const ACaseSensitive: Boolean): TWildCardFilter;
 begin
   Result.FCaseSensitive := ACaseSensitive;
+  Result.FPathMode := False;
   Result.FInclude := TWildCard.Create(AIncludePatterns, ACaseSensitive);
   Result.FExclude := TWildCard.Create(AExcludePatterns, ACaseSensitive);
   Result.FHasIncludes := Length(AIncludePatterns) > 0;
@@ -2125,6 +2733,7 @@ end;
 class function TWildCardFilter.Create(const AIncludePatterns, AExcludePatterns: TStrings; const ACaseSensitive: Boolean): TWildCardFilter;
 begin
   Result.FCaseSensitive := ACaseSensitive;
+  Result.FPathMode := False;
 
   if Assigned(AIncludePatterns) then
     Result.FInclude := TWildCard.Create(AIncludePatterns, ACaseSensitive)
@@ -2135,6 +2744,35 @@ begin
     Result.FExclude := TWildCard.Create(AExcludePatterns, ACaseSensitive)
   else
     Result.FExclude := TWildCard.Create(ACaseSensitive);
+
+  Result.FHasIncludes := Assigned(AIncludePatterns) and (AIncludePatterns.Count > 0);
+end;
+
+class function TWildCardFilter.Create(const AIncludePatterns, AExcludePatterns: TArray<string>;
+  const AOptions: TWildCardOptions): TWildCardFilter;
+begin
+  Result.FCaseSensitive := wcoCaseSensitive in AOptions;
+  Result.FPathMode := wcoPathMode in AOptions;
+  Result.FInclude := TWildCard.Create(AIncludePatterns, AOptions);
+  Result.FExclude := TWildCard.Create(AExcludePatterns, AOptions);
+  Result.FHasIncludes := Length(AIncludePatterns) > 0;
+end;
+
+class function TWildCardFilter.Create(const AIncludePatterns, AExcludePatterns: TStrings;
+  const AOptions: TWildCardOptions): TWildCardFilter;
+begin
+  Result.FCaseSensitive := wcoCaseSensitive in AOptions;
+  Result.FPathMode := wcoPathMode in AOptions;
+
+  if Assigned(AIncludePatterns) then
+    Result.FInclude := TWildCard.Create(AIncludePatterns, AOptions)
+  else
+    Result.FInclude := TWildCard.Create(AOptions);
+
+  if Assigned(AExcludePatterns) then
+    Result.FExclude := TWildCard.Create(AExcludePatterns, AOptions)
+  else
+    Result.FExclude := TWildCard.Create(AOptions);
 
   Result.FHasIncludes := Assigned(AIncludePatterns) and (AIncludePatterns.Count > 0);
 end;
@@ -2150,6 +2788,107 @@ begin
   Result := not FExclude.Match(AInput);
 end;
 
+function TWildCardFilter.AcceptsEx(const AInput: string; out AIncludeIndex, AExcludeIndex: Integer): Boolean;
+begin
+  // Same decision as Accepts, but reports which pattern decided it.
+  AIncludeIndex := -1;
+  AExcludeIndex := -1;
+
+  if FHasIncludes then
+  begin
+    AIncludeIndex := FInclude.MatchIndex(AInput);
+
+    if AIncludeIndex < 0 then
+      Exit(False);
+  end;
+
+  AExcludeIndex := FExclude.MatchIndex(AInput);
+  Result := AExcludeIndex < 0;
+end;
+
+function TWildCardFilter.Filter(const AInputs: TArray<string>): TArray<string>;
+var
+  LIndex, LCount: Integer;
+begin
+  SetLength(Result, Length(AInputs));
+  LCount := 0;
+
+  for LIndex := 0 to High(AInputs) do
+    if Accepts(AInputs[LIndex]) then
+    begin
+      Result[LCount] := AInputs[LIndex];
+      Inc(LCount);
+    end;
+
+  SetLength(Result, LCount);
+end;
+
+function TWildCardFilter.Lint: TArray<TWildCardDiagnostic>;
+var
+  LInner: TArray<TWildCardDiagnostic>;
+  LIncludes, LExcludes: TArray<string>;
+  LIndex, LOtherIndex: Integer;
+begin
+  Result := nil;
+
+  // Per-list pattern analysis, re-tagged with the list it came from.
+  LInner := FInclude.Lint;
+
+  for LIndex := 0 to High(LInner) do
+  begin
+    LInner[LIndex].List := wdlIncludes;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := LInner[LIndex];
+  end;
+
+  LInner := FExclude.Lint;
+
+  for LIndex := 0 to High(LInner) do
+  begin
+    LInner[LIndex].List := wdlExcludes;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := LInner[LIndex];
+  end;
+
+  LIncludes := FInclude.RegisteredPatterns;
+  LExcludes := FExclude.RegisteredPatterns;
+
+  // An include pattern that is also an exclude pattern can never accept
+  // anything - exclude always wins.  (The classic mistake: '*.bat' in
+  // both lists.)  Both lists are prepared identically, so a plain string
+  // compare is case-mode aware.
+  for LIndex := 0 to High(LIncludes) do
+    for LOtherIndex := 0 to High(LExcludes) do
+      if LIncludes[LIndex] = LExcludes[LOtherIndex] then
+      begin
+        AppendWildCardDiagnostic(Result, wdkWarning, wdlIncludes, LIndex, LIncludes[LIndex],
+          Format('Include pattern #%d ''%s'' is also exclude pattern #%d - it can never accept anything (exclude wins)',
+          [LIndex, LIncludes[LIndex], LOtherIndex]));
+        Break;
+      end;
+
+  // A match-everything exclude rejects every input.
+  for LIndex := 0 to High(LExcludes) do
+    if TWildCard.PatternMatchesEverything(LExcludes[LIndex], FPathMode) then
+    begin
+      AppendWildCardDiagnostic(Result, wdkWarning, wdlExcludes, LIndex, LExcludes[LIndex],
+        Format('Exclude pattern #%d ''%s'' matches everything - the filter accepts nothing', [LIndex, LExcludes[LIndex]]));
+      Break;
+    end;
+
+  // A match-everything include makes every other include redundant
+  // (regardless of order - the include stage only asks "does any match").
+  if Length(LIncludes) > 1 then
+    for LIndex := 0 to High(LIncludes) do
+      if TWildCard.PatternMatchesEverything(LIncludes[LIndex], FPathMode) then
+      begin
+        AppendWildCardDiagnostic(Result, wdkHint, wdlIncludes, LIndex, LIncludes[LIndex],
+          Format('Include pattern #%d ''%s'' matches everything - the other include patterns are redundant',
+          [LIndex, LIncludes[LIndex]]));
+        Break;
+      end;
+end;
+
 function TWildCardFilter.GetIncludePatterns: TArray<string>;
 begin
   Result := FInclude.RegisteredPatterns;
@@ -2158,6 +2897,16 @@ end;
 function TWildCardFilter.GetExcludePatterns: TArray<string>;
 begin
   Result := FExclude.RegisteredPatterns;
+end;
+
+function TWildCardFilter.GetIncludeCount: Integer;
+begin
+  Result := FInclude.PatternCount;
+end;
+
+function TWildCardFilter.GetExcludeCount: Integer;
+begin
+  Result := FExclude.PatternCount;
 end;
 
 end.
