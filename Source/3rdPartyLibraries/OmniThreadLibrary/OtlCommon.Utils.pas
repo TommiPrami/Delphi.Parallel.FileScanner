@@ -36,10 +36,17 @@
 ///   Contributors      : GJ, Lee_Nover, scarre, Sean B. Durkin
 ///
 ///   Creation date     : 2011-08-31
-///   Last modification : 2026-03-18
-///   Version           : 1.0b
+///   Last modification : 2026-04-15
+///   Version           : 1.02
 ///</para><para>
 ///   History:
+///     1.02: 2026-04-15
+///       - Fixed: OTL_HasTThreadCurrentThread ifdefs were dead code, preventing
+///         SetThreadDescription (Windows 10+ thread naming API) from being loaded.
+///         Removed the guards since TThread.CurrentThread is always available.
+///       - Fixed: FreeLibrary was called on a handle obtained via GetModuleHandle
+///         (which does not increment the reference count). Removed the incorrect
+///         FreeLibrary call.
 ///     1.01: 2026-03-18
 ///       - On Windows, SetThreadName also calls SetThreadDescription API
 ///         if it is available.
@@ -69,21 +76,17 @@ uses
   Windows,
   Classes;
 {$ELSE ~OTL_HasNameThreadForDebugging}
-{$IFDEF MSWINDOWS}
 uses
   Windows;
-{$ENDIF MSWINDOWS}
 {$ENDIF ~OTL_HasNameThreadForDebugging}
 
-{$IFDEF MSWINDOWS}
+{$IFDEF OTL_HasNameThreadForDebugging}
 type
   TSetThreadDescription = function(hThread: THandle; threadDescription: PWideChar): HRESULT; stdcall;
 
-{$IFDEF OTL_HasTThreadCurrentThread}
 var
   GSetThreadDescription: TSetThreadDescription;
-{$ENDIF OTL_HasTThreadCurrentThread}
-{$ENDIF MSWINDOWS}
+{$ENDIF OTL_HasNameThreadForDebugging}
 
 threadvar
   LastThreadName: string[255];
@@ -106,16 +109,13 @@ begin
     Exit;
 
   TThread.NameThreadForDebugging({$IFDEF OTL_NameThreadHasStringParameter}name{$ELSE}ansiName{$ENDIF});
-  {$IFDEF OTL_HasTThreadCurrentThread}
   if assigned(GSetThreadDescription) then
     GSetThreadDescription(TThread.CurrentThread.Handle, PChar(name));
-  {$ENDIF OTL_HasTThreadCurrentThread}
 
   LastThreadName := ansiName;
 end; { SetThreadName }
 
 {$ELSE ~OTL_HasNameThreadForDebugging}
-{$IFDEF MSWINDOWS}
 {$WARN SYMBOL_PLATFORM OFF}
 
 procedure SetThreadName(const name: string);
@@ -143,40 +143,14 @@ begin
     except {ignore} end;
     LastThreadName := ansiName;
   end;
-
-  {$IFDEF OTL_HasTThreadCurrentThread}
-  if assigned(GSetThreadDescription) then
-    GSetThreadDescription(TThread.Current.Handle, PChar(name));
-  {$ENDIF OTL_HasTThreadCurrentThread}
 end; { SetThreadName }
 
 {$WARN SYMBOL_PLATFORM ON}
-{$ELSE ~MSWINDOWS}
-
-procedure SetThreadName(const name: string);
-begin
-end; { SetThreadName }
-
-{$ENDIF ~MSWINDOWS}
 {$ENDIF ~OTL_HasNameThreadForDebugging}
 {$ENDIF ~OTL_DontSetThreadName}
 
-{$IFDEF MSWINDOWS}
-{$IFDEF OTL_HasTThreadCurrentThread}
-var
-  GKernel32: HMODULE;
-{$ENDIF OTL_HasTThreadCurrentThread}
-
+{$IFDEF OTL_HasNameThreadForDebugging}
 initialization
-  {$IFDEF OTL_HasTThreadCurrentThread}
-  GKernel32 := GetModuleHandle('kernel32.dll');
-  if GKernel32 <> 0 then
-    GSetThreadDescription := GetProcAddress(GKernel32, 'SetThreadDescription');
-  {$ENDIF OTL_HasTThreadCurrentThread}
-finalization
-  {$IFDEF OTL_HasTThreadCurrentThread}
-  if GKernel32 <> 0 then
-    FreeLibrary(GKernel32);
-  {$ENDIF OTL_HasTThreadCurrentThread}
-{$ENDIF MSWINDOWS}
+  GSetThreadDescription := GetProcAddress(GetModuleHandle('kernel32.dll'), 'SetThreadDescription');
+{$ENDIF OTL_HasNameThreadForDebugging}
 end.

@@ -35,10 +35,13 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, Sean B. Durkin
 ///   Creation date     : 2008-06-12
-///   Last modification : 2022-03-09
-///   Version           : 2.21
+///   Last modification : 2026-04-15
+///   Version           : 2.21a
 /// </para><para>
 ///   History:
+///     2.21a: 2026-04-15
+///       - Fixed: GlobalOmniThreadPool lazy initialization was not thread-safe.
+///         Two threads calling simultaneously could create two pools, leaking one.
 ///     2.21: 2022-03-09
 ///       - Avoid range check on 64 CPU systems.
 ///     2.20a: 2021-02-23
@@ -176,11 +179,7 @@ interface
 // TODO 5 -oPrimoz Gabrijelcic : Loggers should (maybe) send log info to the event monitor 
 
 uses
-  {$IFDEF MSWINDOWS}
   Windows,
-  {$ELSE}
-  Diagnostics,
-  {$ENDIF ~MSWINDOWS}
   Contnrs,
   Classes,
   SysUtils,
@@ -197,9 +196,7 @@ type
   IOmniThreadPoolMonitor = interface
     ['{09EFADE8-3F14-4184-87CA-131100EC57E4}']
     function  Detach(const task: IOmniThreadPool): IOmniThreadPool;
-    {$IFDEF MSWINDOWS}
     function  Monitor(const task: IOmniThreadPool): IOmniThreadPool;
-    {$ENDIF MSWINDOWS}
   end; { IOmniThreadPoolMonitor }
 
   TThreadPoolOperation = (tpoCreateThread, tpoDestroyThread, tpoKillThread,
@@ -310,11 +307,9 @@ function GlobalOmniThreadPool: IOmniThreadPool;
 implementation
 
 uses
-  {$IFDEF MSWINDOWS}
   Messages,
   DSiWin32,
   GpStuff,
-  {$ENDIF}
   Math,
   SyncObjs,
   TypInfo,
@@ -333,7 +328,7 @@ uses
   OtlEventMonitor;
 
 const
-  WM_REQUEST_COMPLETED = {$IFDEF MSWINDOWS}WM_USER{$ELSE}1000{$ENDIF};
+  WM_REQUEST_COMPLETED = WM_USER;
 
   MSG_RUN               = 1;
   MSG_THREAD_CREATED    = 2;
@@ -480,9 +475,7 @@ type
     owAsy_OnUnhandledWorkerException: TOTPUnhandledWorkerException;
     owDestroying                    : boolean;
     owIdleWorkers                   : TObjectList;
-    {$IFDEF MSWINDOWS}
     owMonitorObserver               : TOmniContainerWindowsMessageObserver;
-    {$ENDIF MSWINDOWS}
     owName                          : string;
     owNUMANodes                     : IOmniIntegerSet;
     owProcessorGroups               : IOmniIntegerSet;
@@ -529,9 +522,9 @@ type
       GetAsy_OnUnhandledWorkerException write SetAsy_OnUnhandledWorkerException;
   // invoked from TOTPWorkerThreads
     procedure CheckIdleQueue;
-    procedure MsgCompleted(var msg: TOmniMessage); {$IFDEF MSWINDOWS}message MSG_COMPLETED;{$ENDIF}
-    procedure MsgThreadCreated(var msg: TOmniMessage); {$IFDEF MSWINDOWS}message MSG_THREAD_CREATED;{$ENDIF}
-    procedure MsgThreadDestroying(var msg: TOmniMessage); {$IFDEF MSWINDOWS}message MSG_THREAD_DESTROYING;{$ENDIF}
+    procedure MsgCompleted(var msg: TOmniMessage); message MSG_COMPLETED;
+    procedure MsgThreadCreated(var msg: TOmniMessage); message MSG_THREAD_CREATED;
+    procedure MsgThreadDestroying(var msg: TOmniMessage); message MSG_THREAD_DESTROYING;
     procedure PruneWorkingQueue;
     procedure RemoveMonitor;
     procedure Schedule(var workItem: TOTPWorkItem);
@@ -652,9 +645,16 @@ var
 { exports }
 
 function GlobalOmniThreadPool: IOmniThreadPool;
+var
+  newPool: IOmniThreadPool;
 begin
-  if not assigned(GOmniThreadPool) then
-    GOmniThreadPool := CreateThreadPool(CGlobalOmniThreadPoolName);
+  if not assigned(GOmniThreadPool) then begin
+    newPool := CreateThreadPool(CGlobalOmniThreadPoolName);
+    if TInterlockedEx.CAS(pointer(nil), pointer(newPool), PPointer(@GOmniThreadPool)^) then
+      newPool._AddRef // prevent release when newPool goes out of scope
+    else
+      newPool := nil;  // another thread won the race
+  end;
   Result := GOmniThreadPool;
 end; { GlobalOmniThreadPool }
 
@@ -716,7 +716,7 @@ begin
   inherited Create;
   owiTask := task;
   owiScheduledAt := Now;
-  owiScheduled_ms := {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF};
+  owiScheduled_ms := DSiTimeGetTime64;
   owiUniqueID := owiTask.UniqueID;
 end; { TOTPWorkItem.Create }
 
@@ -745,13 +745,8 @@ begin
   inherited Create(true);
   {$IFDEF LogThreadPool}Log('Creating thread %s', [Description]);{$ENDIF LogThreadPool}
   owtThreadDataFactory := ThreadDataFactory;
-  {$IFDEF MSWINDOWS}
   owtNewWorkEvent := CreateEvent(nil, false, false, nil);
   owtTerminateEvent := CreateEvent(nil, false, false, nil);
-  {$ELSE}
-  owtNewWorkEvent := CreateOmniEvent(false, false);
-  owtTerminateEvent := CreateOmniEvent(false, false);
-  {$ENDIF ~MSWINDOWS}
   owtWorkItemLock := CreateOmniCriticalSection;
   owtCommChannel := CreateTwoWayChannel(100, owtTerminateEvent);
 end; { TOTPWorkerThread.Create }
@@ -760,13 +755,8 @@ destructor TOTPWorkerThread.Destroy;
 begin
   {$IFDEF LogThreadPool}Log('Destroying thread %s', [Description]);{$ENDIF LogThreadPool}
   owtWorkItemLock := nil;
-  {$IFDEF MSWINDOWS}
   DSiCloseHandleAndNull(owtTerminateEvent);
   DSiCloseHandleAndNull(owtNewWorkEvent);
-  {$ELSE}
-  owtTerminateEvent := nil;
-  owtNewWorkEvent := nil;
-  {$ENDIF ~MSWINDOWS}
   inherited Destroy;
 end; { TOTPWorkerThread.Destroy }
 
@@ -1048,37 +1038,25 @@ begin
       {$IFDEF LogThreadPool}Log('Cancel request %d on thread %p:%d', [taskID, pointer(worker), worker.threadID]); {$ENDIF LogThreadPool}
       owRunningWorkers.Delete(iWorker);
       worker.Asy_Stop(signalToken);
-      endWait_ms := {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF} + waitForTask_ms;
-      while ({$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF} < endWait_ms) and (not worker.Stopped) do begin
+      endWait_ms := DSiTimeGetTime64 + waitForTask_ms;
+      while ( DSiTimeGetTime64 < endWait_ms) and (not worker.Stopped) do begin
         ProcessMessages;
         Sleep(10);
       end;
-      {$IFDEF MSWINDOWS}
       SuspendThread(worker.Handle);
-      {$ELSE}
-      worker.Suspended := true;
-      {$ENDIF ~MSWINDOWS}
       if worker.Asy_TerminateWorkItem(workItem) then begin
         ProcessCompletedWorkItem(workItem);
         {$IFDEF LogThreadPool}Log(
           'Terminating unstoppable thread %s, num idle = %d, num running = %d[%d]',
           [worker.Description, owIdleWorkers.Count, owRunningWorkers.Count,
           MaxExecuting.Value]); {$ENDIF LogThreadPool}
-        {$IFDEF MSWINDOWS}
         TerminateThread(worker.Handle, cardinal(-1));
-        {$ELSE}
-        worker.Terminate;
-        {$ENDIF ~MSWINDOWS}
         ForwardThreadDestroying(worker.threadID, tpoKillThread, worker);
         FreeAndNil(worker);
         wasTerminated := false;
       end
       else begin
-        {$IFDEF MSWINDOWS}
         ResumeThread(worker.Handle);
-        {$ELSE}
-        worker.Suspended := false;
-        {$ENDIF ~MSWINDOWS}
         owIdleWorkers.Add(worker);
         {$IFDEF LogThreadPool}Log(
           'Thread %s moved to the idle list, num idle = %d, num running = %d[%d]',
@@ -1116,12 +1094,10 @@ end; { TOTPWorker.Cleanup }
 
 procedure TOTPWorker.ForwardThreadCreated(threadID: TThreadID);
 begin
-  {$IFDEF MSWINDOWS}
   if assigned(owMonitorObserver) then
     owMonitorObserver.Send(COmniPoolMsg, 0, LPARAM
         (TOmniThreadPoolMonitorInfo.Create(owUniqueID, tpoCreateThread, threadID))
       );
-  {$ENDIF MSWINDOWS}
 end; { TOTPWorker.ForwardThreadCreated }
 
 procedure TOTPWorker.ForwardThreadDestroying(threadID: TThreadID;
@@ -1133,12 +1109,10 @@ begin
     task.UnregisterComm(worker.OwnerCommEndpoint);
     worker.Stopped := true;
   end;
-  {$IFDEF MSWINDOWS}
   if assigned(owMonitorObserver) then
     owMonitorObserver.Send(COmniPoolMsg, 0, LPARAM
       (TOmniThreadPoolMonitorInfo.Create(owUniqueID, threadPoolOperation,
         threadID)));
-  {$ENDIF MSWINDOWS}
 end; { TOTPWorker.ForwardThreadDestroying }
 
 function TOTPWorker.Initialize: boolean;
@@ -1188,8 +1162,8 @@ begin
     StopThread(TOTPWorkerThread(owRunningWorkers[iWorker]), signalCancellationToken);
   owRunningWorkers.Clear;
   CountRunning.Value := 0;
-  endWait_ms := {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF} + int64(WaitOnTerminate_sec.Value) * 1000;
-  while (endWait_ms > {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF}) and (NumRunningStoppedThreads > 0) do
+  endWait_ms := DSiTimeGetTime64 + int64(WaitOnTerminate_sec.Value) * 1000;
+  while (endWait_ms > DSiTimeGetTime64 ) and (NumRunningStoppedThreads > 0) do
   begin
     ProcessMessages;
     // TODO 1 -oPrimoz Gabrijelcic : ! what happens here during CancelAll? can the task die? !
@@ -1246,7 +1220,7 @@ begin
       worker := TOTPWorkerThread(owIdleWorkers[iWorker]);
       if (worker.StartStopping_ms = 0) and
         ((worker.StartIdle_ms + int64(IdleWorkerThreadTimeout_sec.Value) * 1000)
-         < {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF}) then
+         < DSiTimeGetTime64 ) then
       begin
         {$IFDEF LogThreadPool}Log(
           'Destroying idle thread %s because it was idle for more than %d seconds',
@@ -1263,27 +1237,15 @@ begin
   while iWorker < owStoppingWorkers.Count do begin
     worker := TOTPWorkerThread(owStoppingWorkers[iWorker]);
     if worker.Stopped or ((worker.StartStopping_ms + int64(WaitOnTerminate_sec.Value) * 1000) <
-                         {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF}) then
+                         DSiTimeGetTime64 ) then
     begin
       if not worker.Stopped then begin
-        {$IFDEF MSWINDOWS}
         SuspendThread(worker.Handle);
-        {$ELSE}
-        worker.Suspended := True;
-        {$ENDIF}
         if worker.Stopped then begin
-          {$IFDEF MSWINDOWS}
           ResumeThread(worker.Handle);
-          {$ELSE}
-          worker.Suspended := False;
-          {$ENDIF}
           break; // while
         end;
-        {$IFDEF MSWINDOWS}
         TerminateThread(worker.Handle, cardinal(-1));
-        {$ELSE}
-        worker.Terminate;
-        {$ENDIF}
         ForwardThreadDestroying(worker.threadID, tpoKillThread, worker);
       end
       else begin
@@ -1380,11 +1342,9 @@ begin
   Log('Thread %s completed request %s', [worker.Description, workItem.Description]);
   Log('Destroying %s', [workItem.Description]);
   {$ENDIF LogThreadPool}
-  {$IFDEF MSWINDOWS}
   if assigned(owMonitorObserver) then
     owMonitorObserver.Send(COmniPoolMsg, 0, LPARAM
       (TOmniThreadPoolMonitorInfo.Create(owUniqueID, workItem.UniqueID)));
-  {$ENDIF MSWINDOWS}
   FreeAndNil(workItem);
   if owRunningWorkers.IndexOf(worker) < 0 then
     worker := nil;
@@ -1394,7 +1354,7 @@ begin
     if (not worker.RemoveFromPool) and
       ((MaxExecuting.Value < 0) or (owRunningWorkers.Count < MaxExecuting.Value)) then
     begin
-      worker.StartIdle_ms := {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF};
+      worker.StartIdle_ms := DSiTimeGetTime64;
       owIdleWorkers.Add(worker);
       {$IFDEF LogThreadPool}Log(
         'Thread %s moved back to the idle list, num idle = %d, num running = %d[%d]'
@@ -1438,7 +1398,7 @@ begin
     while iWorkItem < owWorkItemQueue.Count do begin
       workItem := TOTPWorkItem(owWorkItemQueue[iWorkItem]);
       maxWaitTime_ms := workItem.Scheduled_ms + int64(MaxQueuedTime_sec.Value) * 1000;
-      if maxWaitTime_ms > {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF} then
+      if maxWaitTime_ms > DSiTimeGetTime64 then
         Inc(iWorkItem)
       else begin
         {$IFDEF LogThreadPool}Log(
@@ -1462,9 +1422,7 @@ end; { TOTPWorker.PruneWorkingQueue }
 
 procedure TOTPWorker.RemoveMonitor;
 begin
-  {$IFDEF MSWINDOWS}
   FreeAndNil(owMonitorObserver);
-  {$ENDIF MSWINDOWS}
 end; { TOTPWorker.RemoveMonitor }
 
 procedure TOTPWorker.RequestCompleted(workItem: TOTPWorkItem;
@@ -1545,12 +1503,9 @@ end; { TOTPWorker.SetAsy_OnUnhandledWorkerException }
 
 procedure TOTPWorker.SetMonitor(const params: TOmniValue);
 var
-  {$IFDEF MSWINDOWS}
   hWindow  : THandle;
-  {$ENDIF MSWINDOWS}
   waitParam: TOmniValue;
 begin
-  {$IFDEF MSWINDOWS}
   hWindow := params[0];
   if not assigned(owMonitorObserver) then
     owMonitorObserver :=
@@ -1559,7 +1514,6 @@ begin
     raise Exception.Create(
       'TOTPWorker.SetMonitor: Task can be only monitored with a single monitor'
       );
-  {$ENDIF MSWINDOWS}
   waitParam := params[1];
   (waitParam.AsObject as TOmniWaitableValue).Signal;
 end; { TOTPWorker.SetMonitor }
@@ -1607,7 +1561,7 @@ procedure TOTPWorker.StopThread(worker: TOTPWorkerThread; signalCancellationToke
 begin
   {$IFDEF LogThreadPool}Log('Stopping worker thread %s', [worker.Description]);{$ENDIF LogThreadPool}
   owStoppingWorkers.Add(worker);
-  worker.StartStopping_ms := {$IFDEF MSWINDOWS} DSiTimeGetTime64 {$ELSE} TStopWatch.GetTimeStamp {$ENDIF};
+  worker.StartStopping_ms := DSiTimeGetTime64;
   worker.Asy_Stop(signalCancellationToken); // have to force asynchronous stop as the worker thread may be stuck in the ExecuteWorkItem
   worker.OwnerCommEndpoint.Send(MSG_STOP);
   {$IFDEF LogThreadPool}Log('num stopped = %d', [owStoppingWorkers.Count]);{$ENDIF LogThreadPool}
@@ -1816,9 +1770,7 @@ end; { TGpThreadPool.Log }
 
 function TOmniThreadPool.MonitorWith(const monitor: IOmniThreadPoolMonitor): IOmniThreadPool;
 begin
-  {$IFDEF MSWINDOWS}
   monitor.Monitor(Self);
-  {$ENDIF MSWINDOWS}
   Result := Self;
 end; { TOmniThreadPool.MonitorWith }
 

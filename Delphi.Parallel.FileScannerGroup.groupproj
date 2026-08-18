@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{71DECEEB-4555-4E7B-9730-A0AC259348E4}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="Tests\ScannerTests\DPFSScannerTests.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Tests\SimpleTestApp\DPFSSimpleTestAPP.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="DPFSScannerTests">
+        <MSBuild Projects="Tests\ScannerTests\DPFSScannerTests.dproj"/>
+    </Target>
+    <Target Name="DPFSScannerTests:Clean">
+        <MSBuild Projects="Tests\ScannerTests\DPFSScannerTests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="DPFSScannerTests:Make">
+        <MSBuild Projects="Tests\ScannerTests\DPFSScannerTests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="DPFSSimpleTestAPP">
+        <MSBuild Projects="Tests\SimpleTestApp\DPFSSimpleTestAPP.dproj"/>
+    </Target>
+    <Target Name="DPFSSimpleTestAPP:Clean">
+        <MSBuild Projects="Tests\SimpleTestApp\DPFSSimpleTestAPP.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="DPFSSimpleTestAPP:Make">
+        <MSBuild Projects="Tests\SimpleTestApp\DPFSSimpleTestAPP.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="DPFSScannerTests;DPFSSimpleTestAPP"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="DPFSScannerTests:Clean;DPFSSimpleTestAPP:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="DPFSScannerTests:Make;DPFSSimpleTestAPP:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

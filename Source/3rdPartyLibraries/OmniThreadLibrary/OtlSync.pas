@@ -36,10 +36,39 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, dottor_jeckill, Sean B. Durkin, VyPu
 ///   Creation date     : 2009-03-30
-///   Last modification : 2025-11-20
-///   Version           : 2.0a
+///   Last modification : 2026-07-24
+///   Version           : 2.2
 ///</para><para>
 ///   History:
+///     2.2: 2026-07-24
+///       - TLightweightMREWEx.BeginRead/TryBeginRead while owning the write
+///         lock now raise BY DEFAULT - with strict TLightweightMREW semantics
+///         such calls usually indicate a programming error, and a silent
+///         grant would have hidden it. The grant is opt-in via the new
+///         AllowReadInsideWrite property, which must be set before the lock
+///         is first used (the setter raises afterwards, because the acquire
+///         paths read the flag unsynchronized).
+///     2.1: 2026-07-24
+///       - TLightweightMREWEx read locks are now reentrant and deadlock-safe
+///         (ported from OmniThreadLibrary-NG OtlSync 3.09): per-thread tracking
+///         grants nested BeginRead/TryBeginRead without touching the OS lock,
+///         so recursive shared acquisition can no longer deadlock behind a
+///         pending writer (documented SRWLOCK hazard).
+///       - BeginRead/TryBeginRead while owning the write lock is granted as a
+///         nested no-op acquire (exclusive access implies read rights).
+///       - BeginWrite/TryBeginWrite while holding a read lock now raise
+///         (upgrade is impossible; previously deadlocked).
+///       - EndRead without a matching BeginRead raises.
+///       - EndWrite releasing the outermost write lock while a read lock
+///         acquired under it is still held raises.
+///       - EndWrite exception messages now include the class/method context.
+///       - Full XML documentation on the TLightweightMREWEx public surface.
+///     2.0b: 2026-04-15
+///       - Fixed: TOmniSynchroObject.Destroy called inherited inside the
+///         with EnterSpinLock block, causing use-after-free when the spin lock
+///         interface was released after Self was destroyed.
+///       - Fixed: TOmniLockManager.Lock could pass negative wait_ms as cardinal
+///         to WaitForSingleObject, causing extremely long wait instead of timeout.
 ///     2.0a: 2025-11-20
 ///       - Implemented Locked<T>.IsInitialized.
 ///     2.0: 2025-11-11
@@ -189,18 +218,10 @@ uses
   RTTI,
   {$ENDIF OTL_ERTTI}
   TypInfo,
-  {$IFDEF MSWINDOWS}
   Windows,
   DSiWin32,
   GpStuff,
   GpLists,
-  {$ENDIF}
-  {$IFDEF OTL_MobileSupport}
-  {$IFDEF POSIX}
-  Posix.Pthread,
-  {$ENDIF}
-  System.Diagnostics,
-  {$ENDIF OTL_MobileSupport}
   OtlCommon;
 
 type
@@ -218,79 +239,16 @@ type
     property LockCount: integer read GetLockCount;
   end; { IOmniCriticalSection }
 
-  {$IFDEF OTL_MobileSupport}
-  IOmniSynchroObserver = interface ['{03330A74-3C3D-4D2F-9A21-89663DE7FD10}']
-    procedure EnterGate;
-    procedure LeaveGate;
-    /// <param name="SynchObj">SynchObj must support IOmniSynchroObject.</param>
-    procedure DereferenceSynchObj(const SynchObj: TObject; AllowInterface: boolean);
-    /// <param name="Subtractend">Signaller must support IOmniSynchroObject.</param>
-    procedure BeforeSignal(const Signaller: TObject; var Data: TObject);
-    /// <param name="Subtractend">Signaller must support IOmniSynchroObject.</param>
-    procedure AfterSignal(const Signaller: TObject; var Data: TObject);
-  end; { IOmniSynchroObserver }
-
-  IOmniSynchro = interface ['{2C4F0CF8-A722-45EC-BFCA-AA512E58B54D}']
-    function  EnterSpinLock: IInterface;
-    procedure Signal;
-    /// <remarks>
-    ///  If this event is attached to IOmniSynchroObserver,
-    //    such as TWaitFor (acting as a condition variable)
-    ///   a thread must not invoke WaitFor() directly on this event, but
-    ///   rather through the containing TWaitFor, or as otherwise defined by
-    //    the attached observer.
-    /// </remarks>
-    function  WaitFor(Timeout: LongWord = INFINITE): TWaitResult; overload;
-    procedure ConsumeSignalFromObserver( const Observer: IOmniSynchroObserver);
-    /// <remarks>
-    ///  IsSignaled() is only valid when all the Signal()/ Reset()
-    ///   invocations are done whilst attached to an IOmniEventObserver.
-    ///   Otherwise this returned value must not be relied upon.
-    /// </remarks>
-    function  IsSignalled: boolean;
-    procedure AddObserver(const Observer: IOmniSynchroObserver);
-    procedure RemoveObserver(const Observer: IOmniSynchroObserver);
-    function  Base: TSynchroObject;
-    {$IFDEF MSWINDOWS}
-    function  Handle: THandle;
-    {$ENDIF}
-  end; { IOmniSynchro }
-
-  IOmniSynchroObject = interface ['{A8B95978-87BF-4031-94B2-8EDC351F47BE}']
-    function  GetSynchro: IOmniSynchro;
-  //
-    property Synchro: IOmniSynchro read GetSynchro;
-  end; { IOmniSynchroObject }
-
-  /// <remarks>
-  ///   IOmniEvent is a wrapper around a TEvent object.
-  ///   It can co-operate with condition variables through the use of an
-  ///   attached IOmniEventObserver. IOmniEvent objects can be enrolled
-  ///   in TWaitFor objects on non-windows platforms.
-  /// </remarks>
-  IOmniEvent = interface(IOmniSynchro) ['{3403D24B-3CBE-4A83-9F4C-FA4719AA23C5}']
-    procedure SetEvent;
-    procedure Reset;
-    function  BaseEvent: TEvent;
-  end; { IOmniEvent }
-
-  IOmniCountdownEvent = interface(IOmniSynchro) ['{40557184-B610-46E8-B186-D5B431D1B1A4}']
-    function  BaseCountdown: TCountdownEvent;
-    procedure Reset;
-  end; { IOmniCountdownEvent }
-  {$ENDIF OTL_MobileSupport}
 
   //At some point this type will be dropped and all the codebase will use
   //IOmniEvent or something similar.
-  TOmniTransitionEvent = {$IFDEF MSWINDOWS}THandle{$ELSE}IOmniEvent{$ENDIF};
+  TOmniTransitionEvent = THandle;
 
-  {$IFDEF MSWINDOWS}
   IOmniHandleObject = interface ['{80B85D03-8E1F-4812-8782-38A04BA52076}']
     function  GetHandle: THandle;
   //
     property Handle: THandle read GetHandle;
   end; { IOmniHandleObject }
-  {$ENDIF MSWINDOWS}
 
   ///<summary>Simple critical section wrapper. Critical section is automatically
   ///    initialised on first use.</summary>
@@ -323,11 +281,7 @@ type
     function  TryEnterWriteLock(timeout_ms: integer = 0): boolean;
   end; { TOmniMREW }
 
-  IOmniResourceCount = interface({$IFDEF MSWINDOWS}
-                                 IOmniHandleObject
-                                 {$ELSE}{$IFDEF OTL_MobileSupport}
-                                 IOmniSynchroObject
-                                 {$ENDIF}{$ENDIF})
+  IOmniResourceCount = interface(IOmniHandleObject)
   ['{F5281539-1DA4-45E9-8565-4BEA689A23AD}']
     function  Allocate: cardinal;
     function  Release: cardinal;
@@ -339,7 +293,6 @@ type
   ///   increments the count.
   ///   Threadsafe.
   ///</summary>
-  {$IFDEF MSWINDOWS}
   TOmniResourceCount = class(TInterfacedObject, IOmniResourceCount, IOmniHandleObject)
   strict private
     orcAvailable   : TDSiEventHandle;
@@ -356,89 +309,115 @@ type
     function  TryAllocate(var resourceCount: cardinal; timeout_ms: cardinal = 0): boolean;
     property Handle: THandle read GetHandle;
   end; { TOmniResourceCount }
-  {$ELSE}{$IFDEF OTL_MobileSupport}
-  TOmniResourceCount = class abstract(TInterfacedObject, IOmniResourceCount, IOmniSynchroObject)
-  strict protected
-    function  GetSynchro: IOmniSynchro;
-  public
-    constructor Create(initialCount: cardinal);
-    destructor  Destroy; override;
-    function  Allocate: cardinal;
-    function  Release: cardinal;
-    function  TryAllocate(var resourceCount: cardinal; timeout_ms: cardinal = 0): boolean;
-    property Synchro: IOmniSynchro read GetSynchro;
-  end; { TOmniResourceCount }
-  {$ENDIF OTL_MobileSupport}{$ENDIF MSWINDOWS}
 
   IOmniCancellationToken = interface ['{5946F4E8-45C0-4E44-96AB-DBE2BE66A701}']
-    {$IFDEF MSWINDOWS}
     function  GetHandle: THandle;
-    {$ELSE}
-    function  GetEvent: IOmniEvent;
-    {$ENDIF MSWINDOWS}
   //
     procedure Clear;
     function  IsSignalled: boolean;
     procedure Signal;
-    {$IFDEF MSWINDOWS}
     property Handle: THandle read GetHandle;
-    {$ELSE}
-    property Event: IOmniEvent read GetEvent;
-    {$ENDIF MSWINDOWS}
   end; { IOmniCancellationToken }
 
   {$IFDEF OTL_HasLightweightMREW}
+  ///<summary>Reentrant multi-readers-exclusive-writer lock. Extends TLightweightMREW with:
+  ///  nested (recursive) exclusive locks; nested (recursive) read locks that are safe
+  ///  even when a writer is waiting (recursive shared acquisition of a raw SRWLOCK
+  ///  deadlocks in that scenario); optional read acquisition while owning the write
+  ///  lock (opt-in via AllowReadInsideWrite; raises by default); and loud failure on
+  ///  misuse.</summary>
+  ///<remarks><para>Usage errors raise Exception with a 'TLightweightMREWEx.Method: reason'
+  ///  message: upgrading a read lock to a write lock via BeginWrite/TryBeginWrite,
+  ///  BeginRead/TryBeginRead while owning the write lock unless AllowReadInsideWrite
+  ///  was enabled, EndRead without a matching BeginRead, EndWrite by a thread that
+  ///  does not own the write lock, EndWrite while a read lock acquired under the
+  ///  write lock is still held, and setting AllowReadInsideWrite after the lock was
+  ///  first used.</para><para>
+  ///  Instances must not be copied or moved in memory while any lock is held - the
+  ///  lock's address is its identity.</para><para>
+  ///  A thread must release all its locks before terminating; terminating while
+  ///  holding a lock is undefined behavior (as with the underlying OS locks) and
+  ///  leaks a small per-thread tracking node. If a lock instance is destroyed while
+  ///  such a leaked node exists, a new lock later created at the same address would
+  ///  inherit the stale node on that thread.</para></remarks>
   TLightweightMREWEx = record
   private
-    FRWLock        : TLightweightMREW;
-    FWriteLockCount: TOmniAlignedInt32;
-    FLockOwner     : TThreadID;
+    FRWLock             : TLightweightMREW;
+    FWriteLockCount     : TOmniAlignedInt32;
+    FLockOwner          : TThreadID;
+    FAccessed           : boolean;
+    FAllowReadInsideWrite: boolean;
   private
     function  GetLockOwner: TThreadID; inline;
     procedure SetLockOwner(value: TThreadID); inline;
+    procedure SetAllowReadInsideWrite(value: boolean);
+    procedure MarkAccessed; inline;
   public
     class operator Initialize(out dest: TLightweightMREWEx);
-    procedure BeginRead; inline;
-    function  TryBeginRead: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;{$IFEND} inline;
-    {$IF defined(LINUX) or defined(ANDROID)}
-    function  TryBeginRead(timeout: cardinal): boolean; overload; inline;
-    {$IFEND LINUX or ANDROID}
-    procedure EndRead; inline;
+    ///<summary>Acquires the lock in shared (reader) mode; blocks until available.
+    ///  Reentrant: nested calls on the same thread only increment a counter and are
+    ///  safe even when a writer is waiting. While owning the write lock, raises by
+    ///  default; granted immediately when AllowReadInsideWrite is True. Each call
+    ///  must be paired with EndRead.</summary>
+    procedure BeginRead;
+    ///<summary>Tries to acquire the lock in shared (reader) mode without blocking.
+    ///  Nested calls always succeed immediately. While owning the write lock,
+    ///  raises by default; succeeds when AllowReadInsideWrite is True. Returns
+    ///  False only when another thread holds or waits for the write lock.</summary>
+    function  TryBeginRead: boolean;
+    ///<summary>Releases one level of shared (reader) lock. Raises if the calling
+    ///  thread does not hold a read lock.</summary>
+    procedure EndRead;
+    ///<summary>Acquires the lock in exclusive (writer) mode; blocks until available.
+    ///  Reentrant: the owning thread may call it again (counted). Raises if the
+    ///  calling thread holds a read lock - upgrading is not possible.</summary>
     procedure BeginWrite;
-    function  TryBeginWrite: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;
-    function  TryBeginWrite(timeout: cardinal): boolean; overload;
-    {$IFEND LINUX or ANDROID}
+    ///<summary>Tries to acquire the lock in exclusive (writer) mode without blocking.
+    ///  Nested calls by the owner always succeed. Raises if the calling thread holds
+    ///  a read lock - upgrading is not possible and could never succeed.</summary>
+    function  TryBeginWrite: boolean;
+    ///<summary>Releases one level of exclusive (writer) lock. Raises if the caller
+    ///  is not the owner, or when releasing the outermost write lock while a read
+    ///  lock acquired under it is still held.</summary>
     procedure EndWrite;
+    ///<summary>When True, BeginRead/TryBeginRead called while owning the write lock
+    ///  succeed as a no-op nested acquire (exclusive access implies read rights).
+    ///  Default is False: such calls raise, because with strict TLightweightMREW
+    ///  semantics they usually indicate a programming error. Must be set before the
+    ///  lock is used for the first time; the setter raises afterwards.</summary>
+    property AllowReadInsideWrite: boolean read FAllowReadInsideWrite write SetAllowReadInsideWrite;
   end; { TLightweightMREWEx }
 
+  ///<summary>Interface wrapper for TLightweightMREWEx semantics - see
+  ///  TLightweightMREWEx for full documentation of locking behavior.</summary>
   ILightweightMREWEx = interface
+    function  GetAllowReadInsideWrite: boolean;
+    procedure SetAllowReadInsideWrite(value: boolean);
+  //
     procedure BeginRead;
-    function  TryBeginRead: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;
-    function  TryBeginRead(timeout: cardinal): boolean; overload;
-    {$IFEND LINUX or ANDROID}
+    function  TryBeginRead: boolean;
     procedure EndRead;
     procedure BeginWrite;
-    function  TryBeginWrite: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;
-    function  TryBeginWrite(timeout: cardinal): boolean; overload;
-    {$IFEND LINUX or ANDROID}
+    function  TryBeginWrite: boolean;
     procedure EndWrite;
+    property AllowReadInsideWrite: boolean read GetAllowReadInsideWrite write SetAllowReadInsideWrite;
   end; { ILightweightMREWEx }
 
+  ///<summary>Heap-allocated ILightweightMREWEx implementation delegating to an
+  ///  embedded TLightweightMREWEx - see that record for behavior details.</summary>
   TLightweightMREWExImpl = class(TInterfacedObject, ILightweightMREWEx)
   strict private
     FLock: TLightweightMREWEx;
   public
+    function  GetAllowReadInsideWrite: boolean;
+    procedure SetAllowReadInsideWrite(value: boolean);
     procedure BeginRead;
-    function  TryBeginRead: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;
-    function  TryBeginRead(timeout: cardinal): boolean; overload;
-    {$IFEND LINUX or ANDROID}
+    function  TryBeginRead: boolean;
     procedure EndRead;
     procedure BeginWrite;
-    function  TryBeginWrite: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;
-    function  TryBeginWrite(timeout: cardinal): boolean; overload;
-    {$IFEND LINUX or ANDROID}
+    function  TryBeginWrite: boolean;
     procedure EndWrite;
-  end; { TLightweightMREWEx }
+  end; { TLightweightMREWExImpl }
   {$ENDIF OTL_HasLightweightMREW}
 
   {$IFDEF OTL_Generics}
@@ -495,15 +474,10 @@ type
     {$IFDEF OTL_HasLightweightMREW}
     function  BeginRead: T; inline;
     procedure EndRead; inline;
-    function  TryBeginRead: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;{$IFEND} inline;
-    {$IF defined(LINUX) or defined(ANDROID)}
-    function  TryBeginRead(Timeout: Cardinal): Boolean; overload; inline;
-    {$IFEND LINUX or ANDROID}
+    function  TryBeginRead: boolean; inline;
     function  BeginWrite: T; inline;
     procedure EndWrite; inline;
-    function  TryBeginWrite: boolean; {$IF defined(LINUX) or defined(ANDROID)}overload;
-    function  TryBeginWrite(timeout: cardinal): boolean; overload; inline;
-    {$IFEND LINUX or ANDROID}
+    function  TryBeginWrite: boolean;
     {$ENDIF OTL_HasLightweightMREW}
     procedure Free; //inline;
     property IsInitialized: boolean read FInitialized;
@@ -520,7 +494,6 @@ type
     procedure Unlock(const key: K);
   end; { IOmniLockManager<K> }
 
-  {$IFDEF MSWINDOWS} // mobile version does not implement doubly linked list (yet)
   TOmniLockManager<K> = class(TInterfacedObject, IOmniLockManager<K>)
   strict private type
     TNotifyPair = class(TGpDoublyLinkedListObject)
@@ -558,10 +531,8 @@ type
     function  LockUnlock(const key: K; timeout_ms: cardinal): IOmniLockManagerAutoUnlock;
     procedure Unlock(const key: K);
   end; { TOmniLockManager<K> }
-  {$ENDIF MSWINDOWS}
   {$ENDIF OTL_Generics}
 
-  {$IFDEF MSWINDOWS}
   ///<summary>Waits on any/all from any number of handles.</summary>
   ///  Don't use it to wait on mutexes!
   ///  http://joeduffyblog.com/2007/05/13/registerwaitforsingleobject-and-mutexes-dont-mix/
@@ -621,69 +592,6 @@ type
     property Signalled: THandles read FSignalledHandles;
     property WaitHandles: THandleArr read GetWaitHandles;
   end; { TWaitFor }
-  {$ELSE ~MSWINDOWS}
-  {$IFDEF OTL_MobileSupport}
-  ///<summary>Waits on any/all from any number of synchroobjects such as Events and CountDownEvents.</summary>
-  TSynchroWaitFor = class
-  public type //TODO: not integrated yet (maybe will even be removed at the end but currently OtlTaskControl expects it)
-    TWaitForResult = (
-      waAwaited,      // WAIT_OBJECT_0 .. WAIT_OBJECT_n
-      waTimeout,      // WAIT_TIMEOUT
-      waFailed,       // WAIT_FAILED
-      waIOCompletion, // WAIT_IO_COMPLETION
-      waMessage       // message or wake event (WAIT_OBJECT_n+1)
-    );
-    THandleInfo = record //TODO: not integrated yet (maybe will even be removed at the end but currently OtlTaskControl expects it)
-      Index: integer;
-    end;
-  strict private type
-    TSynchroList = class(TList<IOmniSynchro>) end;
-    ISynchroClientEx = interface ['{A4D963B3-88CD-466A-9885-3C66E605E32E}']
-      procedure Deref;
-    end; { ISyncroClientEx }
-    TSynchroClient = class(TInterfacedObject, IOmniSynchroObserver, ISynchroClientEx)
-    strict private
-      FController: TSynchroWaitFor;
-      procedure EnterGate;
-      procedure LeaveGate;
-      procedure DereferenceSynchObj(const SynchObj: TObject; AllowInterface: boolean);
-      procedure BeforeSignal(const Signaller: TObject; var Data: TObject);
-      procedure AfterSignal(const Signaller: TObject; var Data: TObject);
-      procedure Deref;
-    public
-      constructor Create(AController: TSynchroWaitFor);
-    end; { TSynchroClient }
-  protected type
-    TCondition = class
-    protected
-      FCondVar   : TConditionVariableCS;
-      FController: TSynchroWaitFor;
-    public
-      constructor Create(AController: TSynchroWaitFor);
-      destructor  Destroy; override;
-      function  Wait(timeout_ms: cardinal; var Signaller: IOmniSynchro): TWaitResult;
-      function  Test(var Signaller: IOmniSynchro): boolean; virtual; abstract;
-      function  WaitAll: boolean; virtual; abstract;
-    end;
-  strict private
-    FAllSignalled: TCondition;
-    FGate        : IOmniCriticalSection;
-    FOneSignalled: TCondition;
-    FSynchObjects: TSynchroList;
-    FSynchClient : IOmniSynchroObserver;
-  protected
-    property Gate: IOmniCriticalSection read FGate;
-    property SynchObjects: TSynchroList read FSynchObjects;
-  public
-    constructor Create(const SynchObjects: array of IOmniSynchro; const AShareLock: IOmniCriticalSection = nil);
-    destructor  Destroy; override;
-    function  WaitAll(timeout_ms: cardinal): TWaitResult;
-    function  WaitAny(timeout_ms: cardinal; var Signaller: IOmniSynchro): TWaitResult;
-  end; { TWaitForAll }
-
-  TWaitFor = TSynchroWaitFor;
-  {$ENDIF OTL_MobileSupport}
-  {$ENDIF ~MSWINDOWS}
 
   TOmniSingleThreadUseChecker = record
   private
@@ -733,12 +641,7 @@ function CreateOmniCriticalSection: IOmniCriticalSection;
 function CreateOmniCancellationToken: IOmniCancellationToken;
 function CreateResourceCount(initialCount: integer): IOmniResourceCount;
 
-{$IFDEF OTL_MobileSupport}
-function CreateOmniCountdownEvent(Count: Integer; SpinCount: Integer; const AShareLock: IOmniCriticalSection = nil): IOmniCountdownEvent;
-function CreateOmniEvent(AManualReset, InitialState: boolean; const AShareLock: IOmniCriticalSection = nil): IOmniEvent;
-{$ENDIF OTL_MobileSupport}
 
-{$IFDEF MSWINDOWS}
 procedure NInterlockedExchangeAdd(var addend; value: NativeInt);
 
 function CAS8(const oldValue, newValue: byte; var destination): boolean;
@@ -766,7 +669,6 @@ procedure MoveDPtr(newData: pointer; newReference: NativeInt; var Destination); 
 ///<summary>Waits on any number of handles.</summary>
 ///<returns>True on success, False on timeout.</returns>
 function WaitForAllObjects(const handles: array of THandle; timeout_ms: cardinal): boolean;
-{$ENDIF MSWINDOWS}
 
 function GetThreadId: NativeInt;
 function GetCPUTimeStamp: int64;
@@ -794,126 +696,20 @@ type
   end; { TOmniCriticalSection }
 
   TOmniCancellationToken = class(TInterfacedObject, IOmniCancellationToken)
-  {$IFDEF MSWINDOWS}
   private
     FEvent      : TDSiEventHandle;
     FIsSignalled: boolean;
   protected
     function  GetHandle: THandle; inline;
-  {$ELSE}
-  private
-    FEvent: IOmniEvent;
-  protected
-    function  GetEvent: IOmniEvent; inline;
-  {$ENDIF MSWINDOWS}
   public
     constructor Create;
     procedure Clear; inline;
     function  IsSignalled: boolean; inline;
     procedure Signal; inline;
-  {$IFDEF MSWINDOWS}
     destructor  Destroy; override;
     property Handle: THandle read GetHandle;
-  {$ELSE}
-    property Event: IOmniEvent read GetEvent;
-  {$ENDIF MSWINDOWS}
   end; { TOmniCancellationToken }
 
-  {$IFDEF OTL_MobileSupport}
-  TOmniSynchroObject = class abstract(TSynchroObject, IInterface, IOmniSynchro)
-  private
-    procedure PerformObservableAction(Action: TProc; DoLock: boolean);
-    function  Base: TSynchroObject;
-    {$IFDEF MSWINDOWS}
-    function  Handle: THandle;
-    {$ENDIF}
-  strict protected
-    FBase               : TSynchroObject;
-    FOwnsBase           : boolean;
-    FLock               : TSpinLock;
-    FObservers          : TList<IOmniSynchroObserver>;
-    FData               : TArray<TObject>;
-    [Volatile] FRefCount: integer;
-    FShareLock          : IOmniCriticalSection;
-  private
-    function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;
-    function _AddRef: Integer; stdcall;
-    function _Release: Integer; stdcall;
-  protected
-    property Lock: TSpinLock read FLock;
-    property ShareLock: IOmniCriticalSection read FShareLock;
-  public
-    procedure AfterConstruction; override;
-    class function NewInstance: TObject; override;
-  public
-    constructor Create(ABase: TSynchroObject; OwnsIt: boolean; const AShareLock: IOmniCriticalSection = nil);
-    destructor  Destroy; override;
-    function  EnterSpinLock: IInterface;
-    procedure Acquire; override;
-    procedure Release; override;
-    procedure Signal;
-    function  WaitFor(Timeout: LongWord = INFINITE): TWaitResult; override;
-    procedure ConsumeSignalFromObserver(const Observer: IOmniSynchroObserver); virtual; abstract;
-    function  IsSignalled: boolean; virtual; abstract;
-    procedure AddObserver(const Observer: IOmniSynchroObserver);
-    procedure RemoveObserver(const Observer: IOmniSynchroObserver);
-  end; { TOmniSynchroObject }
-
-  TSynchroSpin = class(TInterfacedObject)
-  private
-    FController: TOmniSynchroObject;
-  public
-    constructor Create(AController: TOmniSynchroObject);
-    destructor Destroy; override;
-  end; { TSynchroSpin }
-
-  TOmniCountdownEvent = class(TOmniSynchroObject, IOmniCountdownEvent)
-  strict protected
-    FCountdown: TCountdownEvent;
-  public
-    constructor Create(Count: Integer; SpinCount: Integer; const AShareLock: IOmniCriticalSection = nil);
-    procedure Reset;
-    procedure ConsumeSignalFromObserver(const Observer: IOmniSynchroObserver);  override;
-    function  IsSignalled: boolean; override;
-    function  BaseCountdown: TCountdownEvent;
-  end; { TOmniCountdownEvent }
-
-  TOmniEvent = class(TOmniSynchroObject, IOmniEvent)
-  strict protected
-    FEvent: TEvent;
-    [Volatile] FState: boolean;
-    FManualReset: boolean;
-  public
-    constructor Create(AManualReset, InitialState: boolean; const AShareLock: IOmniCriticalSection = nil);
-    procedure Reset;
-    procedure SetEvent;
-    function  BaseEvent: TEvent;
-    procedure ConsumeSignalFromObserver(const Observer: IOmniSynchroObserver);  override;
-    function  WaitFor(Timeout: LongWord = INFINITE): TWaitResult; override;
-    function  IsSignalled: boolean; override;
-  end; { TOmniEvent }
-
-  {$IFNDEF MSWINDOWS}
-  TOneCondition = class(TSynchroWaitFor.TCondition)
-  public
-    function  Test(var Signaller: IOmniSynchro): boolean; override;
-    function  WaitAll: boolean; override;
-  end; { TOneCondition }
-
-  TAllCondition = class( TSynchroWaitFor.TCondition)
-  public
-    function  Test(var Signaller: IOmniSynchro): boolean; override;
-    function  WaitAll: boolean; override;
-  end; { TAllCondition }
-
-  TPreSignalData = class
-  public
-    OneSignalled: boolean;
-    AllSignalled: boolean;
-    constructor Create(AOneSignalled, AllSignalled: boolean);
-  end; { TPreSignaData }
-  {$ENDIF ~MSWINDOWS}
-  {$ENDIF OTL_MobileSupport}
 
 var
   GOmniCSInitializer: TOmniCriticalSection;
@@ -923,13 +719,8 @@ var
 function SetEvent(event: TOmniTransitionEvent): boolean;
 begin
   Result := true;
-  {$IFDEF MSWINDOWS}
   if event <> 0 then
     Result := Windows.SetEvent(event);
-  {$ELSE}
-  if assigned(event) then
-    event.SetEvent;
-  {$ENDIF ~MSWINDOWS}
 end; { SetEvent }
 
 { exports }
@@ -949,19 +740,7 @@ begin
   Result := TOmniResourceCount.Create(initialCount);
 end; { CreateResourceCount }
 
-{$IFDEF OTL_MobileSupport}
-function CreateOmniCountdownEvent(Count: Integer; SpinCount: Integer; const AShareLock: IOmniCriticalSection = nil): IOmniCountdownEvent;
-begin
-  Result := TOmniCountdownEvent.Create(Count, SpinCount, AShareLock);
-end; { CreateOmniCountdownEvent }
 
-function CreateOmniEvent(AManualReset, InitialState: boolean; const AShareLock: IOmniCriticalSection = nil): IOmniEvent;
-begin
-  Result := TOmniEvent.Create(AManualReset, InitialState, AShareLock);
-end; { CreateOmniEvent }
-{$ENDIF OTL_MobileSupport}
-
-{$IFDEF MSWINDOWS}
 function CAS8(const oldValue, newValue: byte; var destination): boolean;
 asm
 {$IFDEF CPUX64}
@@ -1148,7 +927,6 @@ asm
   pop   rbx
 {$ENDIF CPUX64}
 end;
-{$ENDIF MSWINDOWS}
 
 function GetThreadId: NativeInt;
 //result := GetCurrentThreadId;
@@ -1190,7 +968,6 @@ asm
   mfence
 end; { MFence }
 
-{$IFDEF MSWINDOWS}
 function WaitForAllObjects(const handles: array of THandle; timeout_ms: cardinal):
   boolean;
 var
@@ -1201,7 +978,6 @@ begin
     Result := (waiter.WaitAll(timeout_ms) = waAwaited);
   finally FreeAndNil(waiter); end;
 end; { WaitForAllObjects }
-{$ENDIF MSWINDOWS}
 
 { TOmniCS }
 
@@ -1280,60 +1056,35 @@ end; { TOmniCriticalSection.Release }
 
 constructor TOmniCancellationToken.Create;
 begin
-  {$IFDEF MSWINDOWS}
   FEvent := CreateEvent(nil, true, false, nil);
-  {$ELSE}
-  FEvent := CreateOmniEvent(True, False);
-  {$ENDIF ~MSWINDOWS}
 end; { TOmniCancellationToken.Create }
 
-{$IFDEF MSWINDOWS}
 destructor TOmniCancellationToken.Destroy;
 begin
   DSiCloseHandleAndNull(FEvent);
   inherited;
 end; { TOmniCancellationToken.Destroy }
-{$ENDIF MSWINDOWS}
 
 procedure TOmniCancellationToken.Clear;
 begin
-  {$IFDEF MSWINDOWS}
   FIsSignalled := false;
   ResetEvent(FEvent);
-  {$ELSE}
-  FEvent.Reset;
-  {$ENDIF ~MSWINDOWS}
 end; { TOmniCancellationToken.Clear }
 
-{$IFDEF MSWINDOWS}
 function TOmniCancellationToken.GetHandle: THandle;
 begin
   Result := FEvent;
 end; { TOmniCancellationToken.GetHandle }
-{$ELSE}
-function TOmniCancellationToken.GetEvent: IOmniEvent;
-begin
-  Result := FEvent;
-end; { TOmniCancellationToken.GetEvent }
-{$ENDIF MSWINDOWS}
 
 function TOmniCancellationToken.IsSignalled: boolean;
 begin
-  {$IFDEF MSWINDOWS}
   Result := FIsSignalled;
-  {$ELSE}
-  Result := FEvent.IsSignalled;
-  {$ENDIF ~MSWINDOWS}
 end; { TOmniCancellationToken.IsSignalled }
 
 procedure TOmniCancellationToken.Signal;
 begin
-  {$IFDEF MSWINDOWS}
   FIsSignalled := true;
   SetEvent(FEvent);
-  {$ELSE}
-  FEvent.Signal;
-  {$ENDIF ~MSWINDOWS}
 end; { TOmniCancellationToken.Signal }
 
 { TOmniMREW }
@@ -1345,11 +1096,7 @@ begin
   //Wait on writer to reset write flag so Reference.Bit0 must be 0 than increase Reference
   repeat
     currentReference := NativeInt(omrewReference) AND NOT 1;
-  {$IFDEF MSWINDOWS}
   until CAS(currentReference, currentReference + 2, NativeInt(omrewReference));
-  {$ELSE}
-  until TInterlockedEx.CompareExchange(NativeInt(omrewReference), currentReference + 2, currentReference) = currentReference;
-  {$ENDIF}
 end; { TOmniMREW.EnterReadLock }
 
 procedure TOmniMREW.EnterWriteLock;
@@ -1359,11 +1106,7 @@ begin
   //Wait on writer to reset write flag so omrewReference.Bit0 must be 0 then set omrewReference.Bit0
   repeat
     currentReference := NativeInt(omrewReference) AND NOT 1;
-  {$IFDEF MSWINDOWS}
   until CAS(currentReference, currentReference + 1, NativeInt(omrewReference));
-  {$ELSE}
-  until TInterlockedEx.CompareExchange(NativeInt(omrewReference), currentReference + 1, currentReference) = currentReference;
-  {$ENDIF}
   //Now wait on all readers
   repeat
   until NativeInt(omrewReference) = 1;
@@ -1372,11 +1115,7 @@ end; { TOmniMREW.EnterWriteLock }
 procedure TOmniMREW.ExitReadLock;
 begin
   //Decrease omrewReference
-  {$IFDEF MSWINDOWS}
   NInterlockedExchangeAdd(NativeInt(omrewReference), -2);
-  {$ELSE}
-  TInterlockedEx.Add(NativeInt(omrewReference), -2)
-  {$ENDIF}
 end; { TOmniMREW.ExitReadLock }
 
 procedure TOmniMREW.ExitWriteLock;
@@ -1402,13 +1141,8 @@ begin
   //Wait on writer to reset write flag so Reference.Bit0 must be 0 than increase Reference
   repeat
     currentReference := NativeInt(omrewReference) AND NOT 1;
-  {$IFDEF MSWINDOWS}
   until CAS(currentReference, currentReference + 2, NativeInt(omrewReference))
         or Timeout(Result);
-  {$ELSE}
-  until (TInterlockedEx.CompareExchange(NativeInt(omrewReference), currentReference + 2, currentReference) = currentReference)
-        or Timeout(Result);
-  {$ENDIF}
 end; { TOmniMREW.TryEnterReadLock }
 
 function TOmniMREW.TryEnterWriteLock(timeout_ms: integer): boolean;
@@ -1430,13 +1164,8 @@ begin
   //Wait on writer to reset write flag so omrewReference.Bit0 must be 0 then set omrewReference.Bit0
   repeat
     currentReference := NativeInt(omrewReference) AND NOT 1;
-  {$IFDEF MSWINDOWS}
   until CAS(currentReference,  currentReference + 1, NativeInt(omrewReference))
         or Timeout(Result);
-  {$ELSE}
-  until (TInterlockedEx.CompareExchange(NativeInt(omrewReference), currentReference + 1, currentReference) = currentReference)
-        or Timeout(Result);
-  {$ENDIF}
 
   if Result then begin
     //Now wait on all readers
@@ -1446,15 +1175,10 @@ begin
       //Clear the write flag
       repeat
         currentReference := NativeInt(omrewReference);
-      {$IFDEF MSWINDOWS}
       until CAS(currentReference,  currentReference AND NOT 1, NativeInt(omrewReference))
-      {$ELSE}
-      until (TInterlockedEx.CompareExchange(NativeInt(omrewReference), currentReference AND NOT 1, currentReference) = currentReference) or Timeout(Result);
-      {$ENDIF}
   end;
 end; { TOmniMREW.TryEnterWriteLock }
 
-{$IFDEF MSWINDOWS}
 
 { TOmniResourceCount }
 
@@ -1544,45 +1268,6 @@ begin
   orcLock.Release; 
 end; { TOmniResourceCount.TryAllocate }
 
-{$ELSE ~MSWINDOWS}
-
-constructor TOmniResourceCount.Create(initialCount: cardinal);
-begin
-  { TODO : Not implemented! }
-  raise Exception.Create('Not implemented!');
-end; { TOmniResourceCount.Create }
-
-destructor TOmniResourceCount.Destroy;
-begin
-  { TODO : Not implemented! }
-  raise Exception.Create('Not implemented!');
-end; { TOmniResourceCount.Destroy }
-
-function TOmniResourceCount.Allocate: cardinal;
-begin
-  { TODO : Not implemented! }
-  raise Exception.Create('Not implemented!');
-end; { TOmniResourceCount.Allocate }
-
-function TOmniResourceCount.GetSynchro: IOmniSynchro;
-begin
-  { TODO : Not implemented! }
-  raise Exception.Create('Not implemented!');
-end; { TOmniResourceCount.GetSynchro }
-
-function TOmniResourceCount.Release: cardinal;
-begin
-  { TODO : Not implemented! }
-  raise Exception.Create('Not implemented!');
-end; { TOmniResourceCount.Release }
-
-function TOmniResourceCount.TryAllocate(var resourceCount: cardinal; timeout_ms: cardinal): boolean;
-begin
-  { TODO : Not implemented! }
-  raise Exception.Create('Not implemented!');
-end; { TOmniResourceCount.TryAllocate }
-
-{$ENDIF ~MSWINDOWS}
 {$IFDEF OTL_Generics}
 
 { Atomic<T> }
@@ -1596,11 +1281,7 @@ begin
     Assert(NativeUInt(@storage) mod SizeOf(pointer) = 0, 'Atomic<T>.Initialize: storage is not properly aligned!');
     Assert(NativeUInt(@tmpT) mod SizeOf(pointer) = 0, 'Atomic<T>.Initialize: tmpT is not properly aligned!');
     tmpT := factory();
-    {$IFDEF MSWINDOWS}
     interlockRes := InterlockedCompareExchangePointer(PPointer(@storage)^, PPointer(@tmpT)^, nil);
-    {$ELSE}
-    interlockRes := TInterlocked.CompareExchange(PPointer(@storage)^, PPointer(@tmpT)^, nil);
-    {$ENDIF}
     case PTypeInfo(TypeInfo(T))^.Kind of
       tkInterface:
         if interlockRes = nil then
@@ -1662,6 +1343,52 @@ end; { Atomic<I,T>.Initialize }
 
 {$IFDEF OTL_HasLightweightMREW}
 
+type
+  PMREWReadNest = ^TMREWReadNest;
+  TMREWReadNest = record
+    Lock  : pointer;       // @instance = lock identity
+    Count : integer;       // nesting depth
+    OSHeld: boolean;       // false when granted under an owned write lock
+    Next  : PMREWReadNest;
+  end;
+
+threadvar
+  GMREWReadNest: PMREWReadNest; // head of this thread's held-read-locks list
+
+function MREWReadNestFind(lock: pointer): PMREWReadNest;
+begin
+  Result := GMREWReadNest;
+  while assigned(Result) and (Result.Lock <> lock) do
+    Result := Result.Next;
+end; { MREWReadNestFind }
+
+procedure MREWReadNestPush(lock: pointer; osHeld: boolean);
+var
+  nest: PMREWReadNest;
+begin
+  New(nest);
+  nest.Lock := lock;
+  nest.Count := 1;
+  nest.OSHeld := osHeld;
+  nest.Next := GMREWReadNest;
+  GMREWReadNest := nest;
+end; { MREWReadNestPush }
+
+procedure MREWReadNestRemove(nest: PMREWReadNest);
+var
+  prev: PMREWReadNest;
+begin
+  if GMREWReadNest = nest then
+    GMREWReadNest := nest.Next
+  else begin
+    prev := GMREWReadNest;
+    while prev.Next <> nest do
+      prev := prev.Next;
+    prev.Next := nest.Next;
+  end;
+  Dispose(nest);
+end; { MREWReadNestRemove }
+
 { TLightweightMREWEx }
 
 function TLightweightMREWEx.GetLockOwner: TThreadID; //inline
@@ -1669,11 +1396,7 @@ begin
   {$IFDEF DEBUG}
   Assert(SizeOf(FLockOwner) = SizeOf(integer), 'TThreadID is no longer an integer');
   {$ENDIF DEBUG}
-  {$IFDEF MSWINDOWS}
   Result := InterlockedCompareExchange(integer(FLockOwner), 0, 0);
-  {$ELSE}
-  Result := TInterlocked.Read(FLockOwner);
-  {$ENDIF ~MSWINDOWS}
 end; { TLightweightMREWEx.GetLockOwner }
 
 procedure TLightweightMREWEx.SetLockOwner(value: TThreadID); //inline
@@ -1681,31 +1404,67 @@ begin
   {$IFDEF DEBUG}
   Assert(SizeOf(FLockOwner) = SizeOf(integer), 'TThreadID is no longer an integer');
   {$ENDIF DEBUG}
-  {$IFDEF MSWINDOWS}
   InterlockedExchange(integer(FLockOwner), integer(value));
-  {$ELSE}
-  TInterlocked.Exchange(FLockOwner, value);
-  {$ENDIF}
 end; { TLightweightMREWEx.SetLockOwner }
 
 class operator TLightweightMREWEx.Initialize(out dest: TLightweightMREWEx);
 begin
   Dest.SetLockOwner(0);
   Dest.FWriteLockCount.Value := 0;
+  Dest.FAccessed := false;
+  Dest.FAllowReadInsideWrite := false;
 end; { TLightweightMREWEx.Initialize }
 
-procedure TLightweightMREWEx.BeginRead;
+procedure TLightweightMREWEx.SetAllowReadInsideWrite(value: boolean);
 begin
-  FRWLock.BeginRead;
+  // The flag is read unsynchronized on the acquire paths; that is only safe
+  // because it can no longer change once the lock is in use.
+  if FAccessed then
+    raise Exception.Create('TLightweightMREWEx.SetAllowReadInsideWrite: Cannot be changed once the lock has been used');
+  FAllowReadInsideWrite := value;
+end; { TLightweightMREWEx.SetAllowReadInsideWrite }
+
+procedure TLightweightMREWEx.MarkAccessed; //inline
+begin
+  if not FAccessed then
+    FAccessed := true;
+end; { TLightweightMREWEx.MarkAccessed }
+
+procedure TLightweightMREWEx.BeginRead;
+var
+  nest: PMREWReadNest;
+begin
+  MarkAccessed;
+  nest := MREWReadNestFind(@Self);
+  if assigned(nest) then
+    // Nested read: never touches the OS lock, so it cannot queue behind a
+    // pending writer (documented SRWLOCK deadlock).
+    Inc(nest.Count)
+  else if GetLockOwner = TThread.Current.ThreadID then begin
+    // Exclusive access implies read rights, but with strict TLightweightMREW
+    // semantics this usually indicates a programming error - opt in explicitly.
+    if not FAllowReadInsideWrite then
+      raise Exception.Create('TLightweightMREWEx.BeginRead: Thread owns the write lock (set AllowReadInsideWrite to permit this)');
+    MREWReadNestPush(@Self, false);
+  end
+  else begin
+    FRWLock.BeginRead;
+    MREWReadNestPush(@Self, true);
+  end;
 end; { TLightweightMREWEx.BeginRead }
 
 procedure TLightweightMREWEx.BeginWrite;
 begin
+  MarkAccessed;
   if GetLockOwner = TThread.Current.ThreadID then
     // We are already an owner so no need for locking.
     // If another thread executes BeginWrite at this moment, it would enter
     // the 'else' part below and block in the call to FRWLock.BeginWrite.
     FWriteLockCount.Increment
+  else if assigned(MREWReadNestFind(@Self)) then
+    // Upgrade would deadlock: FRWLock.BeginWrite would wait for our own
+    // shared lock to be released.
+    raise Exception.Create('TLightweightMREWEx.BeginWrite: Read lock cannot be upgraded to a write lock')
   else begin
     FRWLock.BeginWrite;
     SetLockOwner(TThread.Current.ThreadID);
@@ -1714,17 +1473,34 @@ begin
 end; { TLightweightMREWEx.BeginWrite }
 
 procedure TLightweightMREWEx.EndRead;
+var
+  nest  : PMREWReadNest;
+  osHeld: boolean;
 begin
-  FRWLock.EndRead;
+  nest := MREWReadNestFind(@Self);
+  if not assigned(nest) then
+    raise Exception.Create('TLightweightMREWEx.EndRead: Thread does not hold a read lock');
+  Dec(nest.Count);
+  if nest.Count = 0 then begin
+    osHeld := nest.OSHeld;
+    MREWReadNestRemove(nest);
+    if osHeld then
+      FRWLock.EndRead;
+  end;
 end; { TLightweightMREWEx.EndRead }
 
 procedure TLightweightMREWEx.EndWrite;
 begin
   if GetLockOwner <> TThread.Current.ThreadID then
-    raise Exception.Create('Not an owner');
+    raise Exception.Create('TLightweightMREWEx.EndWrite: Not an owner');
 
   if FWriteLockCount.Value <= 0 then
-    raise Exception.Create('Attempting to release write lock that was not acquired');
+    raise Exception.Create('TLightweightMREWEx.EndWrite: Attempting to release write lock that was not acquired');
+  if (FWriteLockCount.Value = 1) and assigned(MREWReadNestFind(@Self)) then
+    // Only OSHeld=false nodes can exist here: a real (OSHeld=true) read lock
+    // would have made BeginWrite raise the upgrade error instead of
+    // acquiring. Checked before releasing, so the lock stays held.
+    raise Exception.Create('TLightweightMREWEx.EndWrite: Releasing write lock while nested read locks are still held');
   if FWriteLockCount.Decrement = 0 then begin
     SetLockOwner(0);
     FRWLock.EndWrite;
@@ -1732,23 +1508,38 @@ begin
 end; { TLightweightMREWEx.EndWrite }
 
 function TLightweightMREWEx.TryBeginRead: boolean;
+var
+  nest: PMREWReadNest;
 begin
+  MarkAccessed;
+  nest := MREWReadNestFind(@Self);
+  if assigned(nest) then begin
+    Inc(nest.Count);
+    Exit(true);
+  end;
+  if GetLockOwner = TThread.Current.ThreadID then begin
+    // Raise instead of returning False - this is a usage error, not contention.
+    if not FAllowReadInsideWrite then
+      raise Exception.Create('TLightweightMREWEx.TryBeginRead: Thread owns the write lock (set AllowReadInsideWrite to permit this)');
+    MREWReadNestPush(@Self, false);
+    Exit(true);
+  end;
   Result := FRWLock.TryBeginRead;
+  if Result then
+    MREWReadNestPush(@Self, true);
 end; { TLightweightMREWEx.TryBeginRead }
-
-{$IF defined(LINUX) or defined(ANDROID)}
-function TLightweightMREWEx.TryBeginRead(timeout: cardinal): boolean;
-begin
-  Result := FRWLock.TryBeginRead(timeout);
-end; { TLightweightMREWEx.TryBeginRead }
-{$IFEND LINUX or ANDROID}
 
 function TLightweightMREWEx.TryBeginWrite: boolean;
 begin
+  MarkAccessed;
   if GetLockOwner = TThread.Current.ThreadID then begin
     FWriteLockCount.Increment;
     Result := true;
   end
+  else if assigned(MREWReadNestFind(@Self)) then
+    // Raise instead of returning False - an upgrade can never succeed, so
+    // False would invite a retry loop that stalls forever.
+    raise Exception.Create('TLightweightMREWEx.TryBeginWrite: Read lock cannot be upgraded to a write lock')
   else begin
     Result := FRWLock.TryBeginWrite;
     if Result then begin
@@ -1758,22 +1549,6 @@ begin
   end;
 end; { TLightweightMREWEx.TryBeginWrite }
 
-{$IF defined(LINUX) or defined(ANDROID)}
-function TLightweightMREWEx.TryBeginWrite(timeout: cardinal): boolean;
-begin
-  if GetLockOwner = TThread.Current.ThreadID then begin
-    FWriteLockCount.Increment;
-    Result := true;
-  end
-  else begin
-    Result := FRWLock.TryBeginWrite(timeout);
-    if Result then begin
-      SetLockOwner(TThread.Current.ThreadID);
-      FWriteLockCount.Value := 1;
-    end;
-  end;
-end; { TLightweightMREWEx.TryBeginWrite }
-{$IFEND LINUX or ANDROID}
 {$ENDIF OTL_HasLightweightMREW}
 
 { Locked<T> }
@@ -2023,28 +1798,8 @@ begin
   {$ENDIF DEBUG}
 end; { Locked<T>.TryBeginWrite }
 
-{$IF defined(LINUX) or defined(ANDROID)}
-function Locked<T>.TryBeginRead(timeout: cardinal): boolean;
-begin
-  Result := FLock.TryBeginRead(timeout);
-  {$IFDEF DEBUG}
-  if Result then
-    FLockCount.Increment;
-  {$ENDIF DEBUG}
-end; { Locked<T>.TryBeginRead }
-
-function Locked<T>.TryBeginWrite(timeout: cardinal): boolean; overload; inline;
-begin
-  Result := FLock.TryBeginWrite(timeout);
-  {$IFDEF DEBUG}
-  if Result then
-    FLockCount.Increment;
-  {$ENDIF DEBUG}
-end; { Locked<T>.TryBeginWrite }
-{$IFEND LINUX or ANDROID}
 {$ENDIF OTL_HasLightweightMREW}
 
-{$IFDEF MSWINDOWS}
 
 { TOmniLockManager<K>.TNotifyPair<K> }
 
@@ -2155,8 +1910,9 @@ begin
       end;
     finally FLock.Release; end;
     wait_ms := integer(timeout_ms) - integer(DSiTimeGetTime64 - startWait);
-  until ((timeout_ms <> INFINITE) and (wait_ms <= 0)) or
-        (WaitForSingleObject(waitEvent, cardinal(wait_ms)) = WAIT_TIMEOUT);
+    if (timeout_ms <> INFINITE) and (wait_ms <= 0) then
+      break;
+  until WaitForSingleObject(waitEvent, cardinal(wait_ms)) = WAIT_TIMEOUT;
 
   if waitEvent <> 0 then begin
     FLock.Acquire;
@@ -2210,10 +1966,8 @@ begin
   finally FLock.Release; end;
 end; { TOmniLockManager<K>.Unlock }
 
-{$ENDIF MSWINDOWS}
 {$ENDIF OTL_Generics}
 
-{$IFDEF MSWINDOWS}
 
 { TWaitFor.TWaiter }
 
@@ -2418,235 +2172,6 @@ begin
   Result := MapToResult(winResult);
 end; { TWaitFor.WaitAny }
 
-{$ELSE ~MSWINDOWS}
-{$IFDEF OTL_MobileSupport}
-
-{ TSynchroWaitFor.TSynchroClient }
-
-constructor TSynchroWaitFor.TSynchroClient.Create(AController: TSynchroWaitFor);
-begin
-  FController := AController;
-  FController.FSynchClient := Self;
-end; { TSynchroWaitFor.TSynchroClient.Create }
-
-procedure TSynchroWaitFor.TSynchroClient.EnterGate;
-begin
-  if assigned( FController) then
-    FController.FGate.Acquire;
-end; { TSynchroWaitFor.TSynchroClient.EnterGate }
-
-procedure TSynchroWaitFor.TSynchroClient.LeaveGate;
-begin
-  if assigned( FController) then
-    FController.FGate.Release;
-end; { TSynchroWaitFor.TSynchroClient.LeaveGate }
-
-procedure TSynchroWaitFor.TSynchroClient.Deref;
-begin
-  FController := nil;
-end; { TSynchroWaitFor.TSynchroClient.Deref }
-
-procedure TSynchroWaitFor.TSynchroClient.DereferenceSynchObj(const SynchObj: TObject;
-  AllowInterface: boolean);
-begin
-  if not assigned(FController) then
-    Exit;
-  { TODO : Is there something mising? }
-end; { TSynchroWaitFor.TSynchroClient.DereferenceSynchObj }
-
-procedure TSynchroWaitFor.TSynchroClient.BeforeSignal(const Signaller: TObject; var Data: TObject);
-var
-  Dummy: IOmniSynchro;
-begin
-  if assigned(FController) then
-    Data := TPreSignalData.Create(
-      FController.FOneSignalled.Test(Dummy),
-      FController.FAllSignalled.Test(Dummy));
-end; { TSynchroWaitFor.TSynchroClient.BeforeSignal }
-
-procedure TSynchroWaitFor.TSynchroClient.AfterSignal(const Signaller: TObject; var Data: TObject);
-var
-  Dummy: IOmniSynchro;
-begin
-  try
-    if not assigned(FController) then
-      Exit;
-    if (not (Data as TPreSignalData).OneSignalled)
-       and FController.FOneSignalled.Test(Dummy)
-    then
-      FController.FOneSignalled.FCondVar.Release;
-    if (not (Data as TPreSignalData).AllSignalled)
-       and FController.FAllSignalled.Test(Dummy)
-    then
-      FController.FAllSignalled.FCondVar.Release;
-  finally FreeAndNil(Data); end;
-end; { TSynchroWaitFor.TSynchroClient.AfterSignal }
-
-{ TSynchroWaitFor.TCondition }
-
-constructor TSynchroWaitFor.TCondition.Create(AController: TSynchroWaitFor);
-begin
-  inherited Create;
-  FCondVar := TConditionVariableCS.Create;
-  FController := AController;
-end; { TSynchroWaitFor.TCondition.Create }
-
-destructor TSynchroWaitFor.TCondition.Destroy;
-begin
-  FreeAndNil(FCondVar);
-  inherited;
-end; { TSynchroWaitFor.TCondition.Destroy }
-
-function TSynchroWaitFor.TCondition.Wait(timeout_ms: cardinal; var Signaller: IOmniSynchro): TWaitResult;
-var
-  Elapsed   : int64;
-  Signaller1: IOmniSynchro;
-  Timer     : TStopWatch;
-  WaitTime  : cardinal;
-begin
-  Result := wrError;
-  WaitTime := timeout_ms;
-  if WaitTime > 0 then
-    Timer := TStopWatch.StartNew;
-  FController.FGate.Acquire;
-  try
-    repeat
-      if WaitTime > 0 then begin
-        Elapsed := Timer.ElapsedMilliseconds;
-        if timeout_ms <= Elapsed then
-          WaitTime := 0
-        else
-          WaitTime := timeout_ms - Elapsed;
-      end;
-      if Test(Signaller1) then
-        Result := wrSignaled
-      else  if WaitTime = 0 then
-        Result := wrTimeout
-      else begin
-        case FCondVar.WaitFor(TCriticalSection(FController.FGate.GetSyncObj), WaitTime) of
-          wrSignaled:
-            begin
-              if Test( Signaller1) then
-                Result := wrSignaled
-              else if WaitTime = 0 then
-                Result := wrTimeout
-              else
-                Result := wrIOCompletion
-            end;
-          wrTimeout:
-            Result := wrTimeout;
-          wrAbandoned,
-          wrError,
-          wrIOCompletion:
-            Result := wrError;
-        end; // case
-      end;
-      if Result = wrSignaled then begin
-        if assigned(Signaller1) then
-          Signaller1.ConsumeSignalFromObserver(FController.FSynchClient);
-        Signaller := Signaller1;
-      end
-    until Result <> wrIOCompletion;
-  finally FController.FGate.Release; end;
-end; { TSynchroWaitFor.TCondition.Wait }
-
-{ TSynchroWaitFor }
-
-constructor TSynchroWaitFor.Create(const SynchObjects: array of IOmniSynchro;
-  const AShareLock: IOmniCriticalSection = nil);
-var
-  Member: IOmniSynchro;
-begin
-  if assigned( AShareLock) then
-    FGate := AShareLock
-  else
-    FGate := CreateOmniCriticalSection;
-  Assert(FGate.GetSyncObj is TCriticalSection);
-  FSynchObjects := TSynchroList.Create;
-  FOneSignalled := TOneCondition.Create(self);
-  FAllSignalled := TAllCondition.Create(self);
-  TSynchroClient.Create(self);
-  for Member in SynchObjects do
-    FSynchObjects.Add(Member);
-end; { TSynchroWaitFor.Create }
-
-destructor TSynchroWaitFor.Destroy;
-var
-  SynchClientEx: ISynchroClientEx;
-begin
-  FSynchObjects.Clear;
-  FGate := nil;
-  FreeAndNil(FSynchObjects);
-  FreeAndNil(FOneSignalled);
-  FreeAndNil(FAllSignalled);
-  if Supports(FSynchClient, ISynchroClientEx, SynchClientEx) then
-    SynchClientEx.Deref;
-  FSynchClient := nil;
-  inherited;
-end; { TSynchroWaitFor.Destroy }
-
-function TSynchroWaitFor.WaitAll(timeout_ms: cardinal): TWaitResult;
-var
-  Signaller: IOmniSynchro;
-begin
-  Result := FAllSignalled.Wait(timeout_ms, Signaller);
-end; { TSynchroWaitFor.WaitAll }
-
-function TSynchroWaitFor.WaitAny(timeout_ms: cardinal; var Signaller: IOmniSynchro): TWaitResult;
-begin
-  result := FAllSignalled.Wait(timeout_ms, Signaller);
-end; { TSynchroWaitFor.WaitAny }
-
-{ TOneCondition }
-
-function TOneCondition.Test(var Signaller: IOmniSynchro): boolean;
-var
-  member: IOmniSynchro;
-begin
-  Result := False;
-  FController.Gate.Acquire;
-  try
-    for member in FController.SynchObjects do begin
-      Result := member.IsSignalled;
-      if Result then
-        continue; //for
-      Signaller := member;
-      break; //for
-    end; //for
-  finally FController.Gate.Release; end
-end; { TOneCondition.Test }
-
-function TOneCondition.WaitAll: boolean;
-begin
-  Result := False;
-end; { TOneCondition.WaitAll }
-
-{ TAllCondition }
-
-function TAllCondition.Test(var Signaller: IOmniSynchro): boolean;
-var
-  member: IOmniSynchro;
-begin
-  Result := True;
-  Signaller := nil;
-  FController.Gate.Acquire;
-  try
-    for member in FController.SynchObjects do begin
-      Result := member.IsSignalled;
-      if not Result then
-        break; //for
-      if not assigned(Signaller) then
-        Signaller := member;
-    end; //for
-  finally FController.Gate.Release; end;
-end; { TAllCondition.Test }
-
-function TAllCondition.WaitAll: boolean;
-begin
-  Result := True;
-end; { TAllCondition.WaitAll }
-{$ENDIF OTL_MobileSupport}
-{$ENDIF ~MSWINDOWS}
 
 { TOmniSingleThreadUseChecker }
 
@@ -2659,12 +2184,9 @@ begin
 end; { TOmniSingleThreadUseChecker.AttachToCurrentThread }
 
 procedure TOmniSingleThreadUseChecker.Check;
-{$IFDEF MSWINDOWS}
 var
   thID: cardinal;
-{$ENDIF MSWINDOWS}
 begin
-  {$IFDEF MSWINDOWS}
   FLock.Acquire;
   try
     thID := cardinal(GetCurrentThreadID);
@@ -2674,18 +2196,14 @@ begin
         [thID, FThreadID]);
     FThreadID := thId;
   finally FLock.Release; end;
-  {$ENDIF MSWINDOWS}
 end; { TOmniSingleThreadUseChecker.Check }
 
 procedure TOmniSingleThreadUseChecker.DebugCheck;
-{$IFDEF MSWINDOWS}
 {$IFDEF OTL_CheckThreadSafety}
 var
   thID: cardinal;
 {$ENDIF OTL_CheckThreadSafety}
-{$ENDIF MSWINDOWS}
 begin
-  {$IFDEF MSWINDOWS}
   {$IFDEF OTL_CheckThreadSafety}
   FLock.Acquire;
   try
@@ -2697,282 +2215,8 @@ begin
     FThreadID := thId;
   finally FLock.Release; end;
   {$ENDIF OTL_CheckThreadSafety}
-  {$ENDIF MSWINDOWS}
 end; { TOmniSingleThreadUseChecker.DebugCheck }
 
-{$IFDEF OTL_MobileSupport}
-
-{ TOmniSynchroObject }
-
-constructor TOmniSynchroObject.Create(ABase: TSynchroObject; OwnsIt: boolean;
-  const AShareLock: IOmniCriticalSection);
-begin
-  FBase := ABase;
-  FOwnsBase := OwnsIt;
-  if assigned(AShareLock) then
-    FShareLock := AShareLock
-  else
-    FLock.Create(False);
-  FObservers := TList<IOmniSynchroObserver>.Create
-end; { TOmniSynchroObject.Create }
-
-destructor TOmniSynchroObject.Destroy;
-var
-  Obs: IOmniSynchroObserver;
-begin
-  if FRefCount <> 0 then
-    raise Exception.Create('TOmniSynchroObject.Destroy RefCount not zero.');
-  with EnterSpinLock do begin
-    for Obs in FObservers do
-      Obs.DereferenceSynchObj(self, False);
-    if FOwnsBase then
-      FreeAndNil(FBase);
-    FObservers.Free;
-    inherited;
-  end;
-end; { TOmniSynchroObject.Destroy }
-
-class function TOmniSynchroObject.NewInstance: TObject;
-var
-  Inst: TOmniSynchroObject;
-begin
-  Inst := TOmniSynchroObject(inherited NewInstance);
-  Inst.FrefCount := 1;
-  Result := Inst;
-end; { TOmniSynchroObject.NewInstance }
-
-procedure TOmniSynchroObject.AfterConstruction;
-begin
-  inherited;
-  TInterlocked.Decrement(FRefCount);
-end; { TOmniSynchroObject.AfterConstruction }
-
-function TOmniSynchroObject._AddRef: Integer;
-begin
-  Result := TInterlocked.Increment(FRefCount)
-end; { TOmniSynchroObject._AddRef }
-
-function TOmniSynchroObject._Release: Integer;
-begin
-  result := TInterlocked.Decrement(FRefCount);
-  if result = 0 then
-    Destroy;
-end; { TOmniSynchroObject._Release }
-
-function TOmniSynchroObject.Base: TSynchroObject;
-begin
-  Result := FBase;
-end; { TOmniSynchroObject.Base }
-
-function TOmniSynchroObject.EnterSpinLock: IInterface;
-begin
-  Result := TSynchroSpin.Create(Self)
-end; { TOmniSynchroObject.EnterSpinLock }
-
-function TOmniSynchroObject.QueryInterface(const IID: TGUID; out Obj): HResult;
-begin
-  if GetInterface(IID, Obj) then
-    Result := 0
-  else
-    Result := E_NOINTERFACE;
-end; { TOmniSynchroObject.QueryInterface }
-
-procedure TOmniSynchroObject.PerformObservableAction(Action: TProc; DoLock: boolean);
-var
-  iObserver: integer;
-  observer : IOmniSynchroObserver;
-begin
-  if DoLock then
-    EnterSpinLock; //until end of method
-
-  if FObservers.Count = 0 then
-    Action
-  else begin
-    for observer in FObservers do
-      observer.EnterGate;
-    try
-      for iObserver := 0 to FObservers.Count - 1 do
-        observer.BeforeSignal(self, FData[iObserver]);
-      Action;
-      for iObserver := 0 to FObservers.Count - 1 do
-        observer.AfterSignal(self, FData[iObserver]);
-    finally
-      for observer in FObservers do
-        observer.LeaveGate;
-    end // try
-  end;
-end; { TOmniSynchroObject.PerformObservableAction }
-
-procedure TOmniSynchroObject.Release;
-begin
-  PerformObservableAction(procedure begin FBase.Release; end, True);
-end; { TOmniSynchroObject.Release }
-
-procedure TOmniSynchroObject.Signal;
-begin
-  Release;
-end; { TOmniSynchroObject.Signal }
-
-function TOmniSynchroObject.WaitFor(Timeout: LongWord): TWaitResult;
-begin
-  if FObservers.Count > 0 then
-    raise Exception.Create('Cannot wait directly on TOmniSynchroObject whilst it is enrolled in a compound syncro object.')
-  else
-    Result := FBase.WaitFor(Timeout);
-end; { TOmniSynchroObject.WaitFor }
-
-{$IFDEF MSWINDOWS}
-function TOmniSynchroObject.Handle: THandle;
-begin
-  if FBase is THandleObject then
-    Result := THandleObject(FBase).Handle
-  else
-    raise Exception.Create('TOmniSynchroObject.Handle: Handle is not available!');
-end; { TOmniSynchroObject.Handle }
-{$ENDIF}
-
-procedure TOmniSynchroObject.Acquire;
-begin
-  WaitFor(INFINITE)
-end; { TOmniSynchroObject.Acquire }
-
-procedure TOmniSynchroObject.AddObserver(const Observer: IOmniSynchroObserver);
-begin
-  with EnterSpinLock do begin
-    if FObservers.IndexOf(Observer) = -1 then
-      FObservers.Add(Observer);
-    SetLength(FData, FObservers.Count);
-  end;
-end; { TOmniSynchroObject.AddObserver }
-
-procedure TOmniSynchroObject.RemoveObserver(const Observer: IOmniSynchroObserver);
-begin
-  with EnterSpinLock do begin
-    if FObservers.Count = 0 then
-      Exit;
-    FObservers.Remove(Observer);
-    Observer.DereferenceSynchObj(self, FRefCount > 0);
-    SetLength(FData, FObservers.Count)
-  end;
-end; { TOmniSynchroObject.RemoveObserver }
-
-{ TSynchroSpin }
-
-constructor TSynchroSpin.Create(AController: TOmniSynchroObject);
-begin
-  FController := AController;
-  if assigned(FController.ShareLock) then
-    FController.ShareLock.Acquire
-  else
-    FController.Lock.Enter;
-end; { TSynchroSpin.Create }
-
-destructor TSynchroSpin.Destroy;
-begin
-  if assigned(FController.ShareLock) then
-    FController.ShareLock.Release
-  else
-    FController.Lock.Exit(True);
-  inherited;
-end; { TSynchroSpin.Destroy }
-
-{ TOmniCountdownEvent }
-
-constructor TOmniCountdownEvent.Create(Count, SpinCount: Integer; const AShareLock: IOmniCriticalSection);
-begin
-  FCountdown := TCountdownEvent.Create(Count, SpinCount);
-  inherited Create(FCountdown, True, AShareLock)
-end; { TOmniCountdownEvent.Create }
-
-function TOmniCountdownEvent.IsSignalled: boolean;
-begin
-  Result := FCountdown.IsSet;
-end; { TOmniCountdownEvent.IsSignalled }
-
-procedure TOmniCountdownEvent.Reset;
-begin
-  PerformObservableAction(procedure begin FCountdown.Reset; end, True);
-end; { TOmniCountdownEvent.Reset }
-
-function TOmniCountdownEvent.BaseCountdown: TCountdownEvent;
-begin
-  Result := FCountdown;
-end; { TOmniCountdownEvent.BaseCountdown }
-
-procedure TOmniCountdownEvent.ConsumeSignalFromObserver(const Observer: IOmniSynchroObserver);
-begin
-end; { TOmniCountdownEvent.ConsumeSignalFromObserver }
-
-{ TOmniEvent }
-
-constructor TOmniEvent.Create(AManualReset, InitialState: boolean; const AShareLock: IOmniCriticalSection);
-begin
-  FEvent := TEvent.Create(nil, AManualReset, InitialState, '', False);
-  FState := InitialState;
-  FManualReset := AManualReset;
-  inherited Create(FEvent, True, AShareLock);
-end; { TOmniEvent.Create }
-
-function TOmniEvent.BaseEvent: TEvent;
-begin
-  Result := FEvent;
-end; { TOmniEvent.BaseEvent }
-
-procedure TOmniEvent.ConsumeSignalFromObserver(const Observer: IOmniSynchroObserver);
-begin
-  // Here we are already inside the lock.
-  if not FManualReset then begin
-    FEvent.ResetEvent;
-    FState := False;
-  end
-end; { TOmniEvent.ConsumeSignalFromObserver }
-
-function TOmniEvent.IsSignalled: boolean;
-begin
-  Result := FState;
-end; { TOmniEvent.IsSignalled }
-
-procedure TOmniEvent.Reset;
-begin
-  PerformObservableAction(
-    procedure
-    begin
-      FEvent.ResetEvent;
-      FState := False;
-    end,
-    True);
-end; { TOmniEvent.Reset }
-
-procedure TOmniEvent.SetEvent;
-begin
-  PerformObservableAction(
-    procedure
-    begin
-      FEvent.SetEvent;
-      FState := True;
-    end,
-    True);
-end; { TOmniEvent.SetEvent }
-
-function TOmniEvent.WaitFor(Timeout: LongWord): TWaitResult;
-begin
-  Result := inherited WaitFor(Timeout);
-  if (Result = wrSignaled) and (not FManualReset) then
-    FState := False;
-end; { TOmniEvent.WaitFor }
-
-{$IFNDEF MSWINDOWS}
-
-{ TPreSignalData }
-
-constructor TPreSignalData.Create(AOneSignalled, AllSignalled: boolean);
-begin
-  OneSignalled := AOneSignalled;
-  AllSignalled := AllSignalled;
-end; { TPreSignalData.Create }
-
-{$ENDIF ~MSWINDOWS}
-{$ENDIF OTL_MobileSupport}
 
 { TInterlockedEx }
 
@@ -2989,21 +2233,13 @@ end; { TInterlockedEx.Add }
 
 class function TInterlockedEx.CAS(const oldValue, newValue: pointer; var destination): boolean;
 begin
-  {$IFDEF MSWINDOWS}
   Result := OtlSync.CAS(oldValue, newValue, destination);
-  {$ELSE}
-  Result := CompareExchange(NativeInt(destination), NativeInt(newValue), NativeInt(oldValue)) = NativeInt(newValue);
-  {$ENDIF}
 end; { TInterlockedEx.CAS }
 
 class function TInterlockedEx.CAS(const oldValue, newValue: NativeInt;
   var destination): boolean;
 begin
-  {$IFDEF MSWINDOWS}
   Result := OtlSync.CAS(oldValue, newValue, destination);
-  {$ELSE}
-  Result := CompareExchange(NativeInt(destination), newValue, oldValue) = NativeInt(newValue);
-  {$ENDIF}
 end; { TInterlockedEx.CAS }
 
 class function TInterlockedEx.CompareExchange(var Target: NativeInt; Value: NativeInt; Comparand: NativeInt): NativeInt;
@@ -3039,6 +2275,16 @@ end; { TInterlockedEx.Increment }
 
 { TLightweightMREWExImpl }
 
+function TLightweightMREWExImpl.GetAllowReadInsideWrite: boolean;
+begin
+  Result := FLock.AllowReadInsideWrite;
+end; { TLightweightMREWExImpl.GetAllowReadInsideWrite }
+
+procedure TLightweightMREWExImpl.SetAllowReadInsideWrite(value: boolean);
+begin
+  FLock.AllowReadInsideWrite := value;
+end; { TLightweightMREWExImpl.SetAllowReadInsideWrite }
+
 procedure TLightweightMREWExImpl.BeginRead;
 begin
   FLock.BeginRead;
@@ -3064,24 +2310,12 @@ begin
   Result := FLock.TryBeginRead;
 end; { TLightweightMREWExImpl.TryBeginRead }
 
-{$IF defined(LINUX) or defined(ANDROID)}
-function TLightweightMREWExImpl.TryBeginRead(timeout: cardinal): boolean;
-begin
-  Result := FLock.TryBeginRead(timeout);
-end { TLightweightMREWExImpl.TryBeginRead }
-{$IFEND LINUX or ANDROID}
 
 function TLightweightMREWExImpl.TryBeginWrite: boolean;
 begin
   Result := FLock.TryBeginWrite;
 end; { TLightweightMREWExImpl.TryBeginWrite }
 
-{$IF defined(LINUX) or defined(ANDROID)}
-function TLightweightMREWExImpl.TryBeginWrite(timeout: cardinal): boolean; overload;
-begin
-  Result := FLock.TryBeginWrite(timeout);
-end; { TLightweightMREWExImpl.TryBeginWrite }
-{$IFEND LINUX or ANDROID}
 {$ENDIF OTL_HasLightweightMREW}
 
 initialization

@@ -30,10 +30,18 @@
 ///<remarks><para>
 ///   Author            : Primoz Gabrijelcic
 ///   Creation date     : 2010-07-01
-///   Last modification : 2019-01-03
-///   Version           : 1.06
+///   Last modification : 2026-07-24
+///   Version           : 1.08
 ///</para><para>
 ///   History:
+///     1.08: 2026-07-24
+///       - Added OTL_HasSystemThreading (XE8+, same threshold as the removed
+///         OTL_MobileSupport). Test units still referenced OTL_MobileSupport
+///         after its removal, which silently excluded TestOtlSync1 (and other
+///         guarded test sections) from the test suite.
+///     1.07: 2026-07-08
+///       - Removed OTL_MobileSupport. OmniThreadLibrary now supports only Windows;
+///         all POSIX/mobile support was moved to the OmniThreadLibrary-NG project.
 ///     1.06: 2019-01-03
 ///       - Introduced OTL_TypeInfoHasTypeData.
 ///     1.05: 2018-05-26
@@ -116,12 +124,14 @@
   {$DEFINE OTL_FixedGenericIncompletelyDefined}
 {$IFEND}
 
-{$IF CompilerVersion >= 29} //DXE8
-  {$DEFINE OTL_MobileSupport}
-{$IFEND}
-
 {$IF CompilerVersion >= 30} //10 Seattle
   {$DEFINE OTL_CanInlineOperators}
+{$IFEND}
+
+{$IF CompilerVersion >= 29} //DXE8
+  // Same threshold as the removed OTL_MobileSupport define, which test code
+  // used to gate System.Threading (TTask) usage.
+  {$DEFINE OTL_HasSystemThreading}
 {$IFEND}
 
 {$IF CompilerVersion >= 35} //11 Alexandria
@@ -129,8 +139,6 @@
 {$IFEND}
 
 {$IFNDEF MSWINDOWS}
-{$IFNDEF OTL_MobileSupport}
-{$MESSAGE ERROR 'Only Windows compilation is supported on this Delphi version (at least XE8 is required for non-Windows platforms.'}
-{$ENDIF ~OTL_MobileSupport}
+{$MESSAGE ERROR 'OmniThreadLibrary supports only the Windows platform.'}
 {$ENDIF ~MSWINDOWS}
 

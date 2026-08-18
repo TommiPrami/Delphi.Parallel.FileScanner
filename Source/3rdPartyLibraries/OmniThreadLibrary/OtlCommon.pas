@@ -35,10 +35,25 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, scarre, Sean B. Durkin, HHasenack
 ///   Creation date     : 2008-06-12
-///   Last modification : 2025-12-01
-///   Version           : 1.56
+///   Last modification : 2026-04-15
+///   Version           : 1.56a
 ///</para><para>
 ///   History:
+///     1.56a: 2026-04-15
+///       - Fixed: TOmniValue._ReleaseAndClear did not check assigned(ovIntf) before
+///         calling ovIntf._Release, causing AV when type was interfaced but pointer nil.
+///       - Fixed: TOmniValueContainer.Grow off-by-one: copy loops used
+///         High(ovcValues)-1 instead of High(ovcValues), skipping last element.
+///       - Fixed: TOmniValue.Create and CreateNamed leaked TOmniValueContainer if
+///         an exception was raised during value conversion.
+///       - Fixed: TOmniIntegerSet.Remove did not check bounds before accessing
+///         FBits[value], unlike Contains which had the guard.
+///       - Fixed: TOmniProcessorGroups.FindGroup assumed groupNumber equals list
+///         index. Now iterates to find matching GroupNumber like FindNode does.
+///       - Fixed: CastToUInt64 error message said "int64" instead of "uint64".
+///       - Fixed: TOmniCounter.Initialize assert message referenced wrong class.
+///       - Fixed: TOmniExecutable.Clear end comment said IsNull.
+///       - Fixed: Double semicolon in TOmniInterfaceDictionary.Count.
 ///     1.56: 2025-12-01
 ///       - Improved LogValue.
 ///     1.55b: 2025-11-12
@@ -300,13 +315,8 @@ uses
   TypInfo,
   SyncObjs,
   Types,
-{$IFDEF MSWINDOWS}
   Windows,
   DSiWin32,
-{$ENDIF}
-{$IFDEF POSIX}
-  Posix.Pthread,
-{$ENDIF}
 {$IFDEF OTL_ERTTI}
   RTTI,
 {$ENDIF OTL_ERTTI}
@@ -343,9 +353,8 @@ type
   TOmniValueDataType = (ovtNull,
            {ovData} ovtBoolean, ovtInteger, ovtInt64, ovtDouble, ovtObject, ovtPointer, ovtDateTime, ovtException,
            {ovIntf} ovtExtended, ovtString, ovtInterface, ovtVariant, ovtArray, ovtRecord, ovtOwnedObject
-{$IFDEF MSWINDOWS}
            , ovtWideString, ovtAnsiString
-{$ENDIF});
+);
 
   TOmniValue = packed record // 13 bytes in 32-bit, 17 bytes in 64-bit
   private
@@ -408,12 +417,10 @@ type
     class procedure _RemoveWarnings; inline; static;
     procedure ClearIntf; inline;
     function LogValue(depth: integer): string; overload;
-  {$IFDEF MSWINDOWS}
     function  CastToAnsiString: AnsiString; inline;
     function  CastToWideString: WideString;
     procedure SetAsAnsiString(const value: AnsiString);
     procedure SetAsWideString(const value: WideString);
-  {$ENDIF}
   {$IFDEF OTL_ERTTI}
   private
     function  GetAsTValue: TValue;
@@ -528,7 +535,6 @@ type
     property AsVariant: Variant read CastToVariant write SetAsVariant;
     property DataType: TOmniValueDataType read ovType;
     property OwnsObject: boolean read IsOwnedObject write SetOwnsObject;
-  {$IFDEF MSWINDOWS}
     function  CastToAnsiStringDef(const defValue: AnsiString): AnsiString; inline;
     function  CastToWideStringDef(defValue: WideString): WideString; inline;
     function  IsAnsiString: boolean; inline;
@@ -543,7 +549,6 @@ type
     class operator Implicit(const a: WideString): TOmniValue; inline;
     property AsAnsiString: AnsiString read CastToAnsiString write SetAsAnsiString;
     property AsWideString: WideString read CastToWideString write SetAsWideString;
-  {$ENDIF}
   {$IFDEF OTL_Generics}
     class function CastFrom<T>(const value: T): TOmniValue; static;
     function  CastTo<T>: T;
@@ -617,9 +622,7 @@ type
   end; { TOmniValueEnumerator }
 
   IOmniWaitableValue = interface ['{46EB21E0-B5E8-47DA-8E34-E4DE04C4D8D9}']
-  {$IFDEF MSWINDOWS}
     function  GetHandle: THandle;
-  {$ENDIF}
     function  GetEvent: TEvent;
     function  GetValue: TOmniValue;
   //
@@ -627,9 +630,7 @@ type
     procedure Signal; overload;
     procedure Signal(const data: TOmniValue); overload;
     function  WaitFor(maxWait_ms: cardinal = INFINITE): boolean;
-  {$IFDEF MSWINDOWS}
     property Handle: THandle read GetHandle;
-  {$ENDIF}
     property Event: TEvent read GetEvent;
     property Value: TOmniValue read GetValue;
   end; { IOmniWaitableValue }
@@ -639,9 +640,7 @@ type
     FEvent: TEvent;
     FValue: TOmniValue;
   protected
-  {$IFDEF MSWINDOWS}
     function  GetHandle: THandle;
-  {$ENDIF}
     function  GetEvent: TEvent;
     function  GetValue: TOmniValue;
   public
@@ -652,9 +651,7 @@ type
     procedure Signal; overload; inline;
     procedure Signal(const data: TOmniValue); overload; inline;
     function  WaitFor(maxWait_ms: cardinal = INFINITE): boolean; inline;
-  {$IFDEF MSWINDOWS}
     property Handle: THandle read GetHandle;
-  {$ENDIF}
     property Event: TEvent read GetEvent;
     property Value: TOmniValue read GetValue;
   end; { TOmniWaitableValue }
@@ -709,7 +706,6 @@ type
 
   TOmniCounter = record
   strict private
-    {$IFNDEF MSWINDOWS}[Volatile]{$ENDIF}
     ocCounter: IOmniCounter;
     function  GetValue: integer;
     procedure SetValue(const value: integer);
@@ -843,30 +839,22 @@ type
     function  GetCountPhysical: integer;
     procedure SetAsString(const value: string);
     procedure SetCount(const value: integer);
-  {$IFDEF MSWINDOWS}
     function  GetMask: NativeUInt;
     procedure SetMask(const value: NativeUInt);
-  {$ENDIF}
   //
     property AsString: string read GetAsString write SetAsString;
     property Count: integer read GetCount write SetCount;
     property CountPhysical: integer read GetCountPhysical;
-  {$IFDEF MSWINDOWS}
     property Mask: NativeUInt read GetMask write SetMask;
-  {$ENDIF}
   end; { IOmniAffinity }
 
-{$IFDEF MSWINDOWS}
   TOmniProcessMemoryCounters = TProcessMemoryCounters;
-{$ENDIF}
 
-{$IFDEF MSWINDOWS}
   TOmniProcessTimes = record
     CreationTime: TDateTime;
     UserTime    : int64;
     KernelTime  : int64;
   end; { TOmniProcessTimes }
-{$ENDIF}
 
   TOmniProcessPriorityClass = (pcIdle, pcBelowNormal, pcNormal, pcAboveNormal, pcHigh,
     pcRealtime);
@@ -874,17 +862,13 @@ type
   IOmniProcessEnvironment = interface ['{98D6BDA3-840B-4E19-B01D-633E6A239FE9}']
     function  GetAffinity: IOmniAffinity;
     function  GetPriorityClass: TOmniProcessPriorityClass;
-  {$IFDEF MSWINDOWS}
     function  GetMemory: TOmniProcessMemoryCounters;
     function  GetTimes: TOmniProcessTimes;
-  {$ENDIF}
   //
     property Affinity: IOmniAffinity read GetAffinity;
     property PriorityClass: TOmniProcessPriorityClass read GetPriorityClass;
-  {$IFDEF MSWINDOWS}
     property Memory: TOmniProcessMemoryCounters read GetMemory;
     property Times: TOmniProcessTimes read GetTimes;
-  {$ENDIF}
   end; { IOmniProcessEnvironment }
 
   IOmniSystemEnvironment = interface ['{9BE1EFE3-4ABB-4C2F-B2A4-B014D0949FEC}']
@@ -1125,10 +1109,6 @@ type
     property Value: int64 read GetValue write SetValue;
   end; { TOmniAlignedInt64 }
 
-{$IFNDEF MSWINDOWS}
-  TObjectList = class(TObjectList<TObject>)
-  end;
-{$ENDIF}
 
   function  CreateCounter(initialValue: integer = 0): IOmniCounter;
   function  CreateInterfaceDictionary: IOmniInterfaceDictionary;
@@ -1151,16 +1131,13 @@ var
 
 implementation
 
-{$IFDEF MSWINDOWS}
 uses
   {$IFDEF OTL_StrPasInAnsiStrings}System.AnsiStrings,{$ENDIF}
   GpStringHash,
   OtlCommon.Utils,
   OtlSync;
-{$ENDIF}
 
 type
-{$IFDEF MSWINDOWS}
   IOmniAnsiStringData = interface ['{DBF5674C-AEFF-4CBD-AEC5-95F7A2FC80FF}']
     function  GetValue: AnsiString;
     procedure SetValue(const value: AnsiString);
@@ -1176,7 +1153,6 @@ type
     procedure SetValue(const value: AnsiString);
     property Value: AnsiString read GetValue write SetValue;
   end; { TOmniAnsiStringData }
-{$ENDIF}
 
   IOmniStringData = interface ['{21E52E56-390C-4066-B9FC-83862FFBCBF3}']
     function  GetValue: string;
@@ -1194,7 +1170,6 @@ type
     property Value: string read GetValue write SetValue;
   end; { TOmniStringData }
 
-{$IFDEF MSWINDOWS}
   IOmniWideStringData = interface ['{B303DB23-4A06-4D25-814A-8A9EDC90D066}']
     function  GetValue: WideString;
     procedure SetValue(const value: WideString);
@@ -1210,7 +1185,6 @@ type
     procedure SetValue(const value: WideString);
     property Value: WideString read GetValue write SetValue;
   end; { TOmniWideStringData }
-{$ENDIF}
 
   IOmniVariantData = interface ['{65311D7D-67F1-452E-A0BD-C90596671FC8}']
     function  GetValue: Variant;
@@ -1330,17 +1304,13 @@ type
     function  GetCountPhysical: integer;
     procedure SetAsString(const value: string);
     procedure SetCount(const value: integer);
-  {$IFDEF MSWINDOWS}
     function  GetMask: NativeUInt;
     procedure SetMask(const value: NativeUInt);
-  {$ENDIF}
   public
     constructor Create(target: TOmniAffinityTarget);
     property AsString: string read GetAsString write SetAsString;
     property Count: integer read GetCount write SetCount;
-  {$IFDEF MSWINDOWS}
     property Mask: NativeUInt read GetMask write SetMask;
-  {$ENDIF}
   end; { TOmniAffinity }
 
   TOmniProcessEnvironment = class(TInterfacedObject, IOmniProcessEnvironment)
@@ -1349,18 +1319,14 @@ type
   protected
     function  GetAffinity: IOmniAffinity;
     function  GetPriorityClass: TOmniProcessPriorityClass;
-  {$IFDEF MSWINDOWS}
     function  GetMemory: TOmniProcessMemoryCounters;
     function  GetTimes: TOmniProcessTimes;
-  {$ENDIF}
   public
     constructor Create;
     property Affinity: IOmniAffinity read GetAffinity;
     property PriorityClass: TOmniProcessPriorityClass read GetPriorityClass;
-  {$IFDEF MSWINDOWS}
     property Memory: TOmniProcessMemoryCounters read GetMemory;
     property Times: TOmniProcessTimes read GetTimes;
-  {$ENDIF}
   end; { TOmniProcessEnvironment }
 
   TOmniSystemEnvironment = class(TInterfacedObject, IOmniSystemEnvironment)
@@ -1555,12 +1521,10 @@ end; { VarToObj }
 
 { globals }
 
-{$IFDEF MSWINDOWS}
 function StrPasA(const Str: PAnsiChar): AnsiString;
 begin
   Result := {$IFDEF OTL_StrPasInAnsiStrings}System.AnsiStrings.{$ENDIF}StrPas(Str);
 end; { StrPasA }
-{$ENDIF}
 
 {$IFDEF OTL_Generics}
 { TOmniRecordWrapper }
@@ -1751,7 +1715,7 @@ begin
   Assert(Length(ovcNames) = Length(ovcValues));
   SetLength(tmpNames, Length(ovcNames));
   SetLength(tmpValues, Length(ovcValues));
-  for iValue := 0 to High(ovcValues) - 1 do begin
+  for iValue := 0 to High(ovcValues) do begin
     tmpNames[iValue] := ovcNames[iValue];
     tmpValues[iValue] := ovcValues[iValue];
   end;
@@ -1760,7 +1724,7 @@ begin
     newLength := requiredIdx + 1;
   SetLength(ovcNames, newLength);
   SetLength(ovcValues, newLength);
-  for iValue := 0 to High(tmpValues) - 1 do begin
+  for iValue := 0 to High(tmpValues) do begin
     ovcNames[iValue] := tmpNames[iValue];
     ovcValues[iValue] := tmpValues[iValue];
   end;
@@ -1843,12 +1807,11 @@ begin
 end; { TOmniCounter.Increment }
 
 procedure TOmniCounter.Initialize;
-{$IFDEF MSWINDOWS}
 var
   countIntf: IOmniCounter;
 begin
   Assert(cardinal(@ocCounter) mod SizeOf(ocCounter) = 0,
-    Format('TOmniCS.Initialize: ocsSync is not %d-aligned!', [SizeOf(ocCounter)]));
+    Format('TOmniCounter.Initialize: ocCounter is not %d-aligned!', [SizeOf(ocCounter)]));
   if not assigned(ocCounter) then
   begin
     countIntf := CreateCounter;
@@ -1860,16 +1823,6 @@ begin
       pointer(countIntf) := nil;
   end;
 
-{$ELSE}
-var
-  Newbie: IOmniCounter;
-begin
-  if assigned(ocCounter) then exit;
-  Newbie := CreateCounter;
-  if AtomicCmpExchange(pointer(ocCounter), pointer(Newbie), nil) = nil then
-    // Clear Newbie without decrementing the reference count.
-    PPointer(@Newbie)^ := nil
-{$ENDIF}
 end; { TOmniCounter.Initialize }
 
 procedure TOmniCounter.SetValue(const value: integer);
@@ -2107,7 +2060,7 @@ end; { TOmniInterfaceDictionary.Clear }
 function TOmniInterfaceDictionary.Count: integer;
 begin
   {$IFDEF OTL_GoodGenerics}
-  Result := FDictionary.Count;;
+  Result := FDictionary.Count;
   {$ELSE}
   Result := idCount;
   {$ENDIF ~OTL_GoodGenerics}
@@ -2307,36 +2260,39 @@ var
   ovc: TOmniValueContainer;
 begin
   ovc := TOmniValueContainer.Create;
-  for i := Low(values) to High(values) do begin
-    with values[i] do begin
-      case VType of
-        vtInteger:       ovc.Add(VInteger);
-        vtBoolean:       ovc.Add(VBoolean);
-        vtExtended:      ovc.Add(VExtended^);
-        vtPointer:       ovc.Add(VPointer);
-        vtCurrency:      ovc.Add(VCurrency^);
-        vtVariant:       ovc.Add(VVariant^);
-        vtObject:        ovc.Add(VObject);
-        vtInterface:     ovc.Add(IInterface(VInterface));
-        vtInt64:         ovc.Add(VInt64^);
+  try
+    for i := Low(values) to High(values) do begin
+      with values[i] do begin
+        case VType of
+          vtInteger:       ovc.Add(VInteger);
+          vtBoolean:       ovc.Add(VBoolean);
+          vtExtended:      ovc.Add(VExtended^);
+          vtPointer:       ovc.Add(VPointer);
+          vtCurrency:      ovc.Add(VCurrency^);
+          vtVariant:       ovc.Add(VVariant^);
+          vtObject:        ovc.Add(VObject);
+          vtInterface:     ovc.Add(IInterface(VInterface));
+          vtInt64:         ovc.Add(VInt64^);
 
-      {$IFDEF UNICODE}
-        vtUnicodeString: ovc.Add(string(VUnicodeString));
-      {$ENDIF UNICODE}
-      {$IFNDEF NEXTGEN}
-        vtChar:          ovc.Add(string(VChar));
-        vtString:        ovc.Add(string(VString^));
-      {$ENDIF NEXTGEN}
-      {$IFDEF MSWINDOWS}
-        vtAnsiString:    ovc.Add(AnsiString(VAnsiString));
-        vtWideString:    ovc.Add(WideString(VWideString));
-        vtPChar:         ovc.Add(string(StrPasA(VPChar)));
-      {$ENDIF MSWINDOWS}
-      else
-        raise Exception.Create ('TOmniValue.Create: invalid data type')
-      end; //case
-    end; //with
-  end; //for i
+        {$IFDEF UNICODE}
+          vtUnicodeString: ovc.Add(string(VUnicodeString));
+        {$ENDIF UNICODE}
+        {$IFNDEF NEXTGEN}
+          vtChar:          ovc.Add(string(VChar));
+          vtString:        ovc.Add(string(VString^));
+        {$ENDIF NEXTGEN}
+          vtAnsiString:    ovc.Add(AnsiString(VAnsiString));
+          vtWideString:    ovc.Add(WideString(VWideString));
+          vtPChar:         ovc.Add(string(StrPasA(VPChar)));
+        else
+          raise Exception.Create ('TOmniValue.Create: invalid data type')
+        end; //case
+      end; //with
+    end; //for i
+  except
+    FreeAndNil(ovc);
+    raise;
+  end;
   SetAsArray(ovc);
 end; { TOmniValue.Create }
 
@@ -2348,56 +2304,57 @@ var
   ovc : TOmniValueContainer;
 begin
   ovc := TOmniValueContainer.Create;
-  Assert(not Odd(Low(values)));
-  name := '';
-  for i := Low(values) to High(values) do begin
-    with values[i] do begin
-      if not Odd(i) then
-        case VType of
-          vtVariant:       name := string(VVariant^);
-        {$IFDEF UNICODE}
-          vtUnicodeString: name := string(VUnicodeString);
-        {$ENDIF UNICODE}
-        {$IFNDEF NEXTGEN}
-          vtChar:          name := string(VChar);
-          vtString:        name := string(VString^);
-        {$ENDIF NEXTGEN}
-        {$IFDEF MSWINDOWS}
-          vtAnsiString:    name := string(VAnsiString);
-          vtWideString:    name := WideString(VWideString);
-          vtPChar:         name := string(StrPasA(VPChar));
-        {$ENDIF MSWINDOWS}
+  try
+    Assert(not Odd(Low(values)));
+    name := '';
+    for i := Low(values) to High(values) do begin
+      with values[i] do begin
+        if not Odd(i) then
+          case VType of
+            vtVariant:       name := string(VVariant^);
+          {$IFDEF UNICODE}
+            vtUnicodeString: name := string(VUnicodeString);
+          {$ENDIF UNICODE}
+          {$IFNDEF NEXTGEN}
+            vtChar:          name := string(VChar);
+            vtString:        name := string(VString^);
+          {$ENDIF NEXTGEN}
+            vtAnsiString:    name := string(VAnsiString);
+            vtWideString:    name := WideString(VWideString);
+            vtPChar:         name := string(StrPasA(VPChar));
+          else
+            raise Exception.Create ('TOmniValue.CreateNamed: invalid name type')
+          end //case
         else
-          raise Exception.Create ('TOmniValue.CreateNamed: invalid name type')
-        end //case
-      else
-        case VType of
-          vtInteger:       ovc.Add(VInteger, name);
-          vtBoolean:       ovc.Add(VBoolean, name);
-          vtExtended:      ovc.Add(VExtended^, name);
-          vtPointer:       ovc.Add(VPointer, name);
-          vtCurrency:      ovc.Add(VCurrency^, name);
-          vtVariant:       ovc.Add(VVariant^, name);
-          vtObject:        ovc.Add(VObject, name);
-          vtInterface:     ovc.Add(IInterface(VInterface), name);
-          vtInt64:         ovc.Add(VInt64^, name);
-        {$IFDEF UNICODE}
-          vtUnicodeString: ovc.Add(string(VUnicodeString), name);
-        {$ENDIF UNICODE}
-        {$IFNDEF NEXTGEN}
-          vtChar:          ovc.Add(string(VChar), name);
-          vtString:        ovc.Add(string(VString^), name);
-        {$ENDIF NEXTGEN}
-        {$IFDEF MSWINDOWS}
-          vtAnsiString:    ovc.Add(AnsiString(VAnsiString), name);
-          vtWideString:    ovc.Add(WideString(VWideString), name);
-          vtPChar:         ovc.Add(string(StrPasA(VPChar)), name);
-        {$ENDIF MSWINDOWS}
-        else
-          raise Exception.Create ('TOmniValue.CreateNamed: invalid data type')
-        end; //case
-    end; //with
-  end; //for i
+          case VType of
+            vtInteger:       ovc.Add(VInteger, name);
+            vtBoolean:       ovc.Add(VBoolean, name);
+            vtExtended:      ovc.Add(VExtended^, name);
+            vtPointer:       ovc.Add(VPointer, name);
+            vtCurrency:      ovc.Add(VCurrency^, name);
+            vtVariant:       ovc.Add(VVariant^, name);
+            vtObject:        ovc.Add(VObject, name);
+            vtInterface:     ovc.Add(IInterface(VInterface), name);
+            vtInt64:         ovc.Add(VInt64^, name);
+          {$IFDEF UNICODE}
+            vtUnicodeString: ovc.Add(string(VUnicodeString), name);
+          {$ENDIF UNICODE}
+          {$IFNDEF NEXTGEN}
+            vtChar:          ovc.Add(string(VChar), name);
+            vtString:        ovc.Add(string(VString^), name);
+          {$ENDIF NEXTGEN}
+            vtAnsiString:    ovc.Add(AnsiString(VAnsiString), name);
+            vtWideString:    ovc.Add(WideString(VWideString), name);
+            vtPChar:         ovc.Add(string(StrPasA(VPChar)), name);
+          else
+            raise Exception.Create ('TOmniValue.CreateNamed: invalid data type')
+          end; //case
+      end; //with
+    end; //for i
+  except
+    FreeAndNil(ovc);
+    raise;
+  end;
   SetAsArray(ovc);
 end; { TOmniValue.CreateNamed }
 
@@ -2655,7 +2612,6 @@ begin
   Result := TOmniValueContainer(ovData)[idx];
 end; { TOmniValue.GetAsArrayItem }
 
-{$IFDEF MSWINDOWS}
 function TOmniValue.CastToAnsiString: AnsiString;
 begin
   if not TryCastToAnsiString(Result) then
@@ -2667,7 +2623,6 @@ begin
   if not TryCastToAnsiString(Result) then
     Result := defValue;
 end; { TOmniValue.CastToAnsiStringDef }
-{$ENDIF}
 
 function TOmniValue.CastToBoolean: boolean;
 begin
@@ -2822,7 +2777,7 @@ end; { TOmniValue.CastToStringDef }
 function TOmniValue.CastToUInt64: uint64;
 begin
   if not TryCastToUInt64(Result) then
-    raise Exception.Create('TOmniValue cannot be converted to int64');
+    raise Exception.Create('TOmniValue cannot be converted to uint64');
 end; { TOmniValue.CastToUInt64 }
 
 {$IFDEF OTL_ERTTI}
@@ -2868,10 +2823,8 @@ begin
     ovtString: typInfo := TypeInfo(TArray<string>);
     ovtInterface: typInfo := TypeInfo(TArray<IInterface>);
     ovtVariant: typInfo := TypeInfo(TArray<Variant>);
-  {$IFDEF MSWINDOWS}
     ovtAnsiString: typInfo := TypeInfo(TArray<AnsiString>);
     ovtWideString: typInfo := TypeInfo(TArray<WideString>);
-  {$ENDIF MSWINDOWS}
   else
     typInfo := TypeInfo(TArray<Pointer>);
   end;
@@ -2893,12 +2846,10 @@ begin
     ovtDouble,
     ovtExtended:
       Result := AsExtended;
-  {$IFDEF MSWINDOWS}
     ovtAnsiString:
       Result := string(AsAnsiString);
     ovtWideString:
       Result := AsWideString;
-  {$ENDIF}
     ovtString:
       Result := AsString;
     ovtObject:
@@ -2931,7 +2882,6 @@ begin
     Result := defValue;
 end; { TOmniValue.CastToVariantDef }
 
-{$IFDEF MSWINDOWS}
 function TOmniValue.CastToWideString: WideString;
 begin
   if not TryCastToWideString(Result) then
@@ -2948,7 +2898,6 @@ function TOmniValue.IsAnsiString: boolean;
 begin
   Result := (ovType = ovtAnsiString);
 end; { TOmniValue.IsAnsiString }
-{$ENDIF}
 
 function TOmniValue.IsArray: boolean;
 begin
@@ -2993,7 +2942,7 @@ end; { TOmniValue.IsInterface }
 function TOmniValue.IsInterfacedType: boolean;
 begin
   Result := ovType in [ovtInterface, ovtExtended, ovtString, ovtVariant, ovtArray, ovtRecord, ovtOwnedObject
-                       {$IFDEF MSWINDOWS}, ovtWideString, ovtAnsiString {$ENDIF}];
+                       , ovtWideString, ovtAnsiString ];
 end; { TOmniValue.IsInterfacedType }
 
 function TOmniValue.IsObject: boolean;
@@ -3026,12 +2975,10 @@ begin
   Result := (ovType = ovtVariant);
 end; { TOmniValue.IsVariant }
 
-{$IFDEF MSWINDOWS}
 function TOmniValue.IsWideString: boolean;
 begin
   Result := (ovType = ovtWideString);
 end; { TOmniValue.IsWideString }
-{$ENDIF}
 
 function TOmniValue.LogValue: string;
 begin
@@ -3113,10 +3060,8 @@ begin
         else
           Result := '[o]nil';
       end;
-    {$IFDEF MSWINDOWS}
       ovtWideString:  Result := '[W]' + AsString;
       ovtAnsiString:  Result := '[N]' + AsString;
-    {$ENDIF MSWINDOWS}
     end;
   except
     Result := '!' + IntToStr(Ord(DataType));
@@ -3161,13 +3106,11 @@ begin
   end;
 end; { TOmniValue._RemoveWarnings }
 
-{$IFDEF MSWINDOWS}
 procedure TOmniValue.SetAsAnsiString(const value: AnsiString);
 begin
   ovIntf := TOmniAnsiStringData.Create(value);
   ovType := ovtAnsiString;
 end; { TOmniValue.SetAsAnsiString }
-{$ENDIF}
 
 procedure TOmniValue.SetAsArrayItem(idx: integer; const value: TOmniValue);
 begin
@@ -3350,13 +3293,11 @@ begin
   ovType := ovtVariant;
 end; { TOmniValue.SetAsVariant }
 
-{$IFDEF MSWINDOWS}
 procedure TOmniValue.SetAsWideString(const value: WideString);
 begin
   ovIntf := TOmniWideStringData.Create(value);
   ovType := ovtWideString;
 end; { TOmniValue.SetAsWideString }
-{$ENDIF}
 
 procedure TOmniValue.SetOwnsObject(const value: boolean);
 var
@@ -3375,7 +3316,6 @@ begin
   end;
 end; { TOmniValue.SetOwnsObject }
 
-{$IFDEF MSWINDOWS}
 function TOmniValue.TryCastToAnsiString(var value: AnsiString): boolean;
 begin
   Result := true;
@@ -3394,7 +3334,6 @@ begin
     else Result := false;
   end;
 end; { TOmniValue.TryCastToAnsiString }
-{$ENDIF}
 
 function TOmniValue.TryCastToDateTime(var value: TDateTime): boolean;
 begin
@@ -3473,10 +3412,8 @@ begin
     ovtDouble,
     ovtDateTime,
     ovtExtended:   value := FloatToStr(AsExtended);
-  {$IFDEF MSWINDOWS}
     ovtAnsiString: value := string((ovIntf as IOmniAnsiStringData).Value);
     ovtWideString: value := (ovIntf as IOmniWideStringData).Value;
-  {$ENDIF}
     ovtString:     value := (ovIntf as IOmniStringData).Value;
     ovtVariant:    value := string(AsVariant);
     else Result := false;
@@ -3493,7 +3430,6 @@ begin
   end;
 end; { TOmniValue.TryCastToVariant }
 
-{$IFDEF MSWINDOWS}
 function TOmniValue.TryCastToWideString(var value: WideString): boolean;
 var
   str: string;
@@ -3509,7 +3445,6 @@ begin
     end;
   end;
 end; { TOmniValue.TryCastToWideString }
-{$ENDIF}
 
 procedure TOmniValue._AddRef;
 begin
@@ -3525,7 +3460,7 @@ end; { TOmniValue._Release }
 
 procedure TOmniValue._ReleaseAndClear;
 begin
-  if IsInterfacedType then begin
+  if IsInterfacedType and assigned(ovIntf) then begin
     ovIntf._Release;
     RawZero;
   end;
@@ -3541,14 +3476,12 @@ begin
   Result := (a.AsString = s);
 end; { TOmniValue.Equal }
 
-{$IFDEF MSWINDOWS}
 {$IFDEF UNICODE}
 class operator TOmniValue.Implicit(const a: AnsiString): TOmniValue;
 begin
   Result.AsAnsiString := a;
 end; { TOmniValue.Implicit }
 {$ENDIF UNICODE}
-{$ENDIF}
 
 class operator TOmniValue.Implicit(const a: boolean): TOmniValue;
 begin
@@ -3602,7 +3535,6 @@ begin
   Result.AsException := a;
 end; { TOmniValue.Implicit }
 
-{$IFDEF MSWINDOWS}
 {$IFDEF UNICODE}
 class operator TOmniValue.Implicit(const a: TOmniValue): AnsiString;
 begin
@@ -3614,7 +3546,6 @@ class operator TOmniValue.Implicit(const a: TOmniValue): WideString;
 begin
   Result := a.AsWideString;
 end; { TOmniValue.Implicit }
-{$ENDIF}
 
 class operator TOmniValue.Implicit(const a: TOmniValue): Extended;
 begin
@@ -3668,12 +3599,10 @@ begin
   Result := a.AsString;
 end; { TOmniValue.Implicit }
 
-{$IFDEF MSWINDOWS}
 class operator TOmniValue.Implicit(const a: WideString): TOmniValue;
 begin
   Result.AsWideString := a;
 end; { TOmniValue.Implicit }
-{$ENDIF}
 
 class operator TOmniValue.Implicit(const a: Variant): TOmniValue;
 begin
@@ -3739,12 +3668,10 @@ begin
   inherited
 end; { TOmniWaitableValue.Destroy }
 
-{$IFDEF MSWINDOWS}
 function TOmniWaitableValue.GetHandle: THandle;
 begin
   Result := FEvent.Handle
 end; { TOmniWaitableValue.GetHandle }
-{$ENDIF}
 
 function TOmniWaitableValue.GetEvent: TEvent;
 begin
@@ -3797,7 +3724,6 @@ end; { TOmniStringData.SetValue }
 
 { TOmniAnsiStringData }
 
-{$IFDEF MSWINDOWS}
 constructor TOmniAnsiStringData.Create(const value: AnsiString);
 begin
   inherited Create;
@@ -3831,7 +3757,6 @@ procedure TOmniWideStringData.SetValue(const value: WideString);
 begin
   osdValue := value;
 end; { TOmniWideStringData.SetValue }
-{$ENDIF}
 
 { TOmniVariantData }
 
@@ -3879,22 +3804,12 @@ begin
 end; { TOmniAffinity.Create }
 
 function TOmniAffinity.GetAsString: string;
-{$IFNDEF MSWINDOWS}
-var
-  i: integer;
-{$ENDIF MSWINDOWS}
 begin
-{$IFDEF MSWINDOWS}
 // TODO 1 -oPrimoz Gabrijelcic : Port this to non-Windows
   Result := DSiAffinityMaskToString(Mask);
-{$ELSE}
-  for i := 1 to System.CPUCount do
-    Result := result + 'P'
-{$ENDIF !MSWINDOWS}
 end; { TOmniAffinity.GetAsString }
 
 function TOmniAffinity.GetCount: integer;
-{$IFDEF MSWINDOWS}
 var
   affMask: NativeUInt;
 begin
@@ -3905,14 +3820,9 @@ begin
       Inc(Result);
     affMask := affMask SHR 1;
   end;
-{$ELSE}
-begin
-  Result := System.CPUCount;
-{$ENDIF}
 end;
 
 function TOmniAffinity.GetCountPhysical: integer;
-{$IFDEF MSWINDOWS}
 var
   info: TSystemLogicalProcessorInformationArr;
   item: TSystemLogicalProcessorInformation;
@@ -3934,13 +3844,7 @@ begin
   end;
 end;
 
-{$ELSE}
-begin
-  Result := System.CPUCount;
-end;
-{$ENDIF}
 
-{$IFDEF MSWINDOWS}
 function TOmniAffinity.GetMask: NativeUInt;
 begin
   case oaTarget of
@@ -3954,11 +3858,9 @@ begin
       Result := 0; // to keep compiler happy
   end;
 end; { TOmniAffinity.GetMask }
-{$ENDIF}
 
 procedure TOmniAffinity.SetAsString(const value: string);
 begin
-{$IFDEF MSWINDOWS}
   case oaTarget of
     atSystem:
       raise Exception.Create('TOmniAffinity.SetMask: Cannot modify system affinity mask.');
@@ -3967,19 +3869,15 @@ begin
     atThread:
       DSiSetThreadAffinity(value);
   end;
-{$ENDIF}
 end; { TOmniAffinity.SetAsString }
 
 procedure TOmniAffinity.SetCount(const value: integer);
-{$IFDEF MSWINDOWS}
 var
   affMask: string;
   numCore: integer;
   pCore  : integer;
   sysMask: string;
-{$ENDIF}
 begin
-{$IFDEF MSWINDOWS}
   sysMask := DSiGetSystemAffinity;
   affMask := '';
   numCore := value;
@@ -3990,15 +3888,12 @@ begin
     Dec(numCore);
   end;
   AsString := affMask;
-{$ENDIF}
 end; { TOmniAffinity.SetCount }
 
-{$IFDEF MSWINDOWS}
 procedure TOmniAffinity.SetMask(const value: NativeUInt);
 begin
   AsString := DSiAffinityMaskToString(value);
 end; { TOmniAffinity.SetMask }
-{$ENDIF}
 
 { TOmniProcessEnvironment }
 
@@ -4013,21 +3908,16 @@ begin
   Result := opeAffinity;
 end; { TOmniProcessEnvironment.GetAffinity }
 
-{$IFDEF MSWINDOWS}
 function TOmniProcessEnvironment.GetMemory: TOmniProcessMemoryCounters;
 begin
   if not DSiGetProcessMemory(Result) then
     FillChar(Result, SizeOf(Result), 0);
 end; { TOmniProcessEnvironment.GetMemory }
-{$ENDIF}
 
 function TOmniProcessEnvironment.GetPriorityClass: TOmniProcessPriorityClass;
-{$IFDEF MSWINDOWS}
 var
   priority: DWORD;
-{$ENDIF}
 begin
-{$IFDEF MSWINDOWS}
   priority := Windows.GetPriorityClass(GetCurrentProcess);
   if priority = $8000 then
     Result := pcAboveNormal
@@ -4041,18 +3931,13 @@ begin
     Result := pcRealtime
   else
     Result := pcNormal;
-{$ELSE}
-  Result := pcNormal;
-{$ENDIF}
 end; { TOmniProcessEnvironment.GetPriorityClass }
 
-{$IFDEF MSWINDOWS}
 function TOmniProcessEnvironment.GetTimes: TOmniProcessTimes;
 begin
   if not DSiGetProcessTimes(Result.CreationTime, Result.UserTime, Result.KernelTime) then
     FillChar(Result, SizeOf(Result), 0);
 end; { TOmniProcessEnvironment.GetTimes }
-{$ENDIF}
 
 { TOmniSystemEnvironment }
 
@@ -4083,7 +3968,6 @@ function TOmniThreadEnvironment.GetGroupAffinity: TOmniGroupAffinity;
 var
   groupAffinity: TGroupAffinity;
 begin
-  {$IFDEF MSWindows}
   if DSiGetThreadGroupAffinity(GetCurrentThread, groupAffinity) then begin
     Result.Group := groupAffinity.Group;
     Result.Affinity.AsMask := groupAffinity.Mask;
@@ -4091,7 +3975,6 @@ begin
   else if GetLastError <> ERROR_NOT_SUPPORTED  then
     raise Exception.CreateFmt('TOmniEnvironment.LoadNUMAInfo: DSiGetThreadGroupAffinity failed with [%d] %s', [GetLastError, SysErrorMessage(GetLastError)])
   else
-  {$ENDIF MSWindows}
   begin
     Result.Group := 0;
     Result.Affinity.AsMask := Affinity.Mask;
@@ -4107,16 +3990,10 @@ procedure TOmniThreadEnvironment.SetGroupAffinity(const value: TOmniGroupAffinit
 var
   groupAffinity: TGroupAffinity;
 begin
-  {$IFDEF MSWindows}
   FillChar(groupAffinity, SizeOf(groupAffinity), 0);
   groupAffinity.Group := value.Group;
   groupAffinity.Mask := value.Affinity.AsMask;
   DSiSetThreadGroupAffinity(GetCurrentThread, groupAffinity, nil);
-  {$ELSE}
-  if value.Group <> 0 then
-    raise Exception.Create('TOmniThreadEnvironment.SetGroupAffinity: Processor group must be 0');
-  Affinity.Mask := value.Affinity.AsMask;
-  {$ENDIF}
 end; { TOmniThreadEnvironment.SetGroupAffinity }
 
 {$IFDEF OTL_NUMASupport}
@@ -4341,8 +4218,13 @@ begin
 end; { TOmniProcessorGroups.Count }
 
 function TOmniProcessorGroups.FindGroup(groupNumber: integer): IOmniProcessorGroup;
+var
+  group: IOmniProcessorGroup;
 begin
-  Result := Item[groupNumber];
+  Result := nil;
+  for group in Environment.ProcessorGroups do
+    if group.GroupNumber = groupNumber then
+      Exit(group);
 end; { TOmniProcessorGroups.FindGroup }
 
 function TOmniProcessorGroups.GetEnumerator: TList<IOmniProcessorGroup>.TEnumerator;
@@ -4419,7 +4301,6 @@ end; { TOmniEnvironment.GetThread }
 
 {$IFDEF OTL_NUMASupport}
 procedure TOmniEnvironment.LoadNUMAInfo;
-{$IFDEF MSWindows}
 var
   iGroup                 : integer;
   iInfo                  : integer;
@@ -4427,11 +4308,7 @@ var
   pGroupInfo             : PProcessorGroupInfo;
   processorGroupsInternal: IOmniProcessorGroupsInternal;
   procInfo               : TSystemLogicalProcessorInformationExArr;
-{$ENDIF}
 begin
-  {$IFNDEF MSWindows}
-  CreateFakeNUMAInfo;
-  {$ELSE}
   DSiGetLogicalProcessorInfoEx(DSiWin32._LOGICAL_PROCESSOR_RELATIONSHIP.RelationAll, procInfo);
   if GetLastError = ERROR_NOT_SUPPORTED then
     CreateFakeNUMAInfo
@@ -4452,7 +4329,6 @@ begin
     end;
     numaNodesInternal.Sort;
   end;
-  {$ENDIF MSWindows}
 end; { TOmniEnvironment.LoadNUMAInfo }
 {$ENDIF OTL_NUMASupport}
 
@@ -4469,7 +4345,7 @@ end; { TOmniExecutable.CheckKind }
 procedure TOmniExecutable.Clear;
 begin
   oeKind := oekNull;
-end; { TOmniExecutable.IsNull }
+end; { TOmniExecutable.Clear }
 
 class operator TOmniExecutable.Explicit(const a: TProcedure): TOmniExecutable;
 begin
@@ -4682,11 +4558,7 @@ end; { NextOid }
 
 function TOmniAlignedInt32.Subtract(value: integer): integer; //inline
 begin
-  {$IFDEF MSWINDOWS}
   Result := InterlockedExchangeAdd(Addr^, -value) - value;
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, -value);
-  {$ENDIF}
 end; { TOmniAlignedInt32.Subtract }
 
 procedure TOmniAlignedInt32.Initialize;
@@ -4696,11 +4568,7 @@ end; { TOmniAlignedInt32.Initialize }
 
 function TOmniAlignedInt32.Add(value: integer): integer;
 begin
-  {$IFDEF MSWINDOWS}
   Result := InterlockedExchangeAdd(Addr^, value) + value;
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, value);
-  {$ENDIF}
 end; { TOmniAlignedInt32.Add }
 
 function TOmniAlignedInt32.Addr: PInteger;
@@ -4711,29 +4579,17 @@ end; { TOmniAlignedInt32.Addr }
 
 function TOmniAlignedInt32.CAS(oldValue, newValue: integer): boolean;
 begin
-  {$IFDEF MSWINDOWS}
   Result := InterlockedCompareExchange(Addr^, newValue, oldValue) = oldValue;
-  {$ELSE}
-  Result := TInterlocked.CompareExchange(Addr^, newValue, OldValue) = oldValue;
-  {$ENDIF}
 end; { TOmniAlignedInt32.CAS }
 
 function TOmniAlignedInt32.Decrement: integer;
 begin
-  {$IFDEF MSWINDOWS}
   Result := InterlockedDecrement(Addr^);
-  {$ELSE}
-  Result := TInterlocked.Decrement(Addr^);
-  {$ENDIF}
 end; { TOmniAlignedInt32.Decrement }
 
 function TOmniAlignedInt32.Decrement(value: integer): integer;
 begin
-  {$IFDEF MSWINDOWS}
   Result := Subtract(value);
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, -value);
-  {$ENDIF}
 end; { TOmniAlignedInt32.Decrement }
 
 function TOmniAlignedInt32.GetValue: integer;
@@ -4743,20 +4599,12 @@ end; { TOmniAlignedInt32.GetValue }
 
 function TOmniAlignedInt32.Increment: integer;
 begin
-  {$IFDEF MSWINDOWS}
   Result := InterlockedIncrement(Addr^);
-  {$ELSE}
-  Result := TInterlocked.Increment(Addr^);
-  {$ENDIF}
 end; { TOmniAlignedInt32.Increment }
 
 function TOmniAlignedInt32.Increment(value: integer): integer;
 begin
-  {$IFDEF MSWINDOWS}
   Result := Add(value);
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, value);
-  {$ENDIF}
 end; { TOmniAlignedInt32.Increment }
 
 procedure TOmniAlignedInt32.SetValue(value: integer);
@@ -4825,11 +4673,7 @@ end; { TOmniAlignedInt32.Subtract }
 
 function TOmniAlignedInt64.Subtract(value: int64): int64; //inline
 begin
-  {$IFDEF MSWINDOWS}
   Result := DSiInterlockedExchangeAdd64(Addr^, -value) - value;
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, -value);
-  {$ENDIF}
 end; { TOmniAlignedInt64.Subtract }
 
 procedure TOmniAlignedInt64.Initialize;
@@ -4840,11 +4684,7 @@ end; { TOmniAlignedInt64.Initialize }
 
 function TOmniAlignedInt64.Add(value: int64): int64;
 begin
-  {$IFDEF MSWINDOWS}
   Result := DSiInterlockedExchangeAdd64(Addr^, value) + value;
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, value);
-  {$ENDIF}
 end; { TOmniAlignedInt64.Add }
 
 function TOmniAlignedInt64.Addr: PInt64;
@@ -4855,29 +4695,17 @@ end; { TOmniAlignedInt64.Addr }
 
 function TOmniAlignedInt64.CAS(oldValue, newValue: int64): boolean;
 begin
-  {$IFDEF MSWINDOWS}
   Result := DSiInterlockedCompareExchange64(Addr, newValue, oldValue) = oldValue;
-  {$ELSE}
-  Result := TInterlocked.CompareExchange(Addr^, newValue, OldValue) = oldValue;
-  {$ENDIF}
 end; { TOmniAlignedInt64.CAS }
 
 function TOmniAlignedInt64.Decrement: int64;
 begin
-  {$IFDEF MSWINDOWS}
   Result := DSiInterlockedDecrement64(Addr^);
-  {$ELSE}
-  Result := TInterlocked.Decrement(Addr^)
-  {$ENDIF}
 end; { TOmniAlignedInt64.Decrement }
 
 function TOmniAlignedInt64.Decrement(value: int64): int64;
 begin
-  {$IFDEF MSWINDOWS}
   Result := Subtract(value);
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, -value);
-  {$ENDIF}
 end; { TOmniAlignedInt64.Decrement }
 
 function TOmniAlignedInt64.GetValue: int64;
@@ -4887,20 +4715,12 @@ end; { TOmniAlignedInt64.GetValue }
 
 function TOmniAlignedInt64.Increment: int64;
 begin
-  {$IFDEF MSWINDOWS}
   Result := DSiInterlockedIncrement64(Addr^);
-  {$ELSE}
-  Result := TInterlocked.Increment(Addr^);
-  {$ENDIF}
 end; { TOmniAlignedInt64.Increment }
 
 function TOmniAlignedInt64.Increment(value: int64): int64;
 begin
-  {$IFDEF MSWINDOWS}
   Result := Add(value);
-  {$ELSE}
-  Result := TInterlocked.Add(Addr^, value);
-  {$ENDIF}
 end; { TOmniAlignedInt64.Increment }
 
 procedure TOmniAlignedInt64.SetValue(value: int64);
@@ -5072,10 +4892,14 @@ end; { TOmniIntegerSet.PrepareValueCopy }
 
 function TOmniIntegerSet.Remove(value: integer): boolean;
 begin
-  Result := FBits[value];
-  FBits[value] := false;
-  if Result then
-    DoOnChange;
+  if (value < 0) or (value >= FBits.Size) then
+    Result := false
+  else begin
+    Result := FBits[value];
+    FBits[value] := false;
+    if Result then
+      DoOnChange;
+  end;
 end; { TOmniIntegerSet.Remove }
 
 {$IFDEF OTL_HasArrayOfT}
@@ -5188,11 +5012,7 @@ var
 begin
   if not assigned(FAffinity) then begin
     syncMask := TOmniIntegerSet.Create;
-    {$IFDEF MSWINDOWS}
     if CAS(nil, pointer(syncMask), FAffinity) then
-    {$ELSE}
-    if TInterlocked.CompareExchange(pointer(FAffinity), pointer(syncMask), nil) = nil then
-    {$ENDIF}
       pointer(syncMask) := nil;
   end;
   Result := FAffinity;
