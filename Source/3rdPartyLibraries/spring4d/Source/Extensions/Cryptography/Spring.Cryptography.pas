@@ -68,13 +68,13 @@ type
     /// </summary>
     ECB{,
 
-    ///	<summary>Output Feedback (<b>Not yet implemented</b>)</summary>
+    /// <summary>Output Feedback (<b>Not yet implemented</b>)</summary>
     OFB,
 
-    ///	<summary>Cipher Feedback (<b>Not yet implemented</b>)</summary>
+    /// <summary>Cipher Feedback (<b>Not yet implemented</b>)</summary>
     CFB,
 
-    ///	<summary>Cipher Text Stealing (<b>Not yet implemented</b>)</summary>
+    /// <summary>Cipher Text Stealing (<b>Not yet implemented</b>)</summary>
     CTS}
   );
 

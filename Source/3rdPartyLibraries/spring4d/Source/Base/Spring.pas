@@ -3653,7 +3653,9 @@ type
         PropCount: SmallInt;
         UnitName: TSymbolName);
       tkInt64: (MinInt64Value, MaxInt64Value: Int64);
-      tkArray, tkRecord{$IF Declared(tkMRecord)}, tkMRecord{$IFEND}: (Size: Integer);
+      tkArray, tkRecord: (Size: Integer;
+        case TTypeKind of
+          tkRecord: (ManagedFieldCount: Integer));
       tkDynArray: (elSize: Integer; elType: PPTypeInfo);
   end;
 

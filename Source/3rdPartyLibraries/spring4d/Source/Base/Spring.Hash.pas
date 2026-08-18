@@ -46,10 +46,10 @@ end;
 function xxHash32(const key; len: Cardinal; seed: Integer = 0): Integer;
 const
   Prime1 = 2654435761;
-	Prime2 = 2246822519;
-	Prime3 = 3266489917;
-	Prime4 = 668265263;
-	Prime5 = 374761393;
+  Prime2 = 2246822519;
+  Prime3 = 3266489917;
+  Prime4 = 668265263;
+  Prime5 = 374761393;
 {$if not defined(ASSEMBLER)}
 var
   v1, v2, v3, v4: Cardinal;

@@ -36,7 +36,8 @@ uses
   Spring;
 
 type
-  TRunTask = function(const proc: TProc): IInterface;
+  TTaskProc = TProc;
+  TRunTask = function(const proc: TTaskProc): IInterface;
   TWaitForTask = procedure(const task: IInterface);
 
   ITask = interface;
@@ -55,7 +56,7 @@ type
   ParallelAPI = record
   private
     // Schedules a task in the global threadpool
-    class function InternalRun(const taskProc: TProc): ITask; static;
+    class function InternalRun(const taskProc: TTaskProc): ITask; static;
 
     // Waits for a task running in the global threadpool
     class procedure InternalWaitFor(const task: ITask); static;
@@ -130,12 +131,12 @@ type
     TTask = class(TRefCountedObject, ITask)
     strict private
       fExceptObj: TObject;
-      fTaskProc: TProc;
+      fTaskProc: TTaskProc;
       fWorkDone: TEvent;
       function GetExceptObj: TObject;
       function GetIsCompleted: Boolean;
     public
-      constructor Create(const taskProc: TProc);
+      constructor Create(const taskProc: TTaskProc);
       destructor Destroy; override;
       procedure Execute;
       property ExceptObj: TObject read GetExceptObj;
@@ -171,7 +172,7 @@ type
     constructor Create(numThreads: Integer);
     destructor Destroy; override;
 
-    function Run(const taskProc: TProc): ITask; overload;
+    function Run(const taskProc: TTaskProc): ITask; overload;
     procedure WaitFor(const task: ITask);
   end;
 
@@ -308,7 +309,7 @@ begin
   LeaveLock;
 end;
 
-function TThreadPool.Run(const taskProc: TProc): ITask;
+function TThreadPool.Run(const taskProc: TTaskProc): ITask;
 var
   thread: TWorkerThread;
 begin
@@ -446,7 +447,7 @@ end;
 
 {$REGION 'TThreadPool.TTask'}
 
-constructor TThreadPool.TTask.Create(const taskProc: TProc);
+constructor TThreadPool.TTask.Create(const taskProc: TTaskProc);
 begin
   fTaskProc := taskProc;
   fWorkDone := TEvent.Create;
@@ -490,7 +491,7 @@ end;
 var
   GlobalThreadPool: TThreadPool;
 
-class function ParallelAPI.InternalRun(const taskProc: TProc): ITask;
+class function ParallelAPI.InternalRun(const taskProc: TTaskProc): ITask;
 var
   newThreadPool: TThreadPool;
 begin

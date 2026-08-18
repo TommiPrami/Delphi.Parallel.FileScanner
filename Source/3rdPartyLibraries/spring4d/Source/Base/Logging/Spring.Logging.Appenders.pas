@@ -187,9 +187,9 @@ type
   {$ELSE !ANDROID}
     {$IFDEF DELPHIXE4_UP}
       TDefaultLogAppender = TFMXLogAppender;
-	{$ELSE}
+    {$ELSE}
       TDefaultLogAppender = TTextLogAppender;
-	{$ENDIF}
+    {$ENDIF}
   {$ENDIF ANDROID}
  {$ELSE !FMX}
     TDefaultLogAppender = TTextLogAppender;

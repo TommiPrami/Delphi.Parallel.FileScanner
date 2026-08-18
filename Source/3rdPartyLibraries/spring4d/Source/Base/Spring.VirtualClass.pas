@@ -91,7 +91,7 @@ type
     FreeInstance: TFreeInstance;
     Destroy: TDestroy;
 
-{$IF CPP_ABI_ADJUST > 0)}
+{$IF CPP_ABI_ADJUST > 0}
     CPP_API: array[1..CPP_ABI_ADJUST div SizeOf(Pointer)] of Pointer;
 {$IFEND}
 
@@ -276,14 +276,14 @@ var
 begin
   for classType in fClasses do
     
-	// when this code runs after finalization of this unit
-	// there might still be object instances being proxified
-	// with these classes - any deallocation here would cause
-	// issues such as access violations and alike during the 
-	// finalization/destruction of these objects
-	// to avoid such issues the deallocation is left to the
-	// operation system when the process ends and they are
-	// exluced from memory leak reporting
+    // when this code runs after finalization of this unit
+    // there might still be object instances being proxified
+    // with these classes - any deallocation here would cause
+    // issues such as access violations and alike during the 
+    // finalization/destruction of these objects
+    // to avoid such issues the deallocation is left to the
+    // operation system when the process ends and they are
+    // exluced from memory leak reporting
     RegisterExpectedMemoryLeak(PByte(classType) + vmtSelfPtr);
 
   fLock.Free;

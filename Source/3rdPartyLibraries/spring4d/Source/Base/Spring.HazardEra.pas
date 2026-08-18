@@ -315,7 +315,7 @@ begin
   begin
     currEra := {$IFDEF CPUX86}AtomicLoad(eraClock){$ELSE}eraClock{$ENDIF};
 
-   	lock.Acquire;
+    lock.Acquire;
     try
       if Assigned(p) then
       begin
