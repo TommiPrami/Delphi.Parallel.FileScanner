@@ -159,7 +159,7 @@ function ScanOtlQueue: TStringList;
 var
   LScanner: TParallelFileScanner;
   LExclusions: TFileScanExclusions;
-  LQueue: IOmniValueQueue;
+  LQueue: TOmniQueue;
   LValue: TOmniValue;
   LRaw: TStringList;
   LFileCount: Integer;
@@ -168,7 +168,7 @@ begin
   LRaw := TStringList.Create;
   try
     LScanner.ConvertRelativePathsToAbsolute := True;
-    LQueue := CreateOmniValueQueue(False);
+    LQueue := TOmniQueue.Create;
     LFileCount := 0;
     LScanner.GetFileList(GScanRoots, LExclusions, LQueue, LFileCount);
 

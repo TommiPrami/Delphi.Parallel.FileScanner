@@ -93,7 +93,7 @@ type
     {$ENDIF}): Boolean; overload; virtual;
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesOmniValueQueue: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; overload; virtual;
+      const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; overload; virtual;
     {$ENDIF}
   public
     constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload;
@@ -133,7 +133,7 @@ type
       {$ENDIF}): Boolean; overload; override;
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; override;
+      const AFileNamesList: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; override;
     {$ENDIF}
   end;
 
@@ -612,7 +612,7 @@ end;
 
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesOmniValueQueue: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
+  const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
 var
   LTaskConfig: IOmniTaskConfig;
   LScanJobs: TArray<TScanJob>;
@@ -759,7 +759,7 @@ end;
 
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
 function TParallelFileScanner.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: IOmniValueQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
+  const AFileNamesList: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
 begin
   Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList, AFileCount, APriority);
 end;

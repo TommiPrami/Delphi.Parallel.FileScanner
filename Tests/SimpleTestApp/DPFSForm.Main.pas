@@ -67,7 +67,7 @@ procedure TDPFSMainForm.ButtonOtlQueueClick(ASender: TObject);
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
 var
   LParallelScanner: TParallelFileScanner;
-  LOTLValueQueue: IOmniValueQueue;
+  LOTLValueQueue: TOmniQueue;
   LExcludes: TFileScanExclusions;
   LResultFileName: string;
   LFileCount: Integer;
@@ -78,7 +78,7 @@ begin
 
   UpdateGUIState(ASender as TControl, False);
   try
-    LOTLValueQueue := CreateOmniValueQueue(False);
+    LOTLValueQueue := TOmniQueue.Create;
     LParallelScanner := TParallelFileScanner.Create(GetExtensions);
     try
       LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
@@ -287,7 +287,7 @@ end;
 function TDPFSMainForm.TimedOtlQueueScan(var AFileCount: Integer): Double;
 var
   LParallelScanner: TParallelFileScanner;
-  LOTLValueQueue: IOmniValueQueue;
+  LOTLValueQueue: TOmniQueue;
   LExcludes: TFileScanExclusions;
   LStopwatch: TStopwatch;
   LFileCount: Integer;
@@ -296,7 +296,7 @@ begin
   try
     LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
     LExcludes := GetExcludes;
-    LOTLValueQueue := CreateOmniValueQueue(False);
+    LOTLValueQueue := TOmniQueue.Create;
     LFileCount := 0;
 
     LStopwatch := TStopwatch.StartNew;
