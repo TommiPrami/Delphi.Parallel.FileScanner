@@ -4608,6 +4608,12 @@ begin
   if not CheckDebugBlockHeaderAndFooterCheckSumsValid(LPActualBlock) then
     System.Error(reInvalidPtr);
 
+  {There's a bug in the X86 assembly language code path for System._ReallocMem that lets through negative values of
+  ANewSize.  The Pascal code path that is also used under X64 does not have this bug.  This check is left in place for
+  both code paths, since it is also possible to reach this routine from System.ReallocMemory.}
+  if ANewSize < 0 then
+    Exit(nil);
+
   {Can the block be resized in-place?}
   LAvailableSpace := FastMM_BlockMaximumUserBytes(LPActualBlock);
   LDebugFooterSize := CalculateDebugBlockFooterSize(LPActualBlock.StackTraceEntryCount);
@@ -6623,12 +6629,12 @@ asm
   sub ecx, CMediumBlockHeaderSize
 
   cmp ecx, edx
-  jb FastMM_ReallocMem_ReallocMediumBlock_Upsize
+  jl FastMM_ReallocMem_ReallocMediumBlock_Upsize
 
   {The requested size must be less than half the current size or we don't bother resizing.}
   shr ecx, 1
   cmp ecx, edx
-  ja FastMM_ReallocMem_ReallocMediumBlock_Downsize
+  jg FastMM_ReallocMem_ReallocMediumBlock_Downsize
 {$else}
 var
   LOldUserSize: NativeInt;
@@ -7701,8 +7707,10 @@ begin
 
   {Get the available size inside blocks of this type.}
   LOldUserSize := LPSmallBlockManager.BlockSize - CSmallBlockHeaderSize;
-  {Is it an upsize or a downsize?}
-  if LOldUserSize >= ANewUserSize then
+  {Is it an upsize or a downsize?  There is a bug in the X86 assembly language code path of the RTL that lets through
+  negative values for ANewUserSize, so we need to treat ANewUserSize as unsigned in order to ensure that this call fails
+  for bad input.}
+  if NativeUInt(LOldUserSize) >= NativeUInt(ANewUserSize) then
   begin
     {It's a downsize.  Do we need to allocate a smaller block?  Only if the new block size is less than a quarter of
     the available size less SmallBlockDownsizeCheckAdder bytes}
@@ -7734,8 +7742,8 @@ begin
     {Must grow with at least 100% + x bytes}
     LNewUserSize := LOldUserSize shl 1 + CSmallBlockUpsizeAdder;
 
-    {Still not large enough?}
-    if LNewUserSize < ANewUserSize then
+    {Still not large enough?  ANewUserSize is again treated as unsigned in order to catch bad (negative) input.}
+    if NativeUInt(LNewUserSize) < NativeUInt(ANewUserSize) then
       LNewUserSize := ANewUserSize;
 
     {Allocate the new block, move the old data across and then free the old block.}
@@ -8239,6 +8247,10 @@ function FastMM_DebugGetMem_GetDebugBlock(ASize: NativeInt; AFillBlockWithDebugP
 var
   LStackTraceDepth: Byte;
 begin
+  {Ensure that this call fails for negative size requests, like the non-debug mode path does.}
+  if ASize < 0 then
+    Exit(nil);
+
   LStackTraceDepth := DebugMode_StackTrace_EntryCount;
 
   {Add the size of the debug header, footer checksum and two stack traces to the allocation size.}
