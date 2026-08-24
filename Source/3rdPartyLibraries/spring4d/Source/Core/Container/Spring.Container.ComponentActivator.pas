@@ -41,6 +41,10 @@ type
   private
     fKernel: TKernel;
     fModel: TComponentModel;
+    procedure CleanupFailedInstance(const context: ICreationContext;
+      var instance: TValue; pinned: Boolean);
+    function RegisterPerResolveInstance(const context: ICreationContext;
+      const instance: TValue): Boolean;
   protected
     procedure ExecuteInjections(var instance: TValue; const context: ICreationContext); overload;
     procedure ExecuteInjections(const instance: TValue;
@@ -106,45 +110,56 @@ begin
   fModel := model;
 end;
 
-procedure TComponentActivatorBase.ExecuteInjections(var instance: TValue;
-  const context: ICreationContext);
-var
-  doRefCountRelease: Boolean;
+procedure TComponentActivatorBase.CleanupFailedInstance(
+  const context: ICreationContext; var instance: TValue; pinned: Boolean);
 begin
-  doRefCountRelease := False;
+  context.RemovePerResolve(Model);
+  if pinned then
+    TInterfacedObjectAccess(TValueData(instance).FAsObject)._Release
+  else
+    instance.AsObject.Free;
+  instance := nil;
+end;
+
+function TComponentActivatorBase.RegisterPerResolveInstance(
+  const context: ICreationContext; const instance: TValue): Boolean;
+begin
   if Model.LifetimeType in SingletonLifetimes then
   begin
     context.AddPerResolve(Model, instance);
-    if (instance.Kind = tkClass) and (TObject(TValueData(instance).FAsObject) is TInterfacedObject) then
+    if (instance.Kind = tkClass)
+      and (TObject(TValueData(instance).FAsObject) is TInterfacedObject) then
     begin
       AtomicIncrement(TInterfacedObjectAccess(TValueData(instance).FAsObject).FRefCount);
-      doRefCountRelease := True;
+      Exit(True);
     end;
   end;
+  Result := False;
+end;
+
+procedure TComponentActivatorBase.ExecuteInjections(var instance: TValue;
+  const context: ICreationContext);
+var
+  pinned: Boolean;
+begin
+  pinned := RegisterPerResolveInstance(context, instance);
   try
-    try
-      ExecuteInjections(instance, Model.FieldInjections, context);
-      ExecuteInjections(instance, Model.PropertyInjections, context);
-      ExecuteInjections(instance, Model.MethodInjections, context);
-    except
-      on E: Exception do
-      begin
-        if not instance.IsEmpty and instance.IsObject then
-        begin
-          instance.AsObject.Free;
-          instance := nil;
-          doRefCountRelease := False;
-        end;
-        if E is EContainerException then
-          raise
-        else
-          Exception.RaiseOuterException(EResolveException.CreateResFmt(
-            @SCannotResolveType, [Model.ComponentTypeName]));
-      end;
-    end;
-  finally
-    if doRefCountRelease then
+    ExecuteInjections(instance, Model.FieldInjections, context);
+    ExecuteInjections(instance, Model.PropertyInjections, context);
+    ExecuteInjections(instance, Model.MethodInjections, context);
+    if pinned then
       AtomicDecrement(TInterfacedObjectAccess(TValueData(instance).FAsObject).FRefCount);
+  except
+    on E: Exception do
+    begin
+      if not instance.IsEmpty and instance.IsObject then
+        CleanupFailedInstance(context, instance, pinned);
+      if E is EContainerException then
+        raise
+      else
+        Exception.RaiseOuterException(EResolveException.CreateResFmt(
+          @SCannotResolveType, [Model.ComponentTypeName]));
+    end;
   end;
 end;
 

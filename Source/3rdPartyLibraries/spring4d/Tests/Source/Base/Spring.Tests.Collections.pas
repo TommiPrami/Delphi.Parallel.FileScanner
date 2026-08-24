@@ -345,6 +345,8 @@ type
     procedure TestQueueTryPeek;
     procedure TestQueueTrimExcess;
     procedure TestEnumerator;
+    procedure TestQueueCapacityGrowAfterDequeue;
+    procedure TestQueueCapacityShrinkAfterDequeue;
   end;
 
   TTestDequeOfInteger = class(TTestCase)
@@ -2924,6 +2926,35 @@ begin
     Inc(i);
   end;
   CheckEquals(5, i);
+end;
+
+procedure TTestQueueOfInteger.TestQueueCapacityGrowAfterDequeue;
+var
+  i: Integer;
+begin
+  SUT.Capacity := 8;
+  for i := 1 to 5 do
+    SUT.Enqueue(i);
+  for i := 1 to 3 do
+    SUT.Dequeue;
+  SUT.Capacity := 16;
+  SUT.Enqueue(6);
+  CheckEquals(3, SUT.Count, 'Grow after head advance corrupted the count');
+  CheckTrue(SUT.EqualsTo([4, 5, 6]), 'Grow after head advance corrupted the buffer');
+end;
+
+procedure TTestQueueOfInteger.TestQueueCapacityShrinkAfterDequeue;
+var
+  i: Integer;
+begin
+  SUT.Capacity := 8;
+  for i := 1 to 8 do
+    SUT.Enqueue(i);
+  for i := 1 to 3 do
+    SUT.Dequeue;
+  SUT.Capacity := 6;
+  CheckEquals(5, SUT.Count, 'Wrapped shrink corrupted the count');
+  CheckTrue(SUT.EqualsTo([4, 5, 6, 7, 8]), 'Wrapped shrink zeroed a live slot');
 end;
 
 {$ENDREGION}

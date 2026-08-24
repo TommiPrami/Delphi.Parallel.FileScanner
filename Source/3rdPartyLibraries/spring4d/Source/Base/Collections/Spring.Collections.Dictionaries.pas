@@ -2945,6 +2945,11 @@ begin
   {$ENDIF}
     if doOwnsKeys in fOwnerships then
       PObject(@node.Key).Free;
+  {$IFDEF DELPHIXE7_UP}
+    if GetTypeKind(TValue) = tkClass then
+  {$ENDIF}
+    if doOwnsValues in fOwnerships then
+      PObject(@node.Value).Free;
   end;
 
   node.Key := key;

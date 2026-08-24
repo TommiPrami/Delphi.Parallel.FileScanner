@@ -184,7 +184,8 @@ begin
       TTestDictionaryOwnership.Suite,
       TTestDictionaryValueComparer.Suite,
       TTestSortedDictionary.Suite,
-      TTestSortedDictionaryChangedEvent.Suite
+      TTestSortedDictionaryChangedEvent.Suite,
+      TTestSortedDictionaryOwnership.Suite
     ]);
 
     RegisterTests('Spring.Base.Collections.Extensions', [

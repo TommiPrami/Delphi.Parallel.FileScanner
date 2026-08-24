@@ -4787,8 +4787,8 @@ begin
     else
     begin
       if ItemType.HasWeakRef then
-        System.Finalize(fItems[itemCount], -offset);
-      System.FillChar(fItems[itemCount], SizeOf(T) * -offset, 0)
+        System.Finalize(fItems[value], -offset);
+      System.FillChar(fItems[value], SizeOf(T) * -offset, 0)
     end;
     Inc(fHead, offset);
   end
@@ -4806,7 +4806,7 @@ begin
       System.FillChar(fItems[itemCount], SizeOf(T) * fHead, 0);
       fHead := 0;
     end;
-    fTail := itemCount;
+    fTail := fHead + itemCount;
   end;
   if offset < 0 then
   begin

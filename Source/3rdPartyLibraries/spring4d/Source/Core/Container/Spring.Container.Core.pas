@@ -271,6 +271,7 @@ type
     function AddArgument(const argument: TValue): Integer;
     procedure RemoveTypedArgument(index: Integer);
     procedure AddPerResolve(const model: TComponentModel; const instance: TValue);
+    procedure RemovePerResolve(const model: TComponentModel);
     function TryHandle(const injection: IInjection;
       var handled: IInjection): Boolean;
   end;

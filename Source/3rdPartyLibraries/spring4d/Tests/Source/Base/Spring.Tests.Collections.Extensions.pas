@@ -57,6 +57,17 @@ type
     function GetEnumerator: IEnumerator<T>;
   end;
 
+  ISample = interface
+    ['{C7AD7313-81A3-42B2-9021-3EBF88950838}']
+    function GetRefCount: Integer;
+    property RefCount: Integer read GetRefCount;
+  end;
+
+  TSample = class(TRefCountedObject, ISample)
+  public
+    function GetRefCount: Integer;
+  end;
+
   TTestCaseHelper = class helper(TAbstractTestHelper) for TTestCase
   protected
     procedure CheckExceptionDeferred(const deferredFunction: Func<IEnumerable<Integer>, IEnumerable<Integer>>);
@@ -390,6 +401,8 @@ type
 
     procedure FirstSequenceOnlyReadAsResultsAreRead;
     procedure SecondSequenceReadFullyOnFirstResultIteration;
+
+    procedure IntersectDoesNotRetainProcessedElements;
   end;
 
   TTestExcept = class(TTestCase)
@@ -734,6 +747,13 @@ end;
 function TNonEnumerableList<T>.GetEnumerator: IEnumerator<T>;
 begin
   raise ENotSupportedException.Create('');
+end;
+
+{ TSample }
+
+function TSample.GetRefCount: Integer;
+begin
+  Result := inherited RefCount;
 end;
 
 { TTestCaseHelper }
@@ -3291,6 +3311,32 @@ begin
       iterator.MoveNext;
     end);
   iterator := nil;
+end;
+
+procedure TTestIntersect.IntersectDoesNotRetainProcessedElements;
+var
+  sample: ISample;
+  first, second, result: IEnumerable<ISample>;
+  iterator: IEnumerator<ISample>;
+begin
+  sample := TSample.Create;
+  first := TCollections.CreateList<ISample>([sample]);
+  second := TCollections.CreateList<ISample>([sample]);
+  result := first.Intersect(second);
+
+  iterator := result.GetEnumerator;
+  CheckTrue(iterator.MoveNext);
+  CheckEquals(4, sample.RefCount);
+  CheckFalse(iterator.MoveNext);
+  iterator := nil;
+
+  CheckEquals(3, sample.RefCount);
+
+  first := nil;
+  second := nil;
+  result := nil;
+  CheckEquals(1, sample.RefCount);
+  sample := nil;
 end;
 
 { TTestExcept }

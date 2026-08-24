@@ -185,6 +185,12 @@ type
     procedure SetUp; override;
   end;
 
+  TOwnedValue = class(TObject)
+  public
+    class var DestroyCount: Integer;
+    destructor Destroy; override;
+  end;
+
   TTestDictionaryOwnershipBase = class(TTestCase)
   protected
     class function CreateOwnedKeysDict: IDictionary<TObject, Integer>; virtual; abstract;
@@ -194,19 +200,30 @@ type
     procedure TestValues;
   end;
 
-  TTestDictionaryOwnership = class(TTestDictionaryOwnershipBase)
+  TTestDictionaryValueOwnershipBase = class(TTestDictionaryOwnershipBase)
+  published
+    procedure TestSetItem;
+  end;
+
+  TTestDictionaryOwnership = class(TTestDictionaryValueOwnershipBase)
   protected
     class function CreateOwnedKeysDict: IDictionary<TObject, Integer>; override;
     class function CreateOwnedValuesDict: IDictionary<Integer, TObject>; override;
   end;
 
-  TTestBidiDictionaryOwnership = class(TTestDictionaryOwnershipBase)
+  TTestBidiDictionaryOwnership = class(TTestDictionaryValueOwnershipBase)
   protected
     class function CreateOwnedKeysDict: IDictionary<TObject, Integer>; override;
     class function CreateOwnedValuesDict: IDictionary<Integer, TObject>; override;
   end;
 
   TTestBidiDictionaryInverseOwnership = class(TTestDictionaryOwnershipBase)
+  protected
+    class function CreateOwnedKeysDict: IDictionary<TObject, Integer>; override;
+    class function CreateOwnedValuesDict: IDictionary<Integer, TObject>; override;
+  end;
+
+  TTestSortedDictionaryOwnership = class(TTestDictionaryValueOwnershipBase)
   protected
     class function CreateOwnedKeysDict: IDictionary<TObject, Integer>; override;
     class function CreateOwnedValuesDict: IDictionary<Integer, TObject>; override;
@@ -1462,6 +1479,12 @@ end;
 
 {$REGION 'TTestDictionaryOwnershipBase'}
 
+destructor TOwnedValue.Destroy;
+begin
+  Inc(DestroyCount);
+  inherited Destroy;
+end;
+
 procedure TTestDictionaryOwnershipBase.TestKeys;
 var
   SUT: IDictionary<TObject, Integer>;
@@ -1482,10 +1505,10 @@ end;
 
 procedure TTestDictionaryOwnershipBase.TestValues;
 var
-  SUT: IBidiDictionary<Integer, TObject>;
+  SUT: IDictionary<Integer, TObject>;
   obj: TObject;
 begin
-  SUT := TCollections.CreateBidiDictionary<Integer, TObject>([doOwnsValues]);
+  SUT := CreateOwnedValuesDict;
   SUT.Add(0, TObject.Create);
   SUT.Add(1, TObject.Create);
   SUT.Add(2, TObject.Create);
@@ -1496,6 +1519,20 @@ begin
   SUT.Remove(2);
   SUT.Clear;
   Pass;
+end;
+
+procedure TTestDictionaryValueOwnershipBase.TestSetItem;
+var
+  SUT: IDictionary<Integer, TObject>;
+begin
+  TOwnedValue.DestroyCount := 0;
+  SUT := CreateOwnedValuesDict;
+  SUT.Add(1, TOwnedValue.Create);
+  SUT[1] := TOwnedValue.Create;
+  SUT[1] := TOwnedValue.Create;
+  CheckEquals(2, TOwnedValue.DestroyCount);
+  SUT.Clear;
+  CheckEquals(3, TOwnedValue.DestroyCount);
 end;
 
 {$ENDREGION}
@@ -1541,6 +1578,21 @@ end;
 class function TTestBidiDictionaryInverseOwnership.CreateOwnedValuesDict: IDictionary<Integer, TObject>;
 begin
   Result := TCollections.CreateBidiDictionary<TObject, Integer>([doOwnsKeys]).Inverse;
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestSortedDictionaryOwnership'}
+
+class function TTestSortedDictionaryOwnership.CreateOwnedKeysDict: IDictionary<TObject, Integer>;
+begin
+  Result := TCollections.CreateSortedDictionary<TObject, Integer>([doOwnsKeys]);
+end;
+
+class function TTestSortedDictionaryOwnership.CreateOwnedValuesDict: IDictionary<Integer, TObject>;
+begin
+  Result := TCollections.CreateSortedDictionary<Integer, TObject>([doOwnsValues]);
 end;
 
 {$ENDREGION}

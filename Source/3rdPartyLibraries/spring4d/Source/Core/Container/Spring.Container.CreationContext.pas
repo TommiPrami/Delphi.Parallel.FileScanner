@@ -99,6 +99,7 @@ type
     function AddArgument(const argument: TValue): Integer;
     procedure RemoveTypedArgument(index: Integer);
     procedure AddPerResolve(const model: TComponentModel; const instance: TValue);
+    procedure RemovePerResolve(const model: TComponentModel);
     function TryHandle(const injection: IInjection;
       var handled: IInjection): Boolean;
   end;
@@ -283,6 +284,26 @@ begin
       and (instance.Kind = tkClass)
       and (TObject(TValueData(instance).FAsObject) is TInterfacedObject) then
       TInterfacedObjectAccess(TValueData(instance).FAsObject)._AddRef;
+  finally
+    fLock.LeaveWrite;
+  end;
+end;
+
+procedure TCreationContext.RemovePerResolve(const model: TComponentModel);
+var
+  instance: TValue;
+begin
+  fLock.EnterWrite;
+  try
+    if Assigned(fPerResolveInstances)
+      and fPerResolveInstances.TryGetValue(model, instance) then
+    begin
+      fPerResolveInstances.Remove(model);
+      if (model.LifetimeType = TLifetimeType.PerResolve)
+        and (instance.Kind = tkClass)
+        and (TObject(TValueData(instance).FAsObject) is TInterfacedObject) then
+        TInterfacedObjectAccess(TValueData(instance).FAsObject)._Release;
+    end;
   finally
     fLock.LeaveWrite;
   end;

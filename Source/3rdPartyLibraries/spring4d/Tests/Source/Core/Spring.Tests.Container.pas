@@ -218,6 +218,7 @@ type
   TTestPerResolve = class(TContainerTestCase)
   published
     procedure TestResolveCircularDependency;
+    procedure TestInjectionFailureRaisesResolveException;
   end;
 
   TTestImplementsAttribute = class(TContainerTestCase)
@@ -1269,6 +1270,18 @@ begin
   chicken := fContainer.Resolve<IChicken>;
   CheckSame(chicken, chicken.Egg.Chicken);
   chicken.Egg := nil;
+end;
+
+procedure TTestPerResolve.TestInjectionFailureRaisesResolveException;
+begin
+  fContainer.RegisterType<INameService, TNameServiceWithAggregation>.PerResolve;
+  fContainer.Build;
+
+  CheckException(EResolveException,
+    procedure
+    begin
+      fContainer.Resolve<INameService>;
+    end);
 end;
 
 {$ENDREGION}
