@@ -522,7 +522,7 @@ var
 begin
   Result := TCollections.CreateList<T>;
   for i := 0 to IndexList.Count - 1 do
-    Result.Add(IndexList.Items[i]);
+    Result.Add(T(IndexList.Items[i]));
 end;
 
 function TObjectDataSet.GetRecordCount: Integer;
