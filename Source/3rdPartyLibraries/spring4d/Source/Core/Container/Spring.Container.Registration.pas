@@ -50,7 +50,7 @@ type
     fDefaultRegistrations: IDictionary<PTypeInfo, TComponentModel>;
     fUnnamedRegistrations: IMultiMap<PTypeInfo, TComponentModel>;
     fServiceTypeMappings: IMultiMap<PTypeInfo, TComponentModel>;
-    fServiceNameMappings: IDictionary<string, TComponentModel>;
+    fServiceNameMappings: IMultiMap<string, TComponentModel>;
     fOnChanged: TCollectionChangedEventImpl<TComponentModel>;
     function GetOnChanged: ICollectionChangedEvent<TComponentModel>;
   protected
@@ -86,6 +86,8 @@ type
     function FindOne(componentType: PTypeInfo): TComponentModel; overload;
     function FindOne(const serviceName: string): TComponentModel; overload;
     function FindOne(serviceType: PTypeInfo; const argument: TValue): TComponentModel; overload;
+    function FindOne(serviceType: PTypeInfo;
+      const serviceName: string): TComponentModel; overload;
     function FindDefault(serviceType: PTypeInfo): TComponentModel;
     function FindAll: IEnumerable<TComponentModel>; overload;
     function FindAll(serviceType: PTypeInfo): IEnumerable<TComponentModel>; overload;
@@ -203,7 +205,7 @@ begin
   fServiceTypeMappings := TCollections.CreateMultiMap<PTypeInfo, TComponentModel>(
     IEqualityComparer<PTypeInfo>(GetTypeInfoEqualityComparer));
   fServiceTypeMappings.OnValueChanged.Add(fOnChanged.Invoke);
-  fServiceNameMappings := TCollections.CreateDictionary<string, TComponentModel>;
+  fServiceNameMappings := TCollections.CreateMultiMap<string, TComponentModel>;
   fServiceNameMappings.OnValueChanged.Add(fOnChanged.Invoke);
 end;
 
@@ -223,7 +225,7 @@ begin
       componentType.DefaultName, serviceType.DefaultName]);
   if serviceName = '' then
     serviceName := serviceType.DefaultName + '@' + componentType.DefaultName;
-  if HasService(serviceName) then
+  if HasService(serviceType.Handle, serviceName) then
     raise ERegistrationException.CreateResFmt(@SDuplicateServiceName, [serviceName]);
 end;
 
@@ -253,7 +255,7 @@ begin
 
   internalServiceName := serviceName;
   Validate(model.ComponentType, serviceType.RttiType, internalServiceName);
-  model.Services[internalServiceName] := serviceType;
+  model.Services.Add(internalServiceName, serviceType);
   fServiceTypeMappings.Add(serviceType, model);
   fServiceNameMappings.Add(internalServiceName, model);
   if serviceName = '' then
@@ -384,7 +386,7 @@ begin
     begin
       arguments := InternalResolveParams(method, args, paramResolution);
       result := (fKernel as IKernelInternal).Resolve(
-        resolvedServiceName, arguments);
+        method.ReturnType.Handle, resolvedServiceName, arguments);
     end;
 
   InternalRegisterFactory(model, invokeEvent);
@@ -403,8 +405,41 @@ begin
 end;
 
 function TComponentRegistry.FindOne(const serviceName: string): TComponentModel;
+var
+  models: IReadOnlyCollection<TComponentModel>;
 begin
-  fServiceNameMappings.TryGetValue(serviceName, Result);
+  models := fServiceNameMappings[serviceName];
+  if models.Count > 1 then
+    raise EResolveException.CreateResFmt(@SAmbiguousServiceName, [serviceName]);
+  if models.TryGetFirst(Result)
+    and (Result.Services[serviceName].Count > 1) then
+    raise EResolveException.CreateResFmt(@SAmbiguousServiceName, [serviceName]);
+end;
+
+function TComponentRegistry.FindOne(serviceType: PTypeInfo;
+  const serviceName: string): TComponentModel;
+var
+  models: IReadOnlyCollection<TComponentModel>;
+begin
+  models := fServiceNameMappings[serviceName];
+  if not models.TryGetFirst(Result,
+    function(const model: TComponentModel): Boolean
+    begin
+      Result := model.Services[serviceName].Any(
+        function(const service: PTypeInfo): Boolean
+        begin
+          Result := SameTypeInfo(service, serviceType);
+        end);
+    end) then
+    models.TryGetFirst(Result,
+      function(const model: TComponentModel): Boolean
+      begin
+        Result := model.Services[serviceName].Any(
+          function(const service: PTypeInfo): Boolean
+          begin
+            Result := IsAssignableFromRelaxed(serviceType, service);
+          end);
+      end);
 end;
 
 function TComponentRegistry.FindOne(componentType: PTypeInfo): TComponentModel;
@@ -441,12 +476,15 @@ begin
   else if argument.IsString then
   begin
     serviceName := argument.AsString;
-    Result := FindOne(serviceName);
+    Result := FindOne(serviceType, serviceName);
     if not Assigned(Result) then
-      raise EResolveException.CreateResFmt(@SServiceNotFound, [serviceName]);
-    if not IsAssignableFromRelaxed(serviceType, Result.Services[serviceName]) then
-      raise EResolveException.CreateResFmt(@SCannotResolveTypeNamed, [
-        serviceType.TypeName, serviceName]);
+    begin
+      if HasService(serviceName) then
+        raise EResolveException.CreateResFmt(@SCannotResolveTypeNamed, [
+          serviceType.TypeName, serviceName])
+      else
+        raise EResolveException.CreateResFmt(@SServiceNotFound, [serviceName]);
+    end;
   end
   else
     raise EResolveException.CreateResFmt(@SCannotResolveType, [
@@ -511,15 +549,20 @@ end;
 
 function TComponentRegistry.HasService(serviceType: PTypeInfo;
   const serviceName: string): Boolean;
-var
-  model: TComponentModel;
 begin
 {$IFDEF SPRING_ENABLE_GUARD}
   Guard.CheckNotNull(serviceType, 'serviceType');
 {$ENDIF}
 
-  Result := fServiceNameMappings.TryGetValue(serviceName, model)
-    and model.HasService(serviceType);
+  Result := fServiceNameMappings[serviceName].Any(
+    function(const model: TComponentModel): Boolean
+    begin
+      Result := model.Services[serviceName].Any(
+        function(const service: PTypeInfo): Boolean
+        begin
+          Result := SameTypeInfo(service, serviceType);
+        end);
+    end);
 end;
 
 function TComponentRegistry.HasDefault(serviceType: PTypeInfo): Boolean;

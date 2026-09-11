@@ -112,7 +112,7 @@ var
   mockModel: TComponentModel;
 begin
   mockName := 'IMock<' + mockedType.DefaultName + '>';
-  if not fKernel.Registry.HasService(mockName) then
+  if not fKernel.Registry.HasService(TypeInfo(IMock<IInterface>), mockName) then
   begin
     // only for interfaces
     mockModel := fKernel.Registry.RegisterComponent(TMock<IInterface>.ClassInfo);
@@ -144,7 +144,7 @@ begin
     mockedType := dependency.TargetType;
   mockName := 'IMock<' + mockedType.DefaultName + '>';
   EnsureMockRegistered(mockedType);
-  Result := (fKernel as IKernelInternal).Resolve(mockName);
+  Result := (fKernel as IKernelInternal).Resolve(TypeInfo(IMock<IInterface>), mockName);
   if mockDirectly then
   begin
     TValueData(Result).FTypeInfo := dependency.TargetType.Handle;

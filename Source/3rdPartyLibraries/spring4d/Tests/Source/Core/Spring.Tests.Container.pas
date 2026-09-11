@@ -199,6 +199,8 @@ type
     procedure SetUp; override;
   published
     procedure TestResolve;
+    procedure TestResolveSelfDependencyPerResolve;
+    procedure TestResolveSelfDependencySingleton;
     procedure TestWeakSingleton;
   end;
 
@@ -233,6 +235,10 @@ type
     procedure TestInheritedService;
     procedure TestTwoServicesWithSameName;
     procedure TestParentInterface;
+    procedure TestSameNameDifferentServiceTypes;
+    procedure TestSameNameSameComponent;
+    procedure TestAmbiguousServiceName;
+    procedure TestDuplicateServiceName;
   end;
 
   TTestDefaultResolve = class(TContainerTestCase)
@@ -246,6 +252,22 @@ type
   TTestInjectionByValue = class(TContainerTestCase)
   published
     procedure TestInjectField;
+  end;
+
+  TTestPropertyInjection = class(TContainerTestCase)
+  private
+    procedure CheckInjected(const instance: IPropertyInjection;
+      const expectedName: string);
+  protected
+    procedure SetUp; override;
+  published
+    procedure ChildAttributeOverridesInheritedAttribute;
+    procedure ChildRegistrationOverridesInheritedAttribute;
+    procedure ParentAndChildRegistrationInjections;
+    procedure SameComponentRegisteredTwice;
+    procedure RegistrationOverridesAttribute;
+    procedure HidingPropertyIsNotDeduped;
+    procedure SecondInjectPropertyOverrides;
   end;
 
   TTestResolverOverride = class(TContainerTestCase)
@@ -1188,6 +1210,32 @@ begin
   Pass;
 end;
 
+procedure TTestDirectCircularDependency.TestResolveSelfDependencyPerResolve;
+var
+  chicken: IChicken;
+begin
+  fContainer.Registry.UnregisterAll;
+  fContainer.RegisterType<IChicken, TCircularDependencyChicken>.PerResolve;
+  fContainer.Build;
+
+  ExpectedException := ECircularDependencyException;
+  chicken := fContainer.Resolve<IChicken>;
+  Pass;
+end;
+
+procedure TTestDirectCircularDependency.TestResolveSelfDependencySingleton;
+var
+  chicken: IChicken;
+begin
+  fContainer.Registry.UnregisterAll;
+  fContainer.RegisterType<IChicken, TCircularDependencyChicken>.AsSingleton;
+  fContainer.Build;
+
+  ExpectedException := ECircularDependencyException;
+  chicken := fContainer.Resolve<IChicken>;
+  Pass;
+end;
+
 procedure TTestDirectCircularDependency.TestWeakSingleton;
 var
   chicken: IChicken;
@@ -1475,6 +1523,66 @@ begin
   CheckIs(service, TDynamicNameService);
 end;
 
+procedure TTestRegisterInterfaces.TestSameNameDifferentServiceTypes;
+var
+  nameService: INameService;
+  anotherNameService: IAnotherNameService;
+begin
+  fContainer.RegisterType<TNameService>.Implements<INameService>('same');
+  fContainer.RegisterType<TDynamicNameService>.Implements<IAnotherNameService>('same');
+  fContainer.Build;
+
+  nameService := fContainer.Resolve<INameService>('same');
+  CheckIs(nameService, TNameService, 'INameService');
+
+  anotherNameService := fContainer.Resolve<IAnotherNameService>('same');
+  CheckIs(anotherNameService, TDynamicNameService, 'IAnotherNameService');
+
+  CheckTrue(fContainer.Registry.HasService(TypeInfo(INameService), 'same'));
+  CheckTrue(fContainer.Registry.HasService(TypeInfo(IAnotherNameService), 'same'));
+  CheckFalse(fContainer.Registry.HasService(TypeInfo(IAgeService), 'same'));
+end;
+
+procedure TTestRegisterInterfaces.TestSameNameSameComponent;
+var
+  nameService: INameService;
+  anotherNameService: IAnotherNameService;
+begin
+  fContainer.RegisterType<TDynamicNameService>(
+    function: TDynamicNameService
+    begin
+      Result := TDynamicNameService.Create('shared');
+    end)
+    .Implements<INameService>('same')
+    .Implements<IAnotherNameService>('same');
+  fContainer.Build;
+
+  nameService := fContainer.Resolve<INameService>('same');
+  CheckIs(nameService, TDynamicNameService, 'INameService');
+
+  anotherNameService := fContainer.Resolve<IAnotherNameService>('same');
+  CheckIs(anotherNameService, TDynamicNameService, 'IAnotherNameService');
+end;
+
+procedure TTestRegisterInterfaces.TestAmbiguousServiceName;
+begin
+  fContainer.RegisterType<TNameService>.Implements<INameService>('same');
+  fContainer.RegisterType<TDynamicNameService>.Implements<IAnotherNameService>('same');
+  fContainer.Build;
+
+  StartExpectingException(EResolveException);
+  fContainer.Resolve('same');
+  StopExpectingException;
+end;
+
+procedure TTestRegisterInterfaces.TestDuplicateServiceName;
+begin
+  fContainer.RegisterType<TNameService>.Implements<INameService>('dup');
+  StartExpectingException(ERegistrationException);
+  fContainer.RegisterType<TAnotherNameService>.Implements<INameService>('dup');
+  StopExpectingException;
+end;
+
 procedure TTestRegisterInterfaces.TestTwoServices;
 var
   s1: INameService;
@@ -1571,6 +1679,118 @@ begin
     .InjectField('fNameService', TValue.From<INameService>(TNameService.Create));
   fContainer.Build;
   CheckTrue(fContainer.Resolve<IPrimitive>.NameService <> nil)
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestPropertyInjection'}
+
+procedure TTestPropertyInjection.SetUp;
+begin
+  inherited SetUp;
+  fContainer.RegisterType<INameService, TNameService>;
+  fContainer.RegisterType<INameService, TAnotherNameService>('another');
+end;
+
+procedure TTestPropertyInjection.CheckInjected(
+  const instance: IPropertyInjection; const expectedName: string);
+begin
+  CheckNotNull(instance.Service);
+  CheckEquals(expectedName, instance.Service.Name);
+end;
+
+procedure TTestPropertyInjection.ChildAttributeOverridesInheritedAttribute;
+var
+  instance: IPropertyInjection;
+begin
+  fContainer.RegisterType<IPropertyInjection, TChildWithAttributeInjection>;
+  fContainer.Build;
+  instance := fContainer.Resolve<IPropertyInjection>;
+  CheckInjected(instance, TAnotherNameService.NameString);
+end;
+
+procedure TTestPropertyInjection.ChildRegistrationOverridesInheritedAttribute;
+var
+  instance: IPropertyInjection;
+begin
+  fContainer.RegisterType<IPropertyInjection, TChildWithAttributeParent>
+    .InjectProperty('Service', 'another');
+  fContainer.Build;
+  instance := fContainer.Resolve<IPropertyInjection>;
+  CheckInjected(instance, TAnotherNameService.NameString);
+end;
+
+procedure TTestPropertyInjection.ParentAndChildRegistrationInjections;
+var
+  parent: IPropertyInjection;
+  child: IPropertyInjection;
+begin
+  fContainer.RegisterType<IPropertyInjection, TParent>
+    .InjectProperty('Service');
+  fContainer.RegisterType<IPropertyInjection, TChild>('child')
+    .InjectProperty('Service', 'another');
+  fContainer.Build;
+  parent := fContainer.Resolve<IPropertyInjection>;
+  CheckInjected(parent, TNameService.NameString);
+  child := fContainer.Resolve<IPropertyInjection>('child');
+  CheckInjected(child, TAnotherNameService.NameString);
+end;
+
+procedure TTestPropertyInjection.SameComponentRegisteredTwice;
+var
+  unnamed: IPropertyInjection;
+  named: IPropertyInjection;
+begin
+  fContainer.RegisterType<IPropertyInjection, TParent>
+    .InjectProperty('Service');
+  fContainer.RegisterType<IPropertyInjection, TParent>('second')
+    .InjectProperty('Service', 'another');
+  fContainer.Build;
+  unnamed := fContainer.Resolve<IPropertyInjection>;
+  CheckInjected(unnamed, TNameService.NameString);
+  named := fContainer.Resolve<IPropertyInjection>('second');
+  CheckInjected(named, TAnotherNameService.NameString);
+end;
+
+procedure TTestPropertyInjection.RegistrationOverridesAttribute;
+var
+  attribute: IPropertyInjection;
+  explicit: IPropertyInjection;
+begin
+  fContainer.RegisterType<IPropertyInjection, TParentWithAttributeInjection>;
+  fContainer.RegisterType<IPropertyInjection, TParentWithAttributeInjection>('second')
+    .InjectProperty('Service', 'another');
+  fContainer.Build;
+  attribute := fContainer.Resolve<IPropertyInjection>;
+  CheckInjected(attribute, TNameService.NameString);
+  explicit := fContainer.Resolve<IPropertyInjection>('second');
+  CheckInjected(explicit, TAnotherNameService.NameString);
+end;
+
+procedure TTestPropertyInjection.HidingPropertyIsNotDeduped;
+var
+  instance: IPropertyInjectionHiding;
+begin
+  fContainer.RegisterType<IPropertyInjectionHiding, TPropertyInjectionHidingChild>;
+  fContainer.Build;
+  instance := fContainer.Resolve<IPropertyInjectionHiding>;
+  CheckInjected(instance, TNameService.NameString);
+  CheckNotNull(instance.HiddenService);
+  CheckEquals(TAnotherNameService.NameString, instance.HiddenService.Name);
+end;
+
+procedure TTestPropertyInjection.SecondInjectPropertyOverrides;
+var
+  instance: IPropertyInjection;
+begin
+  fContainer.RegisterType<INameService, TNameService>('default');
+  fContainer.RegisterType<IPropertyInjection, TChild>('first')
+    .InjectProperty('Service', 'default')
+    .InjectProperty('Service', 'another');
+  fContainer.Build;
+  instance := fContainer.Resolve<IPropertyInjection>('first');
+  CheckInjected(instance, TAnotherNameService.NameString);
 end;
 
 {$ENDREGION}

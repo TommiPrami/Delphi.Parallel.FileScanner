@@ -96,6 +96,20 @@ function SplitString(const buffer: PChar; len: Integer; const separators: TSysCh
 function SplitString(const buffer: PChar): TStringDynArray; overload;
 
 /// <summary>
+///   Returns a string that contains the strings in the values array, each one
+///   delimited by a null char (#0) and ending with an additional null char.
+/// </summary>
+/// <remarks>
+///   This is the counterpart to <c>SplitString</c> and produces a multi-string
+///   as used by several Win32 APIs (e.g. dropped files, environment blocks,
+///   REG_MULTI_SZ). The returned string is null-terminated and for an empty
+///   array is an empty string. Empty entries and entries containing a null
+///   char are not representable in this format and raise an
+///   <see cref="EArgumentException" />.
+/// </remarks>
+function JoinStrings(const values: array of string): string;
+
+/// <summary>
 ///   Converts a string to a TDateTime value using the specified format, with a
 ///   Boolean success code.
 /// </summary>
@@ -206,6 +220,29 @@ begin
     p := StrEnd(P);
     Inc(p);
     Inc(i);
+  end;
+end;
+
+function JoinStrings(const values: array of string): string;
+var
+  i, len: Integer;
+  p: PChar;
+begin
+  len := 0;
+  for i := Low(values) to High(values) do
+  begin
+    Guard.CheckTrue(values[i] <> '', 'values must not be empty');
+    Guard.CheckTrue(Pos(#0, values[i]) = 0, 'values must not contain null characters');
+    Inc(len, Length(values[i]) + 1);
+  end;
+  SetLength(Result, len);
+  p := Pointer(Result);
+  for i := Low(values) to High(values) do
+  begin
+    Move(Pointer(values[i])^, p^, Length(values[i]) * SizeOf(Char));
+    Inc(p, Length(values[i]));
+    p^ := #0;
+    Inc(p);
   end;
 end;
 

@@ -164,6 +164,7 @@ uses
   TypInfo,
   Spring.Collections.Lists,
   Spring.Comparers,
+  Spring.Container.Common,
   Spring.Container.CreationContext,
   Spring.Container.ResourceStrings,
   Spring.Reflection;
@@ -272,9 +273,6 @@ end;
 
 function TDependencyResolver.CanResolve(const context: ICreationContext;
   const dependency: TDependencyModel; const argument: TValue): Boolean;
-var
-  serviceName: string;
-  componentModel: TComponentModel;
 begin
   if dependency.TypeInfo = nil then
     Exit(True);
@@ -293,16 +291,8 @@ begin
   else if TValueData(argument).FTypeInfo = TypeInfo(TDynArrayMarker) then
     Result := Kernel.Registry.HasService(dependency.TypeInfo)
   else
-  begin
-    Result := argument.IsString;
-    if Result then
-    begin
-      serviceName := argument.AsString;
-      componentModel := Kernel.Registry.FindOne(serviceName);
-      Result := Assigned(componentModel)
-        and IsAssignableFromRelaxed(dependency.TypeInfo, componentModel.Services[serviceName]);
-    end;
-  end;
+    Result := argument.IsString
+      and Assigned(Kernel.Registry.FindOne(dependency.TypeInfo, argument.AsString));
 end;
 
 function TDependencyResolver.Resolve(const context: ICreationContext;
@@ -468,7 +458,11 @@ begin
   if Kernel.Registry.HasService(targetType.Handle) then
   begin
     componentModel := Kernel.Registry.FindOne(targetType.Handle, argument);
-    hasEntered := context.EnterResolution(componentModel, Result);
+    if componentModel.LifetimeType in [TLifetimeType.Singleton,
+      TLifetimeType.PerResolve, TLifetimeType.SingletonPerThread] then
+      hasEntered := False
+    else
+      hasEntered := context.EnterResolution(componentModel, Result);
   end
   else
   begin

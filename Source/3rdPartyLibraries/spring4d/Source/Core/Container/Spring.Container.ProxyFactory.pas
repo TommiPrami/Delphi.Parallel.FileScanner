@@ -120,7 +120,8 @@ begin
     if Assigned(interceptorRef.TypeInfo) then
       interceptor := (fKernel as IKernelInternal).Resolve(interceptorRef.TypeInfo)
     else
-      interceptor := (fKernel as IKernelInternal).Resolve(interceptorRef.Name);
+      interceptor := (fKernel as IKernelInternal).Resolve(
+        TypeInfo(IInterceptor), interceptorRef.Name);
     interceptors.Add(interceptor.AsInterface as IInterceptor);
   end;
   Result := interceptors.ToArray;

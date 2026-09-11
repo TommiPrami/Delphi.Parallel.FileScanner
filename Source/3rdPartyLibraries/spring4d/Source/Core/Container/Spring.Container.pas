@@ -125,6 +125,11 @@ type
     function Resolve(serviceType: PTypeInfo): TValue; overload;
     function Resolve(serviceType: PTypeInfo;
       const arguments: array of TValue): TValue; overload;
+    function Resolve(serviceType: PTypeInfo;
+      const serviceName: string): TValue; overload;
+    function Resolve(serviceType: PTypeInfo;
+      const serviceName: string;
+      const arguments: array of TValue): TValue; overload;
     function Resolve(const serviceName: string): TValue; overload;
     function Resolve(const serviceName: string;
       const arguments: array of TValue): TValue; overload;
@@ -518,7 +523,7 @@ function TContainer.Resolve<T>(const serviceName: string): T;
 var
   value: TValue;
 begin
-  value := Resolve(serviceName, []);
+  value := Resolve(TypeInfo(T), serviceName);
   value.AsTypeRelaxed(TypeInfo(T), Result);
 end;
 
@@ -527,7 +532,7 @@ function TContainer.Resolve<T>(const serviceName: string;
 var
   value: TValue;
 begin
-  value := Resolve(serviceName, arguments);
+  value := Resolve(TypeInfo(T), serviceName, arguments);
   value.AsTypeRelaxed(TypeInfo(T), Result);
 end;
 
@@ -549,6 +554,30 @@ begin
   targetType := serviceType.RttiType;
   Result := Resolver.Resolve(
     context, TDependencyModel.Create(targetType, nil), nil);
+end;
+
+function TContainer.Resolve(serviceType: PTypeInfo;
+  const serviceName: string): TValue;
+begin
+  Result := Resolve(serviceType, serviceName, []);
+end;
+
+function TContainer.Resolve(serviceType: PTypeInfo;
+  const serviceName: string;
+  const arguments: array of TValue): TValue;
+var
+  componentModel: TComponentModel;
+  context: ICreationContext;
+  targetType: TRttiType;
+begin
+  CheckBuildRequired;
+  componentModel := Registry.FindOne(serviceType, serviceName);
+  if not Assigned(componentModel) then
+    raise EResolveException.CreateResFmt(@SServiceNotFound, [serviceName]);
+  context := TCreationContext.Create(componentModel, arguments);
+  targetType := serviceType.RttiType;
+  Result := Resolver.Resolve(
+    context, TDependencyModel.Create(targetType, nil), serviceName);
 end;
 
 function TContainer.Resolve(const serviceName: string): TValue;
@@ -654,10 +683,10 @@ begin
   Result := fContainer.Resolve(serviceType);
 end;
 
-function TServiceLocatorAdapter.GetService(serviceType: PTypeInfo; //FI:O804
+function TServiceLocatorAdapter.GetService(serviceType: PTypeInfo;
   const serviceName: string): TValue;
 begin
-  Result := fContainer.Resolve({serviceType, }serviceName);
+  Result := fContainer.Resolve(serviceType, serviceName);
 end;
 
 function TServiceLocatorAdapter.GetService(serviceType: PTypeInfo;
@@ -666,10 +695,10 @@ begin
   Result := fContainer.Resolve(serviceType, args);
 end;
 
-function TServiceLocatorAdapter.GetService(serviceType: PTypeInfo; //FI:O804
+function TServiceLocatorAdapter.GetService(serviceType: PTypeInfo;
   const serviceName: string; const args: array of TValue): TValue;
 begin
-  Result := fContainer.Resolve({serviceType, }serviceName, args);
+  Result := fContainer.Resolve(serviceType, serviceName, args);
 end;
 
 function TServiceLocatorAdapter.GetAllServices(serviceType: PTypeInfo): TArray<TValue>;

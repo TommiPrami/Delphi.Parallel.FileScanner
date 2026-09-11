@@ -186,9 +186,10 @@ begin
   InitializeLeakCheck;
 {$ENDIF}
 
+  ReportMemoryLeaksOnShutdown := True;
+
 {$IFDEF TESTINSIGHT}
   TestInsight.DUnit.RunRegisteredTests;
-  ReportMemoryLeaksOnShutdown := True;
 {$ELSE}
   {$IFDEF MSWINDOWS}
   if ParamCount > 0 then

@@ -403,14 +403,17 @@ begin
   condition := TPropertyFilters.IsInvokable
     and TPropertyFilters.HasAttribute(InjectAttribute);
   for prop in model.ComponentType.Properties.Where(condition) do
-  begin
-    if not model.PropertyInjections.TryGetFirst(injection,
-      TInjectionFilters.ContainsMember(prop)) then
-      injection := kernel.Injector.InjectProperty(model, prop.Name);
-    injection.Initialize(prop);
-    HandleInjectAttribute(prop, injection.Dependencies[0], argument);
-    injection.InitializeArguments([argument]);
-  end;
+    if not model.PropertyInjections.Any(TInjectionFilters.TargetsSameProperty(prop)) then
+    begin
+      // Inject directly instead of via Injector.InjectProperty: the latter resolves
+      // the property by name to the most-derived declaration, which would target the
+      // wrong member when a descendant hides a property with a new declaration.
+      injection := TPropertyInjection.Create(prop.Name);
+      model.PropertyInjections.Add(injection);
+      injection.Initialize(prop);
+      HandleInjectAttribute(prop, injection.Dependencies[0], argument);
+      injection.InitializeArguments([argument]);
+    end;
 end;
 
 {$ENDREGION}

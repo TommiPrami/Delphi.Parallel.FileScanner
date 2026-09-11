@@ -944,7 +944,7 @@ end;
 procedure GetDroppedFiles(dropHandle: THandle; list: TStrings);
 var
   count, size, i: Integer;
-  fileName: array[0..MAX_PATH] of Char;
+  fileName: string;
 const
   f: tagFORMATETC = (
     cfFormat: CF_HDROP;
@@ -960,8 +960,9 @@ begin
   try
     for i := 0 to count - 1 do
     begin
-      size := DragQueryFile(dropHandle, i, nil, 0) + 1;
-      DragQueryFile(dropHandle, i, fileName, size);
+      size := DragQueryFile(dropHandle, i, nil, 0);
+      SetLength(fileName, size);
+      DragQueryFile(dropHandle, i, PChar(fileName), size + 1);
       list.Add(fileName);
     end;
   finally

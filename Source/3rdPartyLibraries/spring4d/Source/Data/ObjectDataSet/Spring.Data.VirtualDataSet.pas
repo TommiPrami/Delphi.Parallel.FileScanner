@@ -705,7 +705,7 @@ var
           TempBuff := TEncoding.Default.GetBytes(string(tagVariant(Data).pcVal))
         else
           TempBuff := TEncoding.Default.GetBytes(string(tagVariant(Data).bStrVal));
-        Move(TempBuff[0], Buffer[0], Length(TempBuff));
+        Move(TempBuff[0], Buffer[0], Min(Length(TempBuff), Field.Size));
         PAnsiChar(Buffer)[Min(Field.Size, Length(TempBuff))] := #0;
       end;
       ftFixedWideChar, ftWideString:
@@ -714,6 +714,8 @@ var
           TempBuff := TEncoding.Unicode.GetBytes(tagVariant(Data).bstrVal)
         else
           TempBuff := TEncoding.Unicode.GetBytes(string(Data));
+        if Length(TempBuff) > Field.Size * SizeOf(Char) then
+          SetLength(TempBuff, Field.Size * SizeOf(Char));
         SetLength(TempBuff, Length(TempBuff) + SizeOf(Char));
         TempBuff[Length(TempBuff) - 2] := 0;
         TempBuff[Length(TempBuff) - 1] := 0;
@@ -811,7 +813,7 @@ var
       begin
         PAnsiChar(Buffer)[Field.Size] := #0;
         TempBuff := TEncoding.Default.GetBytes(string(tagVariant(Data).bStrVal));
-        Move(TempBuff[0], PByte(Buffer)[0], Length(TempBuff));
+        Move(TempBuff[0], PByte(Buffer)[0], Min(Length(TempBuff), Field.Size));
         PAnsiChar(Buffer)[Min(Field.Size, Length(TempBuff))] := #0;
       end;
       ftFixedWideChar, ftWideString:
@@ -820,6 +822,8 @@ var
           TempBuff := TEncoding.Unicode.GetBytes(tagVariant(Data).bstrVal)
         else
           TempBuff := TEncoding.Unicode.GetBytes(string(Data));
+        if Length(TempBuff) > Field.Size * SizeOf(Char) then
+          SetLength(TempBuff, Field.Size * SizeOf(Char));
         SetLength(TempBuff, Length(TempBuff) + SizeOf(Char));
         TempBuff[Length(TempBuff) - 2] := 0;
         TempBuff[Length(TempBuff) - 1] := 0;
@@ -1418,7 +1422,8 @@ begin
 
     if not fModifiedFields.Contains(Field) then
     begin
-      PRecordBufferData(fOldValueBuffer).Values[Field.Index] := Field.OldValue;
+      if Pointer(fOldValueBuffer) <> nil then
+        PRecordBufferData(fOldValueBuffer).Values[Field.Index] := Field.OldValue;
       fModifiedFields.Add(Field);
     end;
   end;
@@ -1446,7 +1451,8 @@ begin
 
     if not fModifiedFields.Contains(field) then
     begin
-      PRecordBufferData(fOldValueBuffer).Values[field.Index] := field.OldValue;
+      if Pointer(fOldValueBuffer) <> nil then
+        PRecordBufferData(fOldValueBuffer).Values[field.Index] := field.OldValue;
       fModifiedFields.Add(field);
     end;
   end;

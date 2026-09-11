@@ -29,11 +29,18 @@ unit Spring.Tests.Utils;
 interface
 
 uses
+  Classes,
+  SysUtils,
   TypInfo,
   Types,
-  SysUtils,
+{$IFDEF MSWINDOWS}
+  ShlObj,
+  Windows,
+{$ENDIF}
   TestFramework,
   Spring,
+  Spring.SystemUtils,
+  Spring.Testing,
   Spring.Utils,
   Spring.Utils.IO;
 
@@ -61,6 +68,19 @@ type
     ///   and value, basically test that we convert encoding correctly.
     /// </summary>
     procedure TestSetEnvironmentVariableRegional;
+  end;
+
+
+  TTestGetDroppedFiles = class(TTestCase)
+  private
+    function CreateDropHandle(const paths: array of string): THandle;
+  {$IFDEF MSWINDOWS}
+  published
+  {$ENDIF}
+    [TestCase('[C:\foo.txt, C:\b'#$00E4'r.txt]')]
+    [TestCase('[]')]
+    procedure TestGetDroppedFiles(const paths: TArray<string>);
+    procedure TestLongPath;
   end;
 
 implementation
@@ -220,5 +240,65 @@ end;
 
 {$ENDREGION}
 
+
+{$REGION 'TTestGetDroppedFiles'}
+
+function TTestGetDroppedFiles.CreateDropHandle(const paths: array of string): THandle;
+var
+  fileList: string;
+  p: PByte;
+  header: DROPFILES;
+begin
+  fileList := JoinStrings(paths);
+  Result := GlobalAlloc(GMEM_MOVEABLE or GMEM_ZEROINIT,
+    SizeOf(DROPFILES) + (Length(fileList) + 1) * SizeOf(Char));
+  p := GlobalLock(Result);
+  try
+    header.pFiles := SizeOf(DROPFILES);
+    header.fWide := True;
+    Move(header, p^, SizeOf(DROPFILES));
+    Move(PChar(fileList)^, p[SizeOf(DROPFILES)], (Length(fileList) + 1) * SizeOf(Char));
+  finally
+    GlobalUnlock(Result);
+  end;
+end;
+
+procedure TTestGetDroppedFiles.TestGetDroppedFiles(const paths: TArray<string>);
+var
+  dropHandle: THandle;
+  files: TStringList;
+  i: Integer;
+begin
+  dropHandle := CreateDropHandle(paths);
+  files := TStringList.Create;
+  try
+    GetDroppedFiles(dropHandle, files);
+    CheckEquals(Length(paths), files.Count);
+    for i := 0 to High(paths) do
+      CheckEquals(paths[i], files[i]);
+  finally
+    files.Free;
+  end;
+end;
+
+procedure TTestGetDroppedFiles.TestLongPath;
+var
+  dropHandle: THandle;
+  path: string;
+  files: TStringList;
+begin
+  path := 'C:\' + StringOfChar('x', 300) + '.txt';
+  dropHandle := CreateDropHandle([path]);
+  files := TStringList.Create;
+  try
+    GetDroppedFiles(dropHandle, files);
+    CheckEquals(1, files.Count);
+    CheckEquals(path, files[0]);
+  finally
+    files.Free;
+  end;
+end;
+
+{$ENDREGION}
 
 end.

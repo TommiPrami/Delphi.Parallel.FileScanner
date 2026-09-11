@@ -408,12 +408,8 @@ begin
     if Assigned(fPerResolveInstances) and fPerResolveInstances.TryGetValue(model, instance) then
       Exit;
     if Assigned(fResolutionStack) and fResolutionStack.Contains(model) then
-      if model.LifetimeType in [TLifetimeType.Singleton,
-        TLifetimeType.PerResolve, TLifetimeType.SingletonPerThread] then
-        Exit
-      else
-        raise ECircularDependencyException.CreateResFmt(
-          @SCircularDependencyDetected, [model.ComponentTypeName]);
+      raise ECircularDependencyException.CreateResFmt(
+        @SCircularDependencyDetected, [model.ComponentTypeName]);
     if not Assigned(fResolutionStack) then
       fResolutionStack := TCollections.CreateStack<TComponentModel>;
     fResolutionStack.Push(model);

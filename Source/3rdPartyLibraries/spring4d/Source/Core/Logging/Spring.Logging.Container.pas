@@ -198,7 +198,7 @@ begin
   end;
 
   Assert(Assigned(handle));
-  Result := (Kernel as IKernelInternal).Resolve(fConfiguration.GetLogger(handle));
+  Result := (Kernel as IKernelInternal).Resolve(TypeInfo(ILogger), fConfiguration.GetLogger(handle));
 end;
 
 {$ENDREGION}

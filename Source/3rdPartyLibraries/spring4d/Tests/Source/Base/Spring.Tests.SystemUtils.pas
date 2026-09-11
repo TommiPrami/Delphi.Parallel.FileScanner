@@ -30,7 +30,9 @@ uses
   SysUtils,
   TestFramework,
   Spring,
-  Spring.SystemUtils;
+  Spring.SystemUtils,
+  Spring.Testing,
+  Spring.TestUtils;
 
 type
   TTestSplitString = class(TTestCase)
@@ -66,6 +68,21 @@ type
     procedure TestOneEntry;
     procedure TestThreeEntries;
     procedure TestVariousStrings;
+  end;
+
+  TTestJoinStrings = class(TTestCase)
+  published
+    [TestCase('[]')]
+    [TestCase('[C:]')]
+    [TestCase('[C:,D:,E:]')]
+    [TestCase('[ABC,DE,F]')]
+    [TestCase('[a]')]
+    [TestCase('[a,b,c]')]
+    [TestCase('[1,2,3,4,5,6,7,8,9,10]')]
+    procedure TestRoundTrip(const values: TArray<string>);
+    procedure TestExactContent;
+    procedure TestEmptyEntry;
+    procedure TestEmbeddedNullRejected;
   end;
 
 implementation
@@ -217,6 +234,42 @@ begin
   CheckEquals('ABC', fStrings[0]);
   CheckEquals('DE', fStrings[1]);
   CheckEquals('F', fStrings[2]);
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TTestJoinStrings'}
+
+procedure TTestJoinStrings.TestRoundTrip(const values: TArray<string>);
+var
+  roundTrip: TStringDynArray;
+  i: Integer;
+begin
+  roundTrip := SplitString(PChar(JoinStrings(values)));
+  CheckEquals(Length(values), Length(roundTrip));
+  for i := 0 to High(values) do
+    CheckEquals(values[i], roundTrip[i]);
+end;
+
+procedure TTestJoinStrings.TestExactContent;
+begin
+  CheckEquals('', JoinStrings([]));
+  CheckEquals('C:'#0, JoinStrings(['C:']));
+  CheckEquals('C:'#0'D:'#0'E:'#0, JoinStrings(['C:', 'D:', 'E:']));
+end;
+
+procedure TTestJoinStrings.TestEmptyEntry;
+begin
+  CheckException(EArgumentException, procedure begin JoinStrings(['']); end);
+  CheckException(EArgumentException, procedure begin JoinStrings(['a', '', 'b']); end);
+  CheckException(EArgumentException, procedure begin JoinStrings(['a', 'b', '']); end);
+end;
+
+procedure TTestJoinStrings.TestEmbeddedNullRejected;
+begin
+  CheckException(EArgumentException, procedure begin JoinStrings(['a'#0'b']); end);
+  CheckException(EArgumentException, procedure begin JoinStrings(['a', 'b'#0'c', 'd']); end);
 end;
 
 {$ENDREGION}

@@ -396,6 +396,65 @@ type
   {$ENDREGION}
 
 
+  {$REGION 'Inherited Property Injection'}
+
+  IPropertyInjection = interface
+    ['{A3662B6F-8013-4CED-A4FD-0D2CF5ADA744}']
+    function GetService: INameService;
+    property Service: INameService read GetService;
+  end;
+
+  TParentWithAttributeInjection = class(TInterfacedObject, IPropertyInjection)
+  private
+    fService: INameService;
+  public
+    function GetService: INameService;
+    [Inject]
+    property Service: INameService read fService write fService;
+  end;
+
+  TChildWithAttributeInjection = class(TParentWithAttributeInjection)
+  public
+    [Inject('another')]
+    property Service;
+  end;
+
+  TChildWithAttributeParent = class(TParentWithAttributeInjection)
+  public
+    property Service;
+  end;
+
+  TParent = class(TInterfacedObject, IPropertyInjection)
+  private
+    fService: INameService;
+  public
+    function GetService: INameService;
+    property Service: INameService read fService write fService;
+  end;
+
+  TChild = class(TParent)
+  public
+    property Service;
+  end;
+
+  IPropertyInjectionHiding = interface(IPropertyInjection)
+    ['{52014123-D48C-4643-9D3B-D4314C07C50F}']
+    function GetHiddenService: INameService;
+    property HiddenService: INameService read GetHiddenService;
+  end;
+
+  TPropertyInjectionHidingChild = class(TParentWithAttributeInjection, IPropertyInjectionHiding)
+  private
+    fHiddenService: INameService;
+  public
+    function GetHiddenService: INameService;
+    [Inject('another')]
+    property Service: INameService read fHiddenService write fHiddenService;
+  end;
+
+  {$ENDREGION}
+
+
   {$REGION 'Non-Guid Interface Services and Implementations'}
 
   INonGuid = interface
@@ -713,6 +772,27 @@ end;
 function TPrimitiveComponent.GetStringArg: string;
 begin
   Result := fStringArg;
+end;
+
+{ TParentWithAttributeInjection }
+
+function TParentWithAttributeInjection.GetService: INameService;
+begin
+  Result := fService;
+end;
+
+{ TParent }
+
+function TParent.GetService: INameService;
+begin
+  Result := fService;
+end;
+
+{ TPropertyInjectionHidingChild }
+
+function TPropertyInjectionHidingChild.GetHiddenService: INameService;
+begin
+  Result := fHiddenService;
 end;
 
 { TInjectionExplorer }

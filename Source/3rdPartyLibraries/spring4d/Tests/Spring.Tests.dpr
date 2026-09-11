@@ -54,6 +54,7 @@ uses
   Spring.Tests.Interception.Types in 'Source\Core\Spring.Tests.Interception.Types.pas',
   Spring.Tests.Mocking in 'Source\Core\Spring.Tests.Mocking.pas',
   Spring.Tests.Pool in 'Source\Core\Spring.Tests.Pool.pas',
+  Spring.Tests.VirtualDataSet in 'Source\Data\Spring.Tests.VirtualDataSet.pas',
   Spring.Tests.Cryptography in 'Source\Extensions\Spring.Tests.Cryptography.pas',
   Spring.Tests.Testing in 'Source\Spring.Tests.Testing.pas',
   Spring.Tests.Utils in 'Source\Extensions\Spring.Tests.Utils.pas',

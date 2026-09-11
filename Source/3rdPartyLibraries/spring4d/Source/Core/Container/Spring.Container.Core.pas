@@ -82,6 +82,11 @@ type
     function Resolve(serviceType: PTypeInfo): TValue; overload;
     function Resolve(serviceType: PTypeInfo;
       const arguments: array of TValue): TValue; overload;
+    function Resolve(serviceType: PTypeInfo;
+      const serviceName: string): TValue; overload;
+    function Resolve(serviceType: PTypeInfo;
+      const serviceName: string;
+      const arguments: array of TValue): TValue; overload;
     function Resolve(const serviceName: string): TValue; overload;
     function Resolve(const serviceName: string;
       const arguments: array of TValue): TValue; overload;
@@ -130,6 +135,8 @@ type
     function FindOne(componentType: PTypeInfo): TComponentModel; overload;
     function FindOne(const serviceName: string): TComponentModel; overload;
     function FindOne(serviceType: PTypeInfo; const argument: TValue): TComponentModel; overload;
+    function FindOne(serviceType: PTypeInfo;
+      const serviceName: string): TComponentModel; overload;
     function FindDefault(serviceType: PTypeInfo): TComponentModel;
     function FindAll: IEnumerable<TComponentModel>; overload;
     function FindAll(serviceType: PTypeInfo): IEnumerable<TComponentModel>; overload;
@@ -358,7 +365,7 @@ type
     fMinPoolsize: Integer;
     fMaxPoolsize: Integer;
     fRefCounting: TRefCounting;
-    fServices: IDictionary<string, PTypeInfo>;
+    fServices: IMultiMap<string, PTypeInfo>;
     fConstructorInjections: IInjectionList;
     fMethodInjections: IInjectionList;
     fPropertyInjections: IInjectionList;
@@ -380,7 +387,7 @@ type
     property ComponentType: TRttiType read fComponentType;
     property ComponentTypeInfo: PTypeInfo read GetComponentTypeInfo;
     property ComponentTypeName: string read GetComponentTypeName;
-    property Services: IDictionary<string, PTypeInfo> read fServices;
+    property Services: IMultiMap<string, PTypeInfo> read fServices;
     property MinPoolsize: Integer read fMinPoolsize write fMinPoolsize;
     property MaxPoolsize: Integer read fMaxPoolsize write fMaxPoolsize;
     property RefCounting: TRefCounting read fRefCounting write SetRefCounting;
@@ -454,9 +461,18 @@ type
     function IsSatisfiedBy(const injection: IInjection): Boolean;
   end;
 
+  TTargetsSamePropertyFilter = class(TRefCountedObject, ISpecification<IInjection>)
+  private
+    fProperty: TRttiInstanceProperty;
+  public
+    constructor Create(const prop: TRttiProperty);
+    function IsSatisfiedBy(const injection: IInjection): Boolean;
+  end;
+
   TInjectionFilters = class
   public
     class function ContainsMember(const member: TRttiMember): Specification<IInjection>;
+    class function TargetsSameProperty(const prop: TRttiProperty): Specification<IInjection>;
     class function IsInjectableMethod(const kernel: TKernel;
       const model: TComponentModel;
       const arguments: TArray<TValue>): Specification<TRttiMethod>;
@@ -572,7 +588,7 @@ constructor TComponentModel.Create(const componentType: TRttiType);
 begin
   inherited Create;
   fComponentType := componentType;
-  fServices := TCollections.CreateDictionary<string, PTypeInfo>;
+  fServices := TCollections.CreateMultiMap<string, PTypeInfo>;
   fConstructorInjections := TCollections.CreateInterfaceList<IInjection>;
   fMethodInjections := TCollections.CreateInterfaceList<IInjection>;
   fPropertyInjections := TCollections.CreateInterfaceList<IInjection>;
@@ -603,7 +619,7 @@ end;
 
 function TComponentModel.GetServiceType(const serviceName: string): PTypeInfo;
 begin
-  Result := fServices[serviceName];
+  Result := fServices[serviceName].FirstOrDefault;
 end;
 
 function TComponentModel.HasService(serviceType: PTypeInfo): Boolean;
@@ -756,12 +772,40 @@ end;
 {$ENDREGION}
 
 
+{$REGION 'TTargetsSamePropertyFilter'}
+
+constructor TTargetsSamePropertyFilter.Create(const prop: TRttiProperty);
+begin
+  inherited Create;
+  if prop is TRttiInstanceProperty then
+    fProperty := TRttiInstanceProperty(prop);
+end;
+
+function TTargetsSamePropertyFilter.IsSatisfiedBy(
+  const injection: IInjection): Boolean;
+begin
+  Result := Assigned(fProperty)
+    and (injection.Target is TRttiInstanceProperty)
+    and injection.Target.HasName(fProperty.Name)
+    and (TRttiInstanceProperty(injection.Target).PropInfo.GetProc = fProperty.PropInfo.GetProc)
+    and (TRttiInstanceProperty(injection.Target).PropInfo.SetProc = fProperty.PropInfo.SetProc);
+end;
+
+{$ENDREGION}
+
+
 {$REGION 'TInjectionFilters'}
 
 class function TInjectionFilters.ContainsMember(
   const member: TRttiMember): Specification<IInjection>;
 begin
   Result := TContainsMemberFilter.Create(member);
+end;
+
+class function TInjectionFilters.TargetsSameProperty(
+  const prop: TRttiProperty): Specification<IInjection>;
+begin
+  Result := TTargetsSamePropertyFilter.Create(prop);
 end;
 
 class function TInjectionFilters.IsInjectableMethod(const kernel: TKernel;

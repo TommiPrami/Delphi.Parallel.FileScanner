@@ -54,7 +54,8 @@ uses
   Spring.Tests.Pool,
   Spring.Tests.Testing,
   Spring.Tests.Utils,
-  Spring.Tests.Cryptography;
+  Spring.Tests.Cryptography,
+  Spring.Tests.VirtualDataSet;
 
 procedure RegisterTestCases;
 type
@@ -285,7 +286,8 @@ begin
     RegisterTests('Spring.Base.SystemUtils', [
       TTestSplitString.Suite,
       TTestTryStrToDateTimeFmt.Suite,
-      TTestSplitNullTerminatedStrings.Suite
+      TTestSplitNullTerminatedStrings.Suite,
+      TTestJoinStrings.Suite
     ]);
   end;
 
@@ -330,6 +332,7 @@ begin
       TTestRefCounting.Suite,
       TTestDefaultResolve.Suite,
       TTestInjectionByValue.Suite,
+      TTestPropertyInjection.Suite,
       TTestObjectPool.Suite,
       TTestResolverOverride.Suite,
       TTestRegisterInterfaceTypes.Suite,
@@ -370,7 +373,8 @@ begin
   begin
     RegisterTests('Spring.Extensions.Utils', [
       TTestVersion.Suite,
-      TTestEnvironment.Suite
+      TTestEnvironment.Suite,
+      TTestGetDroppedFiles.Suite
     ]);
 
     RegisterTests('Spring.Extensions.Cryptography', [
@@ -388,6 +392,10 @@ begin
       TTestPaddingModeIsISO10126.Suite,
       TTestDES.Suite,
       TTestTripleDES.Suite
+    ]);
+
+    RegisterTests('Spring.Data.VirtualDataSet', [
+      TTestVirtualDataSetBufferBounds.Suite
     ]);
 
     RegisterTests('Spring.Testing', [

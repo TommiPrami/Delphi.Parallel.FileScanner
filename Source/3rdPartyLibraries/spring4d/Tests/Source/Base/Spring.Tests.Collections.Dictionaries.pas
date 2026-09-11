@@ -185,12 +185,6 @@ type
     procedure SetUp; override;
   end;
 
-  TOwnedValue = class(TObject)
-  public
-    class var DestroyCount: Integer;
-    destructor Destroy; override;
-  end;
-
   TTestDictionaryOwnershipBase = class(TTestCase)
   protected
     class function CreateOwnedKeysDict: IDictionary<TObject, Integer>; virtual; abstract;
@@ -278,6 +272,19 @@ implementation
 
 uses
   SysUtils;
+
+type
+  TOwnedValue = class(TObject)
+  public
+    class var DestroyCount: Integer;
+    destructor Destroy; override;
+  end;
+
+destructor TOwnedValue.Destroy;
+begin
+  Inc(DestroyCount);
+  inherited Destroy;
+end;
 
 
 {$REGION 'TTestDictionaryKeyComparerBase'}
@@ -1478,12 +1485,6 @@ end;
 
 
 {$REGION 'TTestDictionaryOwnershipBase'}
-
-destructor TOwnedValue.Destroy;
-begin
-  Inc(DestroyCount);
-  inherited Destroy;
-end;
 
 procedure TTestDictionaryOwnershipBase.TestKeys;
 var

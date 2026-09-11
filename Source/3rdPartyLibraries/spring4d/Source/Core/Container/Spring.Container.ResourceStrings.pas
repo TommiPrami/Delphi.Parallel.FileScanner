@@ -36,6 +36,7 @@ resourcestring
   SUnsupportedFactoryType = 'Type does not contain RTTI: %s';
   SUnsupportedFactoryMethod = 'Type contains incompatible method: %s, %s';
   SDuplicateServiceName = 'Duplicate service name found: %s';
+  SAmbiguousServiceName = 'Ambiguous service name found: %s';
   SServiceNotFound = 'Service not found: %s';
   SCircularDependencyDetected = 'Circular dependency detected on type: %s';
   SCannotResolveType = 'Cannot resolve type: %s';
