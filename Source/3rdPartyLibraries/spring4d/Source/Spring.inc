@@ -30,7 +30,7 @@
 // (Delphi older than XE3).
 {$I jedi.inc}
 
-{$T-,X+,H+,B-}
+{$T-,X+,H+,B-,A+}
 {$INLINE ON}
 
 {$IFDEF DELPHIX_TOKYO_UP}

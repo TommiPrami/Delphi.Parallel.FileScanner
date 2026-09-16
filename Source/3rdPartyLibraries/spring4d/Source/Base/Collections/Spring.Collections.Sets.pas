@@ -319,7 +319,6 @@ begin
         IEnumeratorInternal(enumerator).GetCurrent(item)
       else{$ENDIF}
       item := enumerator.Current;
-      entry.HashCode := IEqualityComparer<T>(fHashTable.Comparer).GetHashCode(item);
       if fHashTable.FindEntry(item, entry) then
       begin
         index := NativeUInt(entry.ItemIndex);
@@ -432,7 +431,6 @@ function THashSet<T>.IndexOf(const key: T): Integer;
 var
   entry: THashTableEntry;
 begin
-  entry.HashCode := IEqualityComparer<T>(fHashTable.Comparer).GetHashCode(key);
   fHashTable.EnsureCompact;
   if fHashTable.FindEntry(key, entry) then
     Exit(entry.ItemIndex);
@@ -476,7 +474,6 @@ begin
         IEnumeratorInternal(enumerator).GetCurrent(current)
       else{$ENDIF}
       current := enumerator.Current;
-      entry.HashCode := IEqualityComparer<T>(fHashTable.Comparer).GetHashCode(current);
       if fHashTable.FindEntry(current, entry) then
       begin
         index := NativeUInt(entry.ItemIndex);

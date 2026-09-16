@@ -1642,7 +1642,9 @@ end;
 
 function TRangeIterator.Contains(const item: Integer): Boolean;
 begin
+  {$Q-}
   Result := Cardinal(item - fStart) < Cardinal(fCount);
+  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
 end;
 
 function TRangeIterator.CopyTo(var values: TArray<Integer>; index: Integer): Integer;
@@ -1708,9 +1710,8 @@ function TRangeIterator.IndexOf(const item: Integer; index,
 begin
   CheckRange(index, count, fCount);
 
-  if (item >= fStart) and (item <= fStart + fCount) then
-    Result := item - fStart
-  else
+  Result := item - fStart;
+  if (Result < index) or (Result >= index + count) then
     Result := -1;
 end;
 
@@ -1721,7 +1722,7 @@ end;
 
 function TRangeIterator.Max: Integer;
 begin
-  Result := fStart + fCount - 1;
+  Result := fStart + (fCount - 1);
 end;
 
 function TRangeIterator.Ordered: IEnumerable<Integer>;
@@ -2275,11 +2276,20 @@ function TGroupedEnumerable<TSource, TKey, TElement, TResult>.GetEnumerator: IEn
 var
   lookup: TLookup<TKey, TElement>;
   item: TSource;
+  grouping: TLookup<TKey, TElement>.TGrouping;
 begin
   // TODO: deferred execution ?
   lookup := TLookup<TKey, TElement>.Create(fComparer);
-  for item in fSource do
-    lookup.GetGrouping(fKeySelector(item), True).Add(fElementSelector(item));
+  try
+    for item in fSource do
+    begin
+      grouping := lookup.GetGrouping(fKeySelector(item), True);
+      grouping.Add(fElementSelector(item));
+    end;
+  except
+    lookup.Free;
+    raise;
+  end;
   Result := TEnumerator.Create(lookup.GetEnumerator, fResultSelector);
 end;
 

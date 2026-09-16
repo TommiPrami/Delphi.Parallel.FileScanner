@@ -28,6 +28,7 @@ interface
 
 uses
   DB,
+  TestFramework,
   Spring.Testing,
   Spring.Data.VirtualDataSet;
 
@@ -59,7 +60,6 @@ implementation
 
 uses
   SysUtils,
-  TestFramework,
   Spring.TestUtils;
 
 
@@ -123,7 +123,6 @@ begin
     end;
     field.FieldName := 'Name';
     field.DataSet := ds;
-    ds.FieldOptions.AutoCreateMode := acExclusive;
     ds.Active := True;
     ds.Append;
     ds.SetFieldValue(field, StringOfChar('A', 300));
@@ -155,7 +154,6 @@ begin
     field.FieldName := 'Name';
     field.Size := 10;
     field.DataSet := ds;
-    ds.FieldOptions.AutoCreateMode := acExclusive;
     ds.SetRecordCount(1);
     ds.Active := True;
     ds.First;

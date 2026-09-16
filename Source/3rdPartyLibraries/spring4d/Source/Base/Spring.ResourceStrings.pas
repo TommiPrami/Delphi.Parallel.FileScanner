@@ -122,6 +122,9 @@ resourcestring
 
   SInvalidOperation_EnumFailedVersion = 'Collection was modified; enumeration operation may not execute.';
 
+  SInvalidAutoInitFieldType = 'An AutoInit field must be of type IList<T>.';
+  SInvalidAutoInitElementType = 'An AutoInit field must contain an IList<T> whose element type is class or an interface, but the element type is %s.';
+
   {$ENDREGION}
 
 

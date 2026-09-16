@@ -43,27 +43,6 @@ uses
 {$IFDEF DELPHIXE6_UP}{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS(FieldVisibility)}{$ENDIF}
 
 type
-  IGroupingInternal<TKey, TElement> = interface(IGrouping<TKey, TElement>)
-    // IMPORTANT NOTICE:
-    // keep this in sync with ICollection<T> in Spring.Collections
-    // we are using some hack to keep their IMT indexes compatible
-    // GetOnChanged is replaced by GetKey in IGrouping
-    function Add(const item: TElement): Boolean;
-    procedure AddRange(const values: array of TElement); overload;
-    procedure AddRange(const values: IEnumerable<TElement>); overload;
-    function Extract(const item: TElement): TElement;
-    procedure Clear;
-    function MoveTo(const collection: ICollection<TElement>): Integer; overload;
-    function MoveTo(const collection: ICollection<TElement>;
-      const predicate: Predicate<TElement>): Integer; overload;
-    function Remove(const item: TElement): Boolean;
-    function RemoveAll(const predicate: Predicate<TElement>): Integer;
-    function RemoveRange(const values: array of TElement): Integer; overload;
-    function RemoveRange(const values: IEnumerable<TElement>): Integer; overload;
-    function ExtractAll: TArray<TElement>; overload;
-    function ExtractAll(const predicate: Predicate<TElement>): TArray<TElement>; overload;
-  end;
-
   TCollectionWrapper = class;
   TCollectionFactory = procedure (const key; const comparer: IInterface; elementType: PTypeInfo; var result);
   TUpdateValuesEvent = procedure(collection: TCollectionWrapper) of object;
@@ -778,7 +757,7 @@ begin
     else{$ENDIF}
     value := enumerator.Current;
     if Assigned(Notify) then
-      DoNotify(item.key, value, action);
+      DoNotify(item.Key, value, action);
     with fOnValueChanged do if CanInvoke then
       Invoke(Self, value, action);
     {$IFDEF DELPHIXE7_UP}
@@ -788,14 +767,14 @@ begin
       PObject(@value).Free;
   end;
   with fOnKeyChanged do if CanInvoke then
-    Invoke(Self, item.key, action);
+    Invoke(Self, item.Key, action);
   if action = caRemoved then
   begin
     {$IFDEF DELPHIXE7_UP}
     if GetTypeKind(TKey) = tkClass then
     {$ENDIF}
     if doOwnsKeys in fHashTable.Ownerships then
-      PObject(@item.key).Free;
+      PObject(@item.Key).Free;
     item.values.Clear;
   end;
 end;
@@ -825,20 +804,20 @@ begin
     Result := TList<TValue>.Create(valueType, IComparer<TValue>(comparer));
   end;
 
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   if fHashTable.FindEntry(key, entry) then
     DoRemove(entry, caExtracted, Result);
 end;
 
 function TMultiMap<TKey, TValue>.Extract(const key: TKey; const value: TValue): TKeyValuePair;
 var
+  entry: THashTableEntry;
   item: PItem;
   count, newCount: Integer;
 begin
   Result.Key := key;
-  item := IHashTable<TKey>(@fHashTable).Find(key);
-  if Assigned(item) then
+  if fHashTable.FindEntry(key, entry) then
   begin
+    item := @TItems(fHashTable.Items)[entry.ItemIndex];
     count := item.Values.Count;
     {$IFDEF MANAGED_TYPE_RVO}
     if IsManagedType(TValue) then
@@ -851,12 +830,18 @@ begin
     begin
       Dec(fCount);
       if Assigned(Notify) then
-        DoNotify(key, value, caExtracted);
+        DoNotify(item.Key, value, caExtracted);
       with fOnValueChanged do if CanInvoke then
         Invoke(Self, Result.Value, caExtracted);
       if newCount = 0 then
+      begin
         with fOnKeyChanged do if CanInvoke then
           Invoke(Self, item.Key, caExtracted);
+        fHashTable.DeleteEntry(entry);
+        item.HashCode := RemovedFlag;
+        item.Key := Default(TKey);
+        item.Values := nil;
+      end;
     end;
   end
   else
@@ -866,11 +851,21 @@ end;
 function TMultiMap<TKey, TValue>.ExtractAll(const key: TKey;
   const predicate: Predicate<TValue>): TArray<TValue>;
 var
+  entry: THashTableEntry;
   item: PItem;
 begin
-  item := IHashTable<TKey>(@fHashTable).Find(key);
-  if Assigned(item) then
-    Result := item.Values.ExtractAll(predicate)
+  if fHashTable.FindEntry(key, entry) then
+  begin
+    item := @TItems(fHashTable.Items)[entry.ItemIndex];
+    Result := DoExtractAll(@item.Key, predicate, fCount);
+    if item.Values.IsEmpty then
+    begin
+      fHashTable.DeleteEntry(entry);
+      item.HashCode := RemovedFlag;
+      item.Key := Default(TKey);
+      item.Values := nil;
+    end;
+  end
   else
     Result := nil;
 end;
@@ -925,7 +920,6 @@ var
   entry: THashTableEntry;
   item: PItem;
 begin
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   Result := fHashTable.FindEntry(key, entry);
   if not Result then Exit;
   item := @TItems(fHashTable.Items)[entry.ItemIndex];
@@ -956,7 +950,6 @@ function TMultiMap<TKey, TValue>.Remove(const key: TKey): Boolean;
 var
   entry: THashTableEntry;
 begin
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   Result := fHashTable.FindEntry(key, entry);
   if Result then
   begin
@@ -1330,7 +1323,11 @@ var
 begin
   node := Pointer(fTree.FindNode(key));
   if Assigned(node) then
-    Result := node.Values.ExtractAll(predicate)
+  begin
+    Result := DoExtractAll(@node.Key, predicate, fCount);
+    if node.Values.IsEmpty then
+      fTree.DeleteNode(Pointer(node));
+  end
   else
     Result := nil;
 end;

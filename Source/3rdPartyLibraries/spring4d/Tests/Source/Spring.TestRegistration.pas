@@ -164,7 +164,9 @@ begin
       TTestChunk.Suite,
 
       TTestCountBy.Suite,
-      TAggregateByTests.Suite
+      TAggregateByTests.Suite,
+
+      TTestAutoInitAttribute.Suite
     ]);
 
     RegisterTests('Spring.Base.Collections.Dictionaries', [

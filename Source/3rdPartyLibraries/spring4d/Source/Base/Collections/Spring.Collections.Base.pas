@@ -1132,10 +1132,36 @@ type
     procedure TrimExcess;
   end;
 
+  IGroupingInternal<TKey, TElement> = interface(IGrouping<TKey, TElement>)
+    // IMPORTANT NOTICE:
+    // keep this in sync with ICollection<T> in Spring.Collections
+    // we are using some hack to keep their IMT indexes compatible
+    // GetOnChanged is replaced by GetKey in IGrouping
+    function Add(const item: TElement): Boolean;
+    procedure AddRange(const values: array of TElement); overload;
+    procedure AddRange(const values: IEnumerable<TElement>); overload;
+    function Extract(const item: TElement): TElement;
+    procedure Clear;
+    function MoveTo(const collection: ICollection<TElement>): Integer; overload;
+    function MoveTo(const collection: ICollection<TElement>;
+      const predicate: Predicate<TElement>): Integer; overload;
+    function Remove(const item: TElement): Boolean;
+    function RemoveAll(const predicate: Predicate<TElement>): Integer;
+    function RemoveRange(const values: array of TElement): Integer; overload;
+    function RemoveRange(const values: IEnumerable<TElement>): Integer; overload;
+    function ExtractAll: TArray<TElement>; overload;
+    function ExtractAll(const predicate: Predicate<TElement>): TArray<TElement>; overload;
+  end;
+
   TMapBase<TKey, TValue> = class abstract(TCollectionBase<TPair<TKey, TValue>>)
   private type
     TKeyValuePair = TPair<TKey, TValue>;
     TKeyValuePairComparer = TPairComparer<TKey, TValue>;
+    TItem = packed record
+      Key: TKey;
+      Values: IGroupingInternal<TKey, TValue>;
+    end;
+    PItem = ^TItem;
     class function RemoveCurrentFromCollection(const enumerator: IEnumerator<TKey>; const collection: IMap<TKey, TValue>): Boolean; static;
   protected
     fOnKeyChanged: TCollectionChangedEventImpl<TKey>;
@@ -1147,6 +1173,8 @@ type
     function GetValueType: PTypeInfo;
   {$ENDREGION}
     procedure DoNotify(const key: TKey; const value: TValue; action: TCollectionChangedAction); overload;
+    function DoExtractAll(item: PItem; const predicate: Predicate<TValue>;
+      var count: Integer): TArray<TValue>;
     function AsReadOnly: IReadOnlyDictionary<TKey, TValue>;
   public
     procedure AfterConstruction; override;
@@ -4897,6 +4925,34 @@ begin
   Notify(Self, pair, action);
 end;
 
+function TMapBase<TKey, TValue>.DoExtractAll(item: PItem;
+  const predicate: Predicate<TValue>; var count: Integer): TArray<TValue>;
+var
+  value: ^TValue;
+  extractedCount, i: Integer;
+begin
+  Result := item.Values.ExtractAll(predicate);
+  value := Pointer(Result);
+  if Assigned(value) then
+  begin
+    {$POINTERMATH ON}
+    extractedCount := PNativeInt(value)[-1];
+    {$POINTERMATH OFF}
+    Dec(count, extractedCount);
+    for i := 1 to extractedCount do
+    begin
+      if Assigned(Notify) then
+        DoNotify(item.Key, value^, caExtracted);
+      with fOnValueChanged do if CanInvoke then
+        Invoke(Self, value^, caExtracted);
+      Inc(value);
+    end;
+    if item.Values.IsEmpty then
+      with fOnKeyChanged do if CanInvoke then
+        Invoke(Self, item.Key, caExtracted);
+  end;
+end;
+
 function TMapBase<TKey, TValue>.Add(const item: TKeyValuePair): Boolean;
 begin
   Result := IMap<TKey, TValue>(this).TryAdd(item.Key, item.Value);
@@ -6501,7 +6557,7 @@ begin
     end;
     TExtensionKind.Items:
     begin
-      if index < fCount then
+      if Cardinal(index) < Cardinal(fCount) then
       begin
         elSize := GetTypeInfoData(typeInfo).elSize;
         assign(value, PByte(fItems)[index*elSize]);
@@ -6527,7 +6583,7 @@ begin
           if fIndex = 0 then
           begin
             Dec(count, fCount);
-            if Cardinal(index) < Cardinal(count) then
+            if (count > 0) and (Cardinal(index) < Cardinal(count)) then
               Exit(IEnumerable<Pointer>(fSource).TryGetElementAt(Pointer(value), index));
           end
           else
@@ -6587,7 +6643,7 @@ begin
       Exit(False);
     end;
     TExtensionKind.Memoize:
-      if index < (fCount and CountMask) then
+      if Cardinal(index) < Cardinal(fCount and CountMask) then
       begin
         elSize := GetTypeInfoData(typeInfo).elSize;
         assign(value, PByte(fItems)[index*elSize]);
@@ -6688,7 +6744,7 @@ begin
       Exit(False);
     end;
     TExtensionKind.PartitionFromEnd:
-      if fIndex = 0 then
+      if (fIndex = 0) and (IEnumerable(fSource).GetNonEnumeratedCount > fCount) then
         Exit(IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value)));
     TExtensionKind.Distinct:
       Exit(IEnumerable<Pointer>(fSource).TryGetFirst(Pointer(value)));
@@ -6794,7 +6850,7 @@ end;
 
 function TEnumerableExtension.TryGetSpan(var span: Span<Pointer>): Boolean;
 var
-  index, count: NativeInt;
+  index, count, elSize: NativeInt;
 begin
   case fKind of
     TExtensionKind.Items:
@@ -6806,11 +6862,15 @@ begin
       if IEnumerable<Pointer>(fSource).TryGetSpan(span) then
       begin
         index := fIndex;
-        count := span.Length - index;
-        if NativeUInt(fCount) < NativeUInt(count) then
-          count := fCount;
-        span.Init(span[index], count);
-        Exit(True);
+        if NativeUInt(index) < NativeUInt(span.Length) then
+        begin
+          count := span.Length - index;
+          if NativeUInt(fCount) < NativeUInt(count) then
+            count := fCount;
+          elSize := GetTypeSize(fElementType);
+          span.Init(PByte(span.Data) + index * elSize, count);
+          Exit(True);
+        end;
       end;
   end;
   Result := False;
@@ -7081,6 +7141,8 @@ begin
   case fKind of
     TExtensionKind.Repeated:
     begin
+      if count = 0 then
+        Exit(-1);
       offset := 0;
       count := 1;
     end;

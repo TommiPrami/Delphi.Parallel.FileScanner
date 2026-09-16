@@ -95,9 +95,7 @@ type
 
     procedure TestRecordConstructorNotConsidered;
 
-{$IFDEF DELPHIXE_UP}
     procedure TestClassContainsAbstractMethods;
-{$ENDIF}
   end;
 
   // Same Service, Different Implementations
@@ -355,9 +353,7 @@ uses
   Spring.Container.Core,
   Spring.Container.Resolvers,
   Spring.TestUtils,
-{$IFDEF DELPHIXE_UP}
   Spring.Mocking,
-{$ENDIF}
   Spring.Logging;
 
 type
@@ -562,7 +558,6 @@ type
     procedure FooBar; virtual; abstract;
   end;
 
-{$IFDEF DELPHIXE_UP}
 procedure TTestSimpleContainer.TestClassContainsAbstractMethods;
 var
   logger: Mock<ILogger>;
@@ -574,7 +569,6 @@ begin
   logger.Received(1).Warn(Arg.IsAny<string>);
   Pass;
 end;
-{$ENDIF}
 
 procedure TTestSimpleContainer.TestSingleton;
 var

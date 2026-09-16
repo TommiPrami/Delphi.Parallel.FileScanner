@@ -178,6 +178,7 @@ type
     procedure SetUp; override;
   published
     procedure TestEnumerators;
+    procedure TestSetCapacityAboveMaxIsIgnored;
   end;
 
   TTestBidiDictionaryInverse = class(TTestBidiDictionaryBase)
@@ -203,6 +204,8 @@ type
   protected
     class function CreateOwnedKeysDict: IDictionary<TObject, Integer>; override;
     class function CreateOwnedValuesDict: IDictionary<Integer, TObject>; override;
+  published
+    procedure TestOverwriteFreesOldKey;
   end;
 
   TTestBidiDictionaryOwnership = class(TTestDictionaryValueOwnershipBase)
@@ -278,12 +281,24 @@ type
   public
     class var DestroyCount: Integer;
     destructor Destroy; override;
+    function GetHashCode: Integer; override;
+    function Equals(Obj: TObject): Boolean; override;
   end;
 
 destructor TOwnedValue.Destroy;
 begin
   Inc(DestroyCount);
   inherited Destroy;
+end;
+
+function TOwnedValue.Equals(Obj: TObject): Boolean;
+begin
+  Result := True;
+end;
+
+function TOwnedValue.GetHashCode: Integer;
+begin
+  Result := 42;
 end;
 
 
@@ -1466,6 +1481,17 @@ begin
   end;
 end;
 
+procedure TTestBidiDictionary.TestSetCapacityAboveMaxIsIgnored;
+var
+  capacity: Integer;
+begin
+  capacity := SUT.Capacity;
+  SUT.Capacity := $30000001;
+  CheckEquals(capacity, SUT.Capacity);
+  SUT.Add(1, 'a');
+  CheckEquals(1, SUT.Count);
+end;
+
 {$ENDREGION}
 
 
@@ -1549,6 +1575,21 @@ end;
 class function TTestDictionaryOwnership.CreateOwnedValuesDict: IDictionary<Integer, TObject>;
 begin
   Result := TCollections.CreateDictionary<Integer, TObject>([doOwnsValues]);
+end;
+
+procedure TTestDictionaryOwnership.TestOverwriteFreesOldKey;
+var
+  SUT: IDictionary<TObject, Integer>;
+  key1, key2: TOwnedValue;
+begin
+  TOwnedValue.DestroyCount := 0;
+  key1 := TOwnedValue.Create;
+  SUT := TCollections.CreateDictionary<TObject, Integer>([doOwnsKeys]);
+  SUT.Add(key1, 1);
+  key2 := TOwnedValue.Create;
+  SUT[key2] := 2;
+  CheckEquals(1, TOwnedValue.DestroyCount);
+  SUT := nil;
 end;
 
 {$ENDREGION}

@@ -93,7 +93,7 @@ type
     procedure Grow;
     procedure Pack;
     function FindItem(const key; options: Byte = 0): Pointer;
-    function FindEntry(const key; var entry: THashTableEntry): Boolean;
+    function FindEntry(const key; var entry: THashTableEntry; getHashCode: Boolean = True): Boolean;
     procedure Rehash(newCapacity: NativeInt);
 
     function DeleteEntry(const entry: THashTableEntry): Pointer;
@@ -434,7 +434,7 @@ findAgain:
   __SuppressWarning(mask);
 end;
 
-function THashTable.FindEntry(const key; var entry: THashTableEntry): Boolean;
+function THashTable.FindEntry(const key; var entry: THashTableEntry; getHashCode: Boolean): Boolean;
 {$IFNDEF GOTO_OFF}
 label
   first;
@@ -445,6 +445,8 @@ var
   item: PByte;
 begin
   hashTable := @vTable;
+  if getHashCode then
+    entry.HashCode := hashTable.fGetHashCode(hashTable.fComparer, key);
   if hashTable.Buckets <> nil then
   begin
     entry.HashCode := entry.HashCode and not RemovedFlag;
@@ -549,7 +551,7 @@ begin
   while fItemCount < fCount do
   begin
     entry.HashCode := PInteger(item)^;
-    FindEntry((item + KeyOffset)^, entry);
+    FindEntry((item + KeyOffset)^, entry, False);
     fBuckets[entry.BucketIndex] := fItemCount or (entry.HashCode and not mask);
     Inc(item, fItemSize);
     Inc(fItemCount);

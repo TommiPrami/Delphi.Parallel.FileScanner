@@ -1,4 +1,4 @@
-{***************************************************************************}
+﻿{***************************************************************************}
 {                                                                           }
 {           Spring Framework for Delphi                                     }
 {                                                                           }
@@ -329,37 +329,47 @@ end;
 
 function THashMultiSet<T>.Add(const item: T; count: Integer): Integer;
 var
+  temp: Pointer;
   entry: PItem;
-  i: Integer;
+  i, oldCount: Integer;
 begin
   if count < 0 then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
 
-  entry := IHashTable<T>(@fHashTable).Find(item, OverwriteExisting or InsertNonExisting);
-  entry.Item := item;
+  temp := IHashTable<T>(@fHashTable).Find(item, OverwriteExisting
+    // if count > 0 => include InsertNonExisting; otherwise not
+    // ShortInt(count = 0) - 1) => $FF when count > 0; otherwise $00
+    or (InsertNonExisting and Byte(ShortInt(count = 0) - 1)));
+  if not Assigned(temp) then Exit(Integer(temp));
+  entry := temp;
   if entry.HashCode < 0 then
   begin
     entry.HashCode := entry.HashCode and not RemovedFlag;
-    Result := entry.Count;
+    oldCount := entry.Count;
     Inc(entry.Count, count);
   end
   else
   begin
-    Result := 0;
+    entry.Item := item;
     entry.Count := count;
+    oldCount := 0;
   end;
+
   Inc(fCount, count);
 
   if Assigned(Notify) then
     for i := 1 to count do //FI:W528
       Notify(Self, item, caAdded);
+
+  Result := oldCount;
 end;
 
 procedure THashMultiSet<T>.Clear;
 begin
-  if not Assigned(Notify) then
-    fHashTable.Clear
+  fCount := 0;
+  if Assigned(Notify) then
+    ClearWithNotify
   else
-    ClearWithNotify;
+    fHashTable.Clear;
 end;
 
 procedure THashMultiSet<T>.ClearWithNotify;
@@ -443,7 +453,6 @@ var
 begin
   if count >= 0 then
   begin
-    entry.HashCode := IEqualityComparer<T>(fHashTable.Comparer).GetHashCode(item);
     Result := Ord(fHashTable.FindEntry(item, entry));
     if Result = 0 then Exit;
     tableItem := @TItems(fHashTable.Items)[entry.ItemIndex];
@@ -469,40 +478,42 @@ end;
 procedure THashMultiSet<T>.SetItemCount(const item: T; count: Integer);
 var
   entry: PItem;
-  i: Integer;
+  countDelta: Integer;
 begin
   if count < 0 then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
 
   if count = 0 then
   begin
     entry := IHashTable<T>(@fHashTable).Find(item, DeleteExisting);
-    if Assigned(entry) then
-    begin
-      Dec(fCount, entry.Count);
-      if Assigned(Notify) then
-        for i := 1 to entry.Count do //FI:W528
-          Notify(Self, item, caRemoved);
-    end;
+    if not Assigned(entry) then Exit;
+    countDelta := entry.Count;
   end
   else
   begin
-    entry := IHashTable<T>(@fHashTable).Find(item, InsertNonExisting);
+    entry := IHashTable<T>(@fHashTable).Find(item, OverwriteExisting or InsertNonExisting);
+    // if entry.HashCode >= 0 => clear entry.Count because it's a new entry
+    entry.Count := entry.Count and (Integer(entry.HashCode >= 0) - 1);
+    entry.HashCode := entry.HashCode and not RemovedFlag;
     entry.Item := item;
-    Inc(fCount, count - entry.Count);
-    i := entry.Count;
+    countDelta := entry.Count;
+    if countDelta = count then Exit;
+    Dec(countDelta, count);
     entry.Count := count;
-    if Assigned(Notify) then
+  end;
+
+  Dec(fCount, countDelta);
+
+  if Assigned(Notify) then
+  begin
+    while countDelta > 0 do
     begin
-      while i > count do
-      begin
-        Notify(Self, item, caRemoved);
-        Dec(i);
-      end;
-      while i < count do
-      begin
-        Notify(Self, item, caAdded);
-        Inc(i);
-      end;
+      Notify(Self, item, caRemoved);
+      Dec(countDelta);
+    end;
+    while countDelta < 0 do
+    begin
+      Notify(Self, item, caAdded);
+      Inc(countDelta);
     end;
   end;
 end;
@@ -615,7 +626,7 @@ begin
   if count < 0 then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
 
   {$Q-}
-  Inc(fVersion);
+  Inc(fVersion, Byte(count > 0));
   {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
   node := fTree.FindNode(item);
   if Assigned(node) then
@@ -625,8 +636,11 @@ begin
   end
   else
   begin
-    node := fTree.AddNode(item);
-    PNode(node).Count := count;
+    if count > 0 then
+    begin
+      node := fTree.AddNode(item);
+      PNode(node).Count := count;
+    end;
     Result := 0;
   end;
   Inc(fCount, count);
@@ -643,6 +657,7 @@ var
 begin
   if fCount > 0 then
   begin
+    fCount := 0;
     {$Q-}
     Inc(fVersion);
     {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
@@ -659,7 +674,6 @@ begin
     end;
 
     fTree.Clear;
-    fCount := 0;
   end;
 end;
 
@@ -753,27 +767,45 @@ end;
 procedure TTreeMultiSet<T>.SetItemCount(const item: T; count: Integer);
 var
   node: Pointer;
+  countDelta, mask: Integer;
 begin
   if count < 0 then RaiseHelper.ArgumentOutOfRange(ExceptionArgument.count, ExceptionResource.ArgumentOutOfRange_NeedNonNegNum);
 
-  {$Q-}
-  Inc(fVersion);
-  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
   if count = 0 then
   begin
     node := fTree.FindNode(item);
-    if Assigned(node) then
-    begin
-      Dec(fCount, PNode(node).Count);
-      fTree.DeleteNode(node);
-    end;
+    if not Assigned(node) then Exit;
+    countDelta := PNode(node).Count;
+    fTree.DeleteNode(node);
   end
   else
   begin
     node := fTree.AddNode(item, True);
+    mask := Integer(IntPtr(node) and 1 <> 1) - 1;
     node := Pointer(IntPtr(node) and not 1);
-    Inc(fCount, count - PNode(node).Count);
+    countDelta := mask and PNode(node).Count;
+    if countDelta = count then Exit;
+    Dec(countDelta, count);
     PNode(node).Count := count;
+  end;
+
+  {$Q-}
+  Inc(fVersion);
+  {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
+  Dec(fCount, countDelta);
+
+  if Assigned(Notify) then
+  begin
+    while countDelta > 0 do
+    begin
+      Notify(Self, item, caRemoved);
+      Dec(countDelta);
+    end;
+    while countDelta < 0 do
+    begin
+      Notify(Self, item, caAdded);
+      Inc(countDelta);
+    end;
   end;
 end;
 

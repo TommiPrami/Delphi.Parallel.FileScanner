@@ -203,7 +203,7 @@ end;
 
 function TEventBase.GetCanInvoke: Boolean;
 begin
-  Result := Enabled and Assigned(fHandlers);
+  Result := Assigned(fHandlers) and Enabled;
 end;
 
 function TEventBase.GetOnChanged: TNotifyEvent;

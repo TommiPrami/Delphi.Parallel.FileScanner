@@ -30,7 +30,7 @@ interface
 
 implementation
 
-{$IFDEF DELPHIXE_UP}{$IFDEF MSWINDOWS}{$IFNDEF CPUARM}
+{$IFDEF MSWINDOWS}{$IFNDEF CPUARM}
 uses
   Rtti,
   SysUtils,
@@ -121,12 +121,9 @@ type
     Jmp: Byte;
     Offset: Integer;
     {$ELSE}
-    MovR10_49: Byte;
-    MovR10_BA: Byte;
+    Jmp: Word;
+    Offset: Integer;
     Target: Pointer;
-    JmpR10_49: Byte;
-    JmpR10_FF: Byte;
-    JmpR10_E2: Byte;
     {$ENDIF}
   end;
 var
@@ -137,12 +134,9 @@ begin
   JmpBuffer.Jmp := $E9;
   JmpBuffer.Offset := PByte(NewProc) - PByte(OrgProc) - 5;
   {$ELSE}
-  JmpBuffer.MovR10_49 := $49;
-  JmpBuffer.MovR10_BA := $BA;
+  JmpBuffer.Jmp := $25FF;
+  JmpBuffer.Offset := 0;
   JmpBuffer.Target := NewProc;
-  JmpBuffer.JmpR10_49 := $49;
-  JmpBuffer.JmpR10_FF := $FF;
-  JmpBuffer.JmpR10_E2 := $E2;
   {$ENDIF}
   if not WriteProcessMemory(GetCurrentProcess, OrgProc, @JmpBuffer, SizeOf(JmpBuffer), n) then
     RaiseLastOSError;
@@ -202,6 +196,6 @@ end;
 
 initialization
   ApplyPatch;
-{$ENDIF}{$ENDIF}{$ENDIF}
+{$ENDIF}{$ENDIF}
 
 end.

@@ -122,6 +122,15 @@ type
     procedure EmptyRange;
     procedure SingleValueOfMaxInt32;
     procedure EmptyRangeStartingAtMinInt32;
+
+    procedure IndexOfPastEnd;
+    procedure IndexOfOutsideWindow;
+
+    procedure IndexOfNegativeRange;
+    procedure IndexOfExtremeBounds;
+    procedure IndexOfWindowEdges;
+    procedure ContainsBoundaryValues;
+    procedure MaxExtremeBounds;
   end;
 
   TTestRepeated = class(TTestCase)
@@ -457,6 +466,7 @@ type
     procedure GroupByWithCollectionProjection;
     procedure GroupByWithElementProjectionAndCollectionProjection;
     procedure ChangesToSourceAreIgnoredInWhileIteratingOverResultsAfterFirstElementRetrieved;
+    procedure RaisingKeySelectorDoesNotLeak;
 
 //    procedure NilKeys;
   end;
@@ -718,6 +728,19 @@ uses
   Math,
   StrUtils,
   Spring.Collections.Extensions;
+
+type
+  TLeakProbe = class(TInterfacedObject)
+  public
+    class var DestroyCount: Integer;
+    destructor Destroy; override;
+  end;
+
+destructor TLeakProbe.Destroy;
+begin
+  Inc(DestroyCount);
+  inherited Destroy;
+end;
 
 const
   MinInt = -2147483648;
@@ -1148,6 +1171,101 @@ end;
 procedure TTestRange.EmptyRangeStartingAtMinInt32;
 begin
   CheckTrue(TEnumerable.Range(MinInt, 0).EqualsTo([]));
+end;
+
+procedure TTestRange.IndexOfPastEnd;
+var
+  range: IReadOnlyList<Integer>;
+begin
+  range := TEnumerable.Range(0, 5);
+
+  CheckEquals(-1, range.IndexOf(5, 0, 5));
+  CheckEquals(-1, range.IndexOf(5));
+  CheckEquals(4, range.IndexOf(4, 0, 5));
+  CheckEquals(4, range.IndexOf(4));
+end;
+
+procedure TTestRange.IndexOfOutsideWindow;
+var
+  range: IReadOnlyList<Integer>;
+begin
+  range := TEnumerable.Range(0, 5);
+
+  CheckEquals(3, range.IndexOf(3, 1, 3));
+  CheckEquals(-1, range.IndexOf(0, 1, 3));
+  CheckEquals(-1, range.IndexOf(4, 1, 3));
+  CheckEquals(-1, range.IndexOf(3, 1, 2));
+  CheckEquals(2, range.IndexOf(2, 1, 3));
+  CheckEquals(3, range.IndexOf(3, 1));
+  CheckEquals(-1, range.IndexOf(0, 1));
+  CheckEquals(0, range.IndexOf(0, 0));
+end;
+
+procedure TTestRange.IndexOfNegativeRange;
+var
+  range: IReadOnlyList<Integer>;
+begin
+  range := TEnumerable.Range(-5, 11);
+
+  CheckEquals(0, range.IndexOf(-5));
+  CheckEquals(5, range.IndexOf(0));
+  CheckEquals(9, range.IndexOf(4));
+  CheckEquals(-1, range.IndexOf(-6));
+  CheckEquals(5, range.IndexOf(0, 5, 1));
+  CheckEquals(-1, range.IndexOf(-5, 1, 4));
+end;
+
+procedure TTestRange.IndexOfExtremeBounds;
+var
+  maxRange, minRange: IReadOnlyList<Integer>;
+begin
+  maxRange := TEnumerable.Range(MaxInt, 1);
+  minRange := TEnumerable.Range(MinInt, 1);
+
+  CheckEquals(0, maxRange.IndexOf(MaxInt));
+  CheckEquals(-1, maxRange.IndexOf(MinInt));
+  CheckEquals(0, minRange.IndexOf(MinInt));
+  CheckEquals(-1, minRange.IndexOf(MinInt + 1));
+  CheckEquals(-1, TEnumerable.Range(0, 0).IndexOf(0));
+end;
+
+procedure TTestRange.IndexOfWindowEdges;
+var
+  range: IReadOnlyList<Integer>;
+begin
+  range := TEnumerable.Range(0, 5);
+
+  CheckEquals(4, range.IndexOf(4, 4, 1));
+  CheckEquals(2, range.IndexOf(2, 0, 5));
+  CheckEquals(-1, range.IndexOf(0, 5));
+  CheckEquals(4, range.IndexOf(4, 4));
+  CheckException(EArgumentOutOfRangeException,
+    procedure begin range.IndexOf(0, -1); end);
+  CheckException(EArgumentOutOfRangeException,
+    procedure begin range.IndexOf(0, 6); end);
+end;
+
+procedure TTestRange.ContainsBoundaryValues;
+var
+  range: IReadOnlyList<Integer>;
+begin
+  range := TEnumerable.Range(0, 5);
+
+  CheckTrue(range.Contains(4));
+  CheckFalse(range.Contains(5));
+  CheckFalse(range.Contains(-1));
+  CheckTrue(TEnumerable.Range(MaxInt, 1).Contains(MaxInt));
+  CheckFalse(TEnumerable.Range(MaxInt, 1).Contains(MinInt));
+  CheckFalse(TEnumerable.Range(MinInt, 1).Contains(MinInt + 1));
+end;
+
+procedure TTestRange.MaxExtremeBounds;
+begin
+  CheckEquals(4, TEnumerable.Range(0, 5).Max);
+  CheckEquals(-5, TEnumerable.Range(-5, 1).Max);
+  CheckEquals(MinInt, TEnumerable.Range(MinInt, 1).Max);
+  CheckEquals(MaxInt, TEnumerable.Range(MaxInt, 1).Max);
+  CheckEquals(0, TEnumerable.Range(MaxInt, 1).IndexOf(MaxInt, 0, 1));
 end;
 
 procedure TTestRange.LargeButValidCount;
@@ -3986,6 +4104,36 @@ begin
 
   CheckTrue(list[2].EqualsTo(['four']));
   CheckEquals(4, list[2].Key);
+end;
+
+procedure TTestGroupBy.RaisingKeySelectorDoesNotLeak;
+var
+  source: IEnumerable<Integer>;
+  groups: IEnumerable<IEnumerable<IInterface>>;
+begin
+  TLeakProbe.DestroyCount := 0;
+  source := TEnumerable.Range(1, 2);
+  groups := TEnumerable.GroupBy<Integer, Integer, IInterface,
+    IEnumerable<IInterface>>(source,
+    function(const x: Integer): Integer
+    begin
+      if x = 2 then
+        raise EArgumentException.Create('keySelector failed');
+      Result := x;
+    end,
+    function(const x: Integer): IInterface
+    begin
+      Result := TLeakProbe.Create;
+    end,
+    function(const key: Integer; const elements: IEnumerable<IInterface>): IEnumerable<IInterface>
+    begin
+      Result := elements;
+    end);
+  try
+    groups.GetEnumerator;
+  except
+  end;
+  CheckEquals(1, TLeakProbe.DestroyCount);
 end;
 
 { TTestGroupJoin }

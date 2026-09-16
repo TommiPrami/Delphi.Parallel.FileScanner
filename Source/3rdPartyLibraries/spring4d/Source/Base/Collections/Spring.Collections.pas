@@ -9883,8 +9883,8 @@ begin
         case GetTypeKind(TValue) of
           tkClass: CreateDictionary_Int8_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkInterface: CreateDictionary_Int8_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int8_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateDictionary_Int8_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int8_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
             1: CreateDictionary_Int8_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
@@ -9898,7 +9898,7 @@ begin
           tkClass: CreateDictionary_Int16_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkInterface: CreateDictionary_Int16_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkUString: CreateDictionary_Int16_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int16_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int16_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
             1: CreateDictionary_Int16_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
@@ -9912,7 +9912,7 @@ begin
           tkClass: CreateDictionary_Int32_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkInterface: CreateDictionary_Int32_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkUString: CreateDictionary_Int32_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int32_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int32_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
             1: CreateDictionary_Int32_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
@@ -9926,7 +9926,7 @@ begin
           tkClass: CreateDictionary_Int64_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkInterface: CreateDictionary_Int64_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkUString: CreateDictionary_Int64_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
-          tkMethod: CreateDictionary_Int64_Method(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkMethod: CreateDictionary_Int64_Method(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
             1: CreateDictionary_Int64_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
@@ -10976,7 +10976,7 @@ begin
         case GetTypeKind(TValue) of
           tkClass: CreateBidiDictionary_Int8_Object(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
           tkInterface: CreateBidiDictionary_Int8_Interface(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
-          tkUString: CreateBidiDictionary_Int8_String(0, Pointer(keyComparer), nil, ownerships, result, TypeInfo(TPair<TKey,TValue>));
+          tkUString: CreateBidiDictionary_Int8_String(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
         else
           case SizeOf(TValue) of
             1: CreateBidiDictionary_Int8_Int8(0, Pointer(keyComparer), Pointer(valueComparer), ownerships, result, TypeInfo(TPair<TKey,TValue>));
@@ -11468,7 +11468,7 @@ begin
   case GetTypeKind(T) of
     tkClass: CreateHashSet_Object(capacity, Pointer(comparer), Result, TypeInfo(T));
     tkInterface: CreateHashSet_Interface(capacity, Pointer(comparer), Result, TypeInfo(T));
-    tkUString: CreateHashSet_String(0, Pointer(comparer), Result, TypeInfo(T));
+    tkUString: CreateHashSet_String(capacity, Pointer(comparer), Result, TypeInfo(T));
     tkInteger, tkChar, tkWChar, tkEnumeration, tkInt64, tkClassRef, tkPointer, tkProcedure:
       case SizeOf(T) of
         1: CreateHashSet_Int8(capacity, Pointer(comparer), Result, TypeInfo(T));
@@ -12326,18 +12326,21 @@ end;
 class function TEnumerable.Distinct<T>(
   const source: IEnumerable<T>): IEnumerable<T>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   Result := source.Distinct;
 end;
 
 class function TEnumerable.Distinct<T>(const source: IEnumerable<T>;
   const comparer: IEqualityComparer<T>): IEnumerable<T>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   Result := source.Distinct(comparer);
 end;
 
 class function TEnumerable.DistinctBy<T, TKey>(const source: IEnumerable<T>;
   const keySelector: Func<T, TKey>): IEnumerable<T>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   Result := TDistinctByIterator<T, TKey>.Create(source, keySelector, nil);
 end;
 
@@ -12345,6 +12348,7 @@ class function TEnumerable.DistinctBy<T, TKey>(const source: IEnumerable<T>;
   const keySelector: Func<T, TKey>;
   const comparer: IEqualityComparer<TKey>): IEnumerable<T>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   Result := TDistinctByIterator<T, TKey>.Create(source, keySelector, comparer);
 end;
 
@@ -12521,12 +12525,14 @@ end;
 class function TEnumerable.Intersect<T>(const first,
   second: IEnumerable<T>): IEnumerable<T>;
 begin
+  if not Assigned(first) then RaiseHelper.ArgumentNil(ExceptionArgument.first);
   Result := first.Intersect(second);
 end;
 
 class function TEnumerable.Intersect<T>(const first, second: IEnumerable<T>;
   const comparer: IEqualityComparer<T>): IEnumerable<T>;
 begin
+  if not Assigned(first) then RaiseHelper.ArgumentNil(ExceptionArgument.first);
   Result := first.Intersect(second, comparer);
 end;
 
@@ -12625,6 +12631,8 @@ end;
 class function TEnumerable.OfType<T, TResult>(
   const source: IEnumerable<T>): IEnumerable<TResult>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
+
   {$IFDEF DELPHIXE7_UP}
   if (GetTypeKind(T) = tkClass) and (GetTypeKind(TResult) = tkClass) then
     InternalOfType_Object(IEnumerable<TObject>(source), Result, TypeInfo(TResult))
@@ -12662,7 +12670,7 @@ end;
 
 class function TEnumerable.Range(start, count: Integer): IReadOnlyList<Integer>; //FI:W521
 begin
-  if (count >= 0) and (Int64(start) + count <= Cardinal(MaxInt) + 1) then
+  if (count >= 0) and (Int64(start) + count - 1 <= MaxInt) then
     if count = 0 then
       TEnumerableExtension.Empty(TEnumerableExtension<Integer>, TypeInfo(Integer), Result)
     else
@@ -12782,6 +12790,7 @@ end;
 class function TEnumerable.ToLookup<T, TKey>(const source: IEnumerable<T>;
   const keySelector: Func<T, TKey>): ILookup<TKey, T>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   ILookupInternal<TKey, T>(Result) := TLookup<TKey, T>.Create<T>(
     source, keySelector, TIdentityFunction<T>.Instance);
 end;
@@ -12789,6 +12798,7 @@ end;
 class function TEnumerable.ToLookup<T, TKey>(const source: IEnumerable<T>;
   const keySelector: Func<T, TKey>; const comparer: IEqualityComparer<TKey>): ILookup<TKey, T>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   ILookupInternal<TKey, T>(Result) := TLookup<TKey, T>.Create<T>(
     source, keySelector, TIdentityFunction<T>.Instance, comparer);
 end;
@@ -12797,6 +12807,7 @@ class function TEnumerable.ToLookup<T, TKey, TElement>(
   const source: IEnumerable<T>; const keySelector: Func<T, TKey>;
   const elementSelector: Func<T, TElement>): ILookup<TKey, TElement>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   ILookupInternal<TKey, TElement>(Result) := TLookup<TKey, TElement>.Create<T>(
     source, keySelector, elementSelector);
 end;
@@ -12806,18 +12817,21 @@ class function TEnumerable.ToLookup<T, TKey, TElement>(
   const elementSelector: Func<T, TElement>;
   const comparer: IEqualityComparer<TKey>): ILookup<TKey, TElement>;
 begin
+  if not Assigned(source) then RaiseHelper.ArgumentNil(ExceptionArgument.source);
   ILookupInternal<TKey, TElement>(Result) := TLookup<TKey, TElement>.Create<T>(
     source, keySelector, elementSelector, comparer);
 end;
 
 class function TEnumerable.Union<T>(const first, second: IEnumerable<T>): IEnumerable<T>;
 begin
+  if not Assigned(first) then RaiseHelper.ArgumentNil(ExceptionArgument.first);
   Result := first.Union(second);
 end;
 
 class function TEnumerable.Union<T>(const first, second: IEnumerable<T>;
   const comparer: IEqualityComparer<T>): IEnumerable<T>;
 begin
+  if not Assigned(first) then RaiseHelper.ArgumentNil(ExceptionArgument.first);
   Result := first.Union(second, comparer);
 end;
 
@@ -12893,10 +12907,13 @@ end;
 
 function InitElementType(fieldType: PTypeInfo): PTypeInfo;
 begin
-  Assert(fieldType.Kind = tkInterface);
-  Assert(fieldType.TypeData.GUID = IList<TObject>);
+  if (fieldType.Kind <> tkInterface) or (fieldType.TypeData.GUID <> IList<TObject>) then
+    raise EArgumentException.CreateRes(@SInvalidAutoInitFieldType);
+
   Result := GetElementType(fieldType);
-  Assert(Result.Kind in [tkClass, tkInterface]);
+
+  if not (Result.Kind in [tkClass, tkInterface]) then
+    raise EArgumentException.CreateResFmt(@SInvalidAutoInitElementType, [GetTypeName(Result)]);
 end;
 
 constructor AutoInitAttribute.Create(ownsObjects: Boolean);

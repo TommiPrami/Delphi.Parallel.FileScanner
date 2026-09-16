@@ -787,6 +787,11 @@ begin
     with fOnValueChanged do if CanInvoke then
       Invoke(Self, item.Value, caRemoved);
   {$IFDEF DELPHIXE7_UP}
+    if GetTypeKind(TKey) = tkClass then
+  {$ENDIF}
+    if doOwnsKeys in fHashTable.Ownerships then
+      PObject(@item.Key).Free;
+  {$IFDEF DELPHIXE7_UP}
     if GetTypeKind(TValue) = tkClass then
   {$ENDIF}
     if doOwnsValues in fHashTable.Ownerships then
@@ -853,7 +858,6 @@ var
   entry: THashTableEntry;
   item: PItem;
 begin
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   if fHashTable.FindEntry(key, entry) then
   begin
     item := @TItems(fHashTable.Items)[entry.ItemIndex];
@@ -883,7 +887,6 @@ function TDictionary<TKey, TValue>.TryExtract(const key: TKey; var value: TValue
 var
   entry: THashTableEntry;
 begin
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   if fHashTable.FindEntry(key, entry) then
   begin
     value := TItems(fHashTable.Items)[entry.ItemIndex].Value;
@@ -960,7 +963,6 @@ function TDictionary<TKey, TValue>.Remove(const key: TKey): Boolean;
 var
   entry: THashTableEntry;
 begin
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   Result := fHashTable.FindEntry(key, entry);
   if not Result then Exit;
   Result := DoRemove(entry, caRemoved);
@@ -970,7 +972,6 @@ function TDictionary<TKey, TValue>.Remove(const key: TKey; const value: TValue):
 var
   entry: THashTableEntry;
 begin
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   Result := fHashTable.FindEntry(key, entry);
   if not Result then Exit;
   Result := fValueComparer.Equals(TItems(fHashTable.Items)[entry.ItemIndex].Value, value);
@@ -1068,7 +1069,6 @@ function TDictionary<TKey, TValue>.IndexOf(const key: TKey): Integer;
 var
   entry: THashTableEntry;
 begin
-  entry.HashCode := IEqualityComparer<TKey>(fHashTable.Comparer).GetHashCode(key);
   fHashTable.EnsureCompact;
   if fHashTable.FindEntry(key, entry) then
     Exit(entry.ItemIndex);
@@ -1205,6 +1205,8 @@ procedure TBidiDictionary<TKey, TValue>.SetCapacity(value: Integer);
 var
   newCapacity: Integer;
 begin
+  if Cardinal(value) > MaxCapacity then
+    Exit;
   if value = 0 then
     newCapacity := 0
   else
@@ -1295,8 +1297,9 @@ begin
   if newCapacity = 0 then
     newCapacity := MinCapacity
   else if 2 * fCount >= DynArrayLength(fKeyBuckets) then
-    // only grow if load factor is greater than 0.5
     newCapacity := newCapacity * 2;
+  if Cardinal(newCapacity) > MaxCapacity then
+    newCapacity := MaxCapacity;
   Rehash(newCapacity);
 end;
 
@@ -1905,7 +1908,11 @@ begin
   if valueFound then
   begin
     if keyFound and (keyItemIndex = valueItemIndex) then
+    begin
+      if doOwnsValues in fOwnerships then
+        DoSetValue(keyBucketIndex, keyItemIndex, valueHashCode, value);
       Exit; // this key/value pair are already mapped to each other
+    end;
     RaiseHelper.DuplicateKey;
   end
   else if keyFound then

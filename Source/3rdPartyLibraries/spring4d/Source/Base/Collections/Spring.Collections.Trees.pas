@@ -25,10 +25,6 @@
 unit Spring.Collections.Trees;
 
 {$I Spring.inc}
-// node records must not be packed because when they get stored in an array the
-// pointers must be at least 2 byte aligned to leave the least significant bit 0
-// aligning them by 2 byte causes at most wasting 1 byte of space for each
-{$A2}
 
 interface
 
@@ -81,8 +77,8 @@ type
     TEnumerator = record
     private
       fRoot: PNode;
-      fMode: TTraverseMode;
       fCurrent: PNode;
+      fMode: TTraverseMode;
     strict private
       function MoveNextInOrder: Boolean;
       function MoveNextPreOrder: Boolean;
@@ -208,6 +204,10 @@ type
       property Keys: TKeyEnumerable read GetKeys;
     end;
 
+    // node records must not be packed because when they get stored in an array the
+    // pointers must be at least 2 byte aligned to leave the least significant bit 0
+    // aligning them by 2 byte causes at most wasting 1 byte of space for each
+    {$A2}
     TNode = record
     strict private
       function GetLeftMost: PNode; inline;
@@ -239,6 +239,7 @@ type
       property PreOrder: TEnumerable index tmPreOrder read GetEnumerable;
       property PostOrder: TEnumerable index tmPostOrder read GetEnumerable;
     end;
+    {$A+}
   public type
     TRedBlackTreeNode = TNode;
     PRedBlackTreeNode = PNode;
@@ -309,6 +310,10 @@ type
       property Values: TValueEnumerable read GetValues;
     end;
 
+    // node records must not be packed because when they get stored in an array the
+    // pointers must be at least 2 byte aligned to leave the least significant bit 0
+    // aligning them by 2 byte causes at most wasting 1 byte of space for each
+    {$A2}
     TNode = record
     strict private
       function GetLeftMost: PNode; inline;
@@ -340,6 +345,7 @@ type
       property PreOrder: TEnumerable index tmPreOrder read GetEnumerable;
       property PostOrder: TEnumerable index tmPostOrder read GetEnumerable;
     end;
+    {$A+}
   public type
     TRedBlackTreeNode = TNode;
     PRedBlackTreeNode = PNode;
@@ -1459,9 +1465,13 @@ end;
 
 function TRedBlackTree<T>.GetEnumerator: IEnumerator<T>; //FI:W521
 begin
+  _AddRef;
   with PEnumerator(TEnumeratorBlock.Create(@Result, @TEnumerator.Enumerator_Vtable,
     TypeInfo(TEnumerator), @TEnumerator.GetCurrent, @TEnumerator.MoveNext))^ do
+  begin
+    Parent := Self;
     fEnumerator := TBinaryTree.TEnumerator.Create(fRoot, tmInOrder);
+  end;
 end;
 
 function TRedBlackTree<T>.GetRoot: PNode;
@@ -1697,9 +1707,13 @@ end;
 
 function TRedBlackTree<TKey, TValue>.GetEnumerator: IEnumerator<TPair<TKey, TValue>>; //FI:W521
 begin
+  _AddRef;
   with PEnumerator(TEnumeratorBlock.Create(@Result, @TEnumerator.Enumerator_Vtable,
     TypeInfo(TEnumerator), @TEnumerator.GetCurrent, @TEnumerator.MoveNext))^ do
+  begin
+    Parent := Self;
     fEnumerator := TBinaryTree.TEnumerator.Create(fRoot, tmInOrder);
+  end;
 end;
 
 function TRedBlackTree<TKey, TValue>.GetRoot: PNode;

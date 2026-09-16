@@ -3560,7 +3560,7 @@ function CreateFieldTable(classType: TClass): TInitTable;
 ///   Returns the field table for the given class that contains all fields that
 ///   have Default or Managed attribute annotations.
 /// </summary>
-function GetInitTable(classType: TClass): TInitTable; {$IFDEF USE_VMTAUTOTABLE}inline;{$ENDIF}
+function GetInitTable(classType: TClass): TInitTable;
 
 function GetVirtualMethod(const classType: TClass; const index: Integer): Pointer; inline;
 
@@ -6277,9 +6277,17 @@ begin
 end;
 
 class function TManagedObject.NewInstance: TObject;
+var
+  initTable: TInitTable;
 begin
   Result := inherited NewInstance;
-  GetInitTable(Self).InitInstance(Result);
+  initTable := GetInitTable(Self);
+  try
+    initTable.InitInstance(Result);
+  except
+    Result.Free;
+    raise;
+  end;
 end;
 
 {$ENDREGION}
@@ -8366,6 +8374,29 @@ end;
 {$REGION 'TRttiMethodHelper'}
 
 function TRttiMethodHelper.GetIsAbstract: Boolean;
+
+  function GetActualAddr(Proc: Pointer): Pointer;
+  type
+    PAbsoluteIndirectJmp = ^TAbsoluteIndirectJmp;
+    TAbsoluteIndirectJmp = packed record
+      OpCode: Word;
+      {$IFDEF CPUX64}
+      Rel: Integer;
+      Addr: array[0..0] of Byte;
+      {$ELSE}
+      Addr: PPointer;
+      {$ENDIF}
+    end;
+  begin
+    Result := Proc;
+    if Assigned(Proc) and (PAbsoluteIndirectJmp(Proc).OpCode = $25FF) then
+    {$IFDEF CPUX64}
+      Result := PPointer(@PAbsoluteIndirectJmp(Result).Addr[PAbsoluteIndirectJmp(Result).Rel])^;
+    {$ELSE}
+      Result := PAbsoluteIndirectJmp(Proc).Addr^;
+    {$ENDIF}
+  end;
+
 var
   code: Pointer;
 begin
@@ -8375,7 +8406,7 @@ begin
   else
     code := nil;
   end;
-  Result := code = GetAbstractError;
+  Result := GetActualAddr(code) = GetActualAddr(GetAbstractError);
 end;
 
 function TRttiMethodHelper.GetReturnTypeHandle: PTypeInfo;

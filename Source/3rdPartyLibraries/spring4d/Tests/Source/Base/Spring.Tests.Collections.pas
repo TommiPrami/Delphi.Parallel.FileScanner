@@ -49,12 +49,15 @@ type
         sender: TObject;
         item: T;
         action: TCollectionChangedAction;
+        count: Integer;
       end;
   protected
     fChangedEvents: IList<TEvent<Integer>>;
     Sender: TObject;
+    function GetSUTCount: Integer; virtual; abstract;
     procedure Changed(Sender: TObject; const Item: Integer; Action: TCollectionChangedAction);
-    procedure CheckChanged(index: Integer; item: Integer; action: TCollectionChangedAction);
+    procedure CheckChanged(index: Integer; item: Integer; action: TCollectionChangedAction;
+      count: Integer = -1);
 
     procedure SetUp; override;
     procedure TearDown; override;
@@ -581,9 +584,39 @@ type
   published
     procedure TestAggregate;
     procedure TestContains_Nil;
+    procedure TestElementAtNegativeIndex;
+    procedure TestElementAtNegativeIndexAllKinds;
     procedure TestToArray;
 
+    procedure TestRepeatedIndexOfEmptyWindow;
+    procedure TestOfTypeNilSource;
+    procedure TestOfTypeNilSourceGenericPath;
+    procedure TestNilSourceValidation;
+    procedure TestOfTypeFiltersByType;
     procedure TestTryMethodsReturnDefaultWhenFalse;
+  end;
+
+  TTestAutoInitAttribute = class(TTestCase)
+  type
+    TBadAutoInit = class(TManagedObject)
+    protected
+      [AutoInit]
+      fList: IList<Integer>;
+    end;
+    TNonInterfaceAutoInit = class(TManagedObject)
+    protected
+      [AutoInit]
+      fList: TObject;
+    end;
+    TNonListInterfaceAutoInit = class(TManagedObject)
+    protected
+      [AutoInit]
+      fItems: IEnumerable<Integer>;
+    end;
+  published
+    procedure TestUnsupportedElementType;
+    procedure TestNonInterfaceFieldType;
+    procedure TestNonListInterfaceFieldType;
   end;
 
   TTestMultiMapBase = class(TTestCase)
@@ -617,6 +650,12 @@ type
     procedure TestValuesToArray; virtual;
     procedure TestExtractValues;
     procedure TestExtractKeyValue;
+    procedure TestExtractKeyValueLastValue;
+    procedure TestExtractKeyValueKeepsKeyWhenValuesRemain;
+    procedure TestExtractKeyValueMissing;
+    procedure TestExtractKeyValueLastValueStringKey;
+    procedure TestExtractAllRemovesKey;
+    procedure TestExtractAllKeepsKeyWhenValuesRemain;
 
     procedure WrappedCollection;
     procedure WrappedCollectionEnumerator;
@@ -731,6 +770,7 @@ type
     procedure SetUp; override;
   published
     procedure TestToArray;
+    procedure TestEnumeratorKeepsTreeAlive;
   end;
 
   TTestMultiSetBase = class(TTestCase)
@@ -746,6 +786,12 @@ type
     procedure TestEnumerate;
     procedure TestSetItemCount;
 
+    procedure TestClear;
+    procedure TestClearEmpty;
+    procedure TestAddZeroCount;
+    procedure TestSetItemCountNewEntryAfterRehash;
+    procedure TestSetItemCountExistingEntryAfterRehash;
+
     procedure TestOrderedByCount;
     procedure TestSetEquals;
   end;
@@ -757,6 +803,7 @@ type
     procedure TestElements;
     procedure TestEntries;
     procedure TestToArray;
+    procedure TestSetItemCountNegativeKey;
   end;
 
   TTestTreeMultiSet = class(TTestMultiSetBase)
@@ -813,6 +860,7 @@ type
     procedure TestDestroy;
     procedure TestExtract;
     procedure TestExtractPair;
+    procedure TestExtractAll;
     procedure TestRemove;
     procedure TestRemovePair;
   end;
@@ -822,6 +870,7 @@ type
     procedure AddEventHandlers;
   protected
     SUT: ISet<Integer>;
+    function GetSUTCount: Integer; override;
     procedure TearDown; override;
   published
     procedure TestAdd;
@@ -845,12 +894,16 @@ type
     procedure AddEventHandlers;
   protected
     SUT: IMultiSet<Integer>;
+    function GetSUTCount: Integer; override;
     procedure TearDown; override;
   published
     procedure TestAdd;
+    procedure TestAddZeroCount;
     procedure TestClear;
+    procedure TestClearAfterPartialRemoval;
     procedure TestDestroy;
     procedure TestRemove;
+    procedure TestSetItemCount;
   end;
 
   TTestListMultiMapChangedEvent = class(TTestMultiMapChangedEventBase)
@@ -1031,6 +1084,16 @@ type
     procedure RunOnce(const source: IEnumerable<Integer>; count: Integer);
     procedure List_ChangesAfterSkipLast_ChangesReflectedInResults;
     procedure List_Skip_ChangesAfterSkipLast_ChangesReflectedInResults;
+
+    procedure FirstOnEmptyResult;
+    procedure TryGetFirstOnEmptyResult;
+    procedure FirstAndTryGetFirst_ZeroAndNegativeCount;
+    procedure EmptySource_SkipLast_TryGetFirstAndLast;
+    procedure TakeLast_FirstAndTryGetFirst;
+    procedure FirstOnUnknownCountSource;
+    procedure TakeAfterSkipLast_First;
+    procedure SkipPastEnd_TryGetSpan;
+    procedure SkipPastEnd_TryGetSpanStringElements;
   end;
 
   TTakeTests = class(TEnumerableTestCase)
@@ -1222,6 +1285,7 @@ uses
   Spring.Collections.MultiMaps,
   Spring.Collections.MultiSets,
   Spring.Collections.Queues,
+  Spring.Span,
   Math,
   Rtti, // H2443
   StrUtils,
@@ -1234,6 +1298,18 @@ type
   TTreeMultiSet = TTreeMultiSet<string>;
   TSortedMultiMap = TSortedMultiMap<Integer,Integer>;
   TIntQueue = TQueue<Integer>;
+
+  TLeakProbe = class(TInterfacedObject)
+  public
+    class var DestroyCount: Integer;
+    destructor Destroy; override;
+  end;
+
+destructor TLeakProbe.Destroy;
+begin
+  Inc(DestroyCount);
+  inherited Destroy;
+end;
 
 const
   MinInt = Low(Integer);
@@ -1263,15 +1339,18 @@ begin
   event.sender := Sender;
   event.item := Item;
   event.action := Action;
+  event.count := GetSUTCount;
   fChangedEvents.Add(event);
 end;
 
 procedure TTestCollectionChangedEventBase.CheckChanged(index, item: Integer;
-  action: TCollectionChangedAction);
+  action: TCollectionChangedAction; count: Integer = -1);
 begin
   Check(Sender = fChangedEvents[index].sender);
   Check(item = fChangedEvents[index].item);
   Check(action = fChangedEvents[index].action);
+  if count > -1 then
+    Check(count = fChangedEvents[index].count);
 end;
 
 {$ENDREGION}
@@ -4283,6 +4362,184 @@ begin
   CheckTrue(sut.Contains(nil));
 end;
 
+procedure TTestEnumerable.TestRepeatedIndexOfEmptyWindow;
+var
+  seq: IReadOnlyList<Integer>;
+begin
+  seq := TEnumerable.Repeated<Integer>(42, 5);
+
+  CheckEquals(-1, seq.IndexOf(42, 0, 0));
+  CheckEquals(-1, seq.IndexOf(42, 5, 0));
+  CheckEquals(2, seq.IndexOf(42, 2, 3));
+  CheckEquals(0, seq.IndexOf(42, 0, 1));
+
+  // non-matching item is never found
+  CheckEquals(-1, seq.IndexOf(43, 0, 3));
+  CheckEquals(-1, seq.IndexOf(43, 0, 0));
+
+  // windows straddling the end
+  CheckEquals(3, seq.IndexOf(42, 3, 2));
+  CheckEquals(4, seq.IndexOf(42, 4, 1));
+
+  // empty window mid-list
+  CheckEquals(-1, seq.IndexOf(42, 2, 0));
+
+  // string elements: exercises the IndexOf_UString vtable path
+  CheckEquals(-1, TEnumerable.Repeated<string>('x', 5).IndexOf('x', 0, 0));
+  CheckEquals(2, TEnumerable.Repeated<string>('x', 5).IndexOf('x', 2, 3));
+
+  // invalid arguments raise
+  CheckException(EArgumentOutOfRangeException,
+    procedure begin seq.IndexOf(42, -1, 1); end);
+  CheckException(EArgumentOutOfRangeException,
+    procedure begin seq.IndexOf(42, 0, -1); end);
+  CheckException(EArgumentOutOfRangeException,
+    procedure begin seq.IndexOf(42, 4, 2); end);
+end;
+
+procedure TTestEnumerable.TestOfTypeNilSource;
+begin
+  CheckException(EArgumentNilException,
+    procedure
+    begin
+      TEnumerable.OfType<TObject, TObject>(nil);
+    end);
+end;
+
+procedure TTestEnumerable.TestOfTypeNilSourceGenericPath;
+begin
+  // TResult = Integer (not a class) -> the generic path, not the object fast path
+  CheckException(EArgumentNilException,
+    procedure
+    begin
+      TEnumerable.OfType<TObject, Integer>(nil);
+    end);
+end;
+
+procedure TTestEnumerable.TestNilSourceValidation;
+begin
+  CheckException(EArgumentNilException,
+    procedure
+    begin
+      TEnumerable.ToLookup<TObject, Integer>(nil,
+        function(const x: TObject): Integer
+        begin
+          Result := 0;
+        end);
+    end);
+  CheckException(EArgumentNilException,
+    procedure
+    begin
+      TEnumerable.DistinctBy<TObject, Integer>(nil,
+        function(const x: TObject): Integer
+        begin
+          Result := 0;
+        end);
+    end);
+end;
+
+procedure TTestEnumerable.TestOfTypeFiltersByType;
+var
+  tlist1, tlist2: TList;
+  slist1: TStringList;
+  result: IEnumerable<TList>;
+begin
+  tlist1 := TList.Create;
+  tlist2 := TList.Create;
+  slist1 := TStringList.Create;
+  try
+    result := TEnumerable.OfType<TObject, TList>(TEnumerable.From<TObject>([tlist1, slist1, tlist2]));
+    CheckEquals(2, result.Count);
+  finally
+    tlist1.Free;
+    tlist2.Free;
+    slist1.Free;
+  end;
+end;
+
+procedure TTestAutoInitAttribute.TestUnsupportedElementType;
+begin
+  CheckException(EArgumentException,
+    procedure
+    begin
+      TTestAutoInitAttribute.TBadAutoInit.Create;
+    end);
+end;
+
+procedure TTestAutoInitAttribute.TestNonInterfaceFieldType;
+begin
+  CheckException(EArgumentException,
+    procedure
+    begin
+      TTestAutoInitAttribute.TNonInterfaceAutoInit.Create;
+    end);
+end;
+
+procedure TTestAutoInitAttribute.TestNonListInterfaceFieldType;
+begin
+  CheckException(EArgumentException,
+    procedure
+    begin
+      TTestAutoInitAttribute.TNonListInterfaceAutoInit.Create;
+    end);
+end;
+
+procedure TTestEnumerable.TestElementAtNegativeIndex;
+var
+  i: Integer;
+  items, memoized: IEnumerable<Integer>;
+begin
+  items := TEnumerable.From<Integer>([10, 20, 30]);
+
+  i := -1;
+  CheckFalse(items.TryGetElementAt(i, -1));
+  CheckEquals(0, i);
+  CheckException(EArgumentOutOfRangeException, procedure
+  begin
+    items.ElementAt(-1);
+  end);
+  CheckEquals(0, items.ElementAtOrDefault(-1));
+
+  memoized := TEnumerable.Range(0, 10).Memoize;
+
+  i := -1;
+  CheckFalse(memoized.TryGetElementAt(i, -1));
+  CheckEquals(0, i);
+  CheckException(EArgumentOutOfRangeException, procedure
+  begin
+    memoized.ElementAt(-1);
+  end);
+  CheckEquals(0, memoized.ElementAtOrDefault(-1));
+end;
+
+procedure TTestEnumerable.TestElementAtNegativeIndexAllKinds;
+var
+  i: Integer;
+  src: IEnumerable<Integer>;
+begin
+  src := TEnumerable.From<Integer>([10, 20, 30]);
+  i := Low(Integer);
+  CheckFalse(src.Skip(1).TryGetElementAt(i, Low(Integer)));
+  CheckEquals(0, i);
+  CheckFalse(src.SkipLast(1).TryGetElementAt(i, -1));
+  CheckFalse(src.Concat(TEnumerable.From<Integer>([40])).TryGetElementAt(i, -1));
+  CheckFalse(src.Reversed.TryGetElementAt(i, Low(Integer)));
+  CheckFalse(src.Where(function(const x: Integer): Boolean begin Result := x > 10 end).TryGetElementAt(i, -1));
+  CheckFalse(TEnumerable.Select<Integer, Integer>(src, function(const x: Integer): Integer begin Result := x * 2 end).TryGetElementAt(i, -1));
+  CheckFalse(TEnumerable.Repeated<Integer>(7, 3).TryGetElementAt(i, -1));
+  CheckFalse(src.Distinct.TryGetElementAt(i, -1));
+  CheckFalse(TEnumerable.Empty<Integer>.DefaultIfEmpty(42).TryGetElementAt(i, -1));
+  CheckEquals(42, TEnumerable.Empty<Integer>.DefaultIfEmpty(42).ElementAt(0));
+  CheckEquals(0, src.Skip(1).ElementAtOrDefault(Low(Integer)));
+  CheckException(EArgumentOutOfRangeException, procedure
+  begin
+    src.Skip(1).ElementAt(-1);
+  end);
+  CheckFalse(src.TryGetElementAt(i, 3));
+  CheckEquals(0, i);
+  CheckFalse(src.Memoize.TryGetElementAt(i, 3));
+end;
+
 procedure TTestEnumerable.TestToArray;
 var
   sut: IEnumerable<Integer>;
@@ -4420,6 +4677,115 @@ begin
 
   CheckEquals(2, SUT.Extract(1, 2).Value);
   CheckEquals(2, SUT.Count);
+end;
+
+procedure TTestMultiMapBase.TestExtractKeyValueLastValue;
+var
+  pair: TPair<Integer, Integer>;
+begin
+  SUT.Add(1, 1);
+  SUT.Add(2, 2);
+
+  pair := SUT.Extract(1, 1);
+  CheckEquals(1, pair.Key);
+  CheckEquals(1, pair.Value);
+  CheckEquals(1, SUT.Count);
+  CheckFalse(SUT.ContainsKey(1));
+  CheckTrue(SUT.ContainsKey(2));
+  CheckEquals(1, SUT.Keys.Count);
+end;
+
+procedure TTestMultiMapBase.TestExtractKeyValueKeepsKeyWhenValuesRemain;
+var
+  pair: TPair<Integer, Integer>;
+begin
+  SUT.Add(1, 1);
+  SUT.Add(1, 2);
+  SUT.Add(2, 3);
+
+  pair := SUT.Extract(1, 1);
+  CheckEquals(1, pair.Key);
+  CheckEquals(1, pair.Value);
+  CheckEquals(2, SUT.Count);
+  CheckTrue(SUT.ContainsKey(1));
+  CheckEquals(1, SUT[1].Count);
+  CheckEquals(2, SUT.Keys.Count);
+end;
+
+procedure TTestMultiMapBase.TestExtractKeyValueMissing;
+var
+  pair: TPair<Integer, Integer>;
+begin
+  SUT.Add(1, 2);
+
+  pair := SUT.Extract(9, 3);
+  CheckEquals(9, pair.Key);
+  CheckEquals(0, pair.Value);
+  pair := SUT.Extract(1, 3);
+  CheckEquals(1, pair.Key);
+  CheckEquals(0, pair.Value);
+  CheckEquals(1, SUT.Count);
+  CheckTrue(SUT.ContainsKey(1));
+end;
+
+procedure TTestMultiMapBase.TestExtractKeyValueLastValueStringKey;
+var
+  map: IMultiMap<string, Integer>;
+  pair: TPair<string, Integer>;
+begin
+  map := TCollections.CreateMultiMap<string, Integer>;
+  map.Add('a', 1);
+  map.Add('b', 2);
+
+  pair := map.Extract('a', 1);
+  CheckEquals('a', pair.Key);
+  CheckEquals(1, pair.Value);
+  CheckEquals(1, map.Count);
+  CheckFalse(map.ContainsKey('a'));
+  CheckEquals(1, map.Keys.Count);
+end;
+
+procedure TTestMultiMapBase.TestExtractAllRemovesKey;
+var
+  values: TArray<Integer>;
+begin
+  SUT.Add(1, 1);
+  SUT.Add(1, 2);
+  SUT.Add(1, 3);
+  SUT.Add(2, 4);
+
+  values := SUT.ExtractAll(
+    1,
+    function(const x: Integer): Boolean begin Result := x <> 5 end);
+  CheckEquals(3, Length(values));
+  CheckEquals(1, values[0]);
+  CheckEquals(2, values[1]);
+  CheckEquals(3, values[2]);
+  CheckEquals(1, SUT.Count);
+  CheckFalse(SUT.ContainsKey(1));
+  CheckTrue(SUT.ContainsKey(2));
+  CheckEquals(1, SUT.Keys.Count);
+end;
+
+procedure TTestMultiMapBase.TestExtractAllKeepsKeyWhenValuesRemain;
+var
+  values: TArray<Integer>;
+begin
+  SUT.Add(1, 1);
+  SUT.Add(1, 2);
+  SUT.Add(1, 3);
+  SUT.Add(2, 4);
+
+  values := SUT.ExtractAll(
+    1,
+    function(const x: Integer): Boolean begin Result := Odd(x) end);
+  CheckEquals(2, Length(values));
+  CheckEquals(1, values[0]);
+  CheckEquals(3, values[1]);
+  CheckEquals(2, SUT.Count);
+  CheckTrue(SUT.ContainsKey(1));
+  CheckEquals(1, SUT[1].Count);
+  CheckEquals(2, SUT.Keys.Count);
 end;
 
 procedure TTestMultiMapBase.TestExtractValues;
@@ -5600,6 +5966,48 @@ begin
   CheckValueChanged(1, 'b', caExtracted);
 end;
 
+procedure TTestMultiMapChangedEventBase.TestExtractAll;
+var
+  extracted: TArray<string>;
+  values: ISet<string>;
+  e: TEvent<string>;
+begin
+  SUT.Add(1, 'a');
+  SUT.Add(1, 'b');
+  SUT.Add(1, 'c');
+  SUT.Add(2, 'd');
+  AddEventHandlers;
+
+  // partial extract: key 1 keeps 'b' -> 2 values extracted, group not emptied
+  extracted := SUT.ExtractAll(1,
+    function(const value: string): Boolean
+    begin
+      Result := value <> 'b';
+    end);
+  CheckEquals(2, Length(extracted));
+  CheckEquals(2, fChangedEvents.Count);
+  CheckEquals(2, fValueChangedEvents.Count);
+  CheckEquals(0, fKeyChangedEvents.Count);
+
+  values := TCollections.CreateSet<string>;
+  for e in fValueChangedEvents do
+    values.Add(e.item);
+  CheckTrue(values.EqualsTo(extracted));
+
+  // extract the remaining value -> group emptied -> key caExtracted fires
+  extracted := SUT.ExtractAll(1,
+    function(const value: string): Boolean
+    begin
+      Result := True;
+    end);
+  CheckEquals(1, Length(extracted));
+  CheckEquals(3, fChangedEvents.Count);
+  CheckEquals(1, fKeyChangedEvents.Count);
+  CheckKeyChanged(0, 1, caExtracted);
+  CheckEquals(3, fValueChangedEvents.Count);
+  CheckValueChanged(2, 'b', caExtracted);
+end;
+
 procedure TTestMultiMapChangedEventBase.TestRemove;
 begin
   SUT.Add(1, 'a');
@@ -5730,6 +6138,27 @@ begin
   Sender := SUT.AsObject;
 end;
 
+procedure TTestSortedSet.TestEnumeratorKeepsTreeAlive;
+var
+  tree: IRedBlackTree<IInterface>;
+  enumerator: IEnumerator<IInterface>;
+begin
+  TLeakProbe.DestroyCount := 0;
+  tree := TRedBlackTree<IInterface>.Create;
+  tree.Add(TLeakProbe.Create);
+  tree.Add(TLeakProbe.Create);
+  tree.Add(TLeakProbe.Create);
+  enumerator := tree.GetEnumerator;
+  tree := nil;
+  CheckEquals(0, TLeakProbe.DestroyCount);
+  CheckTrue(enumerator.MoveNext);
+  CheckTrue(enumerator.MoveNext);
+  CheckTrue(enumerator.MoveNext);
+  CheckFalse(enumerator.MoveNext);
+  enumerator := nil;
+  CheckEquals(3, TLeakProbe.DestroyCount);
+end;
+
 {$ENDREGION}
 
 
@@ -5827,6 +6256,77 @@ begin
   CheckEquals(0, SUT['a']);
 end;
 
+procedure TTestMultiSetBase.TestClear;
+begin
+  SUT.AddRange(['a', 'a', 'b', 'c', 'c', 'c']);
+  CheckCount(6);
+  SUT.Clear;
+  CheckCount(0);
+  CheckFalse(SUT.Contains('a'));
+  CheckEquals(0, SUT['a']);
+  CheckEquals(0, Length(SUT.ToArray));
+  SUT.Add('d', 2);
+  CheckCount(2);
+  SUT.Clear;
+  CheckCount(0);
+end;
+
+procedure TTestMultiSetBase.TestClearEmpty;
+begin
+  SUT.Clear;
+  CheckCount(0);
+  CheckEquals(0, Length(SUT.ToArray));
+end;
+
+procedure TTestMultiSetBase.TestAddZeroCount;
+begin
+  CheckEquals(0, SUT.Add('a', 0));
+  CheckFalse(SUT.Contains('a'));
+  CheckEquals(0, SUT['a']);
+  CheckCount(0);
+
+  SUT.Add('a', 2);
+  CheckEquals(2, SUT.Add('a', 0));
+  CheckCount(2);
+  CheckEquals(2, SUT['a']);
+end;
+
+procedure TTestMultiSetBase.TestSetItemCountNewEntryAfterRehash;
+var
+  i: Integer;
+begin
+  // fill the initial item capacity so the next insertion triggers a
+  // grow/rehash; a prior full removal guarantees a stale slot in the tail
+  for i := 1 to 6 do
+    SUT.Add(Format('k%d', [i]), 2);
+  SUT[Format('k%d', [1])] := 0;
+
+  // the rehash repopulates live items from index 0 and the new item lands
+  // in the stale tail slot - its Count must be treated as zero
+  SUT['b'] := 1;
+  CheckCount(11);
+  CheckEquals(1, SUT['b']);
+end;
+
+procedure TTestMultiSetBase.TestSetItemCountExistingEntryAfterRehash;
+var
+  i: Integer;
+begin
+  for i := 1 to 6 do
+    SUT.Add(Format('k%d', [i]), 2);
+  SUT[Format('k%d', [1])] := 0;
+
+  // force the grow/rehash, then update a repacked live entry
+  SUT['b'] := 1;
+  SUT['k2'] := 3;
+  CheckCount(12);
+  CheckEquals(3, SUT['k2']);
+  // second update proves the restored hash still locates the entry
+  SUT['k2'] := 4;
+  CheckCount(13);
+  CheckEquals(4, SUT['k2']);
+end;
+
 {$ENDREGION}
 
 
@@ -5876,6 +6376,23 @@ begin
   CheckEquals('a', items[1]);
   CheckEquals('a', items[2]);
   CheckEquals('b', items[3]);
+end;
+
+procedure TTestHashMultiSet.TestSetItemCountNegativeKey;
+var
+  s: IMultiSet<Integer>;
+begin
+  // tkInteger natural hash IS the value: -1 has bit 31 set, so the stored
+  // hash must be masked to non-negative for the fresh/existing discriminator
+  s := TCollections.CreateMultiSet<Integer>;
+  s[-1] := 2;
+  CheckEquals(2, s.Count);
+  CheckEquals(2, s[-1]);
+  s[-1] := 5;
+  CheckEquals(5, s.Count);
+  CheckEquals(5, s[-1]);
+  s[-2] := 1;
+  CheckEquals(6, s.Count);
 end;
 
 {$ENDREGION}
@@ -5943,6 +6460,14 @@ end;
 procedure TTestSetChangedEventBase.AddEventHandlers;
 begin
   SUT.OnChanged.Add(Changed);
+end;
+
+function TTestSetChangedEventBase.GetSUTCount: Integer;
+begin
+  if Assigned(SUT) then
+    Result := SUT.Count
+  else
+    Result := -1;
 end;
 
 procedure TTestSetChangedEventBase.TearDown;
@@ -6047,6 +6572,14 @@ begin
   SUT.OnChanged.Add(Changed);
 end;
 
+function TTestMultiSetChangedEventBase.GetSUTCount: Integer;
+begin
+  if Assigned(SUT) then
+    Result := SUT.Count
+  else
+    Result := -1;
+end;
+
 procedure TTestMultiSetChangedEventBase.TearDown;
 begin
   SUT := nil;
@@ -6067,6 +6600,21 @@ begin
   CheckChanged(3, 3, caAdded);
 end;
 
+procedure TTestMultiSetChangedEventBase.TestAddZeroCount;
+begin
+  AddEventHandlers;
+  SUT.Add(1, 0);   // absent item, count 0: no events, no phantom entry
+  CheckEquals(0, fChangedEvents.Count);
+  CheckFalse(SUT.Contains(1));
+
+  SUT.Add(1, 2);   // 2x caAdded
+  SUT.Add(1, 0);   // no-op (count 0): no further events
+  CheckEquals(2, fChangedEvents.Count);
+  CheckChanged(0, 1, caAdded);
+  CheckChanged(1, 1, caAdded);
+  CheckEquals(2, SUT[1]);
+end;
+
 procedure TTestMultiSetChangedEventBase.TestClear;
 begin
   SUT.Add(1);
@@ -6076,10 +6624,39 @@ begin
   SUT.Clear;
 
   CheckEquals(4, fChangedEvents.Count);
-  CheckChanged(0, 1, caRemoved);
-  CheckChanged(1, 2, caRemoved);
-  CheckChanged(2, 3, caRemoved);
-  CheckChanged(3, 3, caRemoved);
+  CheckChanged(0, 1, caRemoved, 0);
+  CheckChanged(1, 2, caRemoved, 0);
+  CheckChanged(2, 3, caRemoved, 0);
+  CheckChanged(3, 3, caRemoved, 0);
+
+  CheckEquals(0, SUT.Count);
+  CheckFalse(SUT.Contains(1));
+  CheckEquals(0, Length(SUT.ToArray));
+end;
+
+procedure TTestMultiSetChangedEventBase.TestClearAfterPartialRemoval;
+var
+  i: Integer;
+begin
+  for i := 1 to 6 do
+    SUT.Add(i, 2);
+  SUT[1] := 0;
+  AddEventHandlers;
+  SUT.Clear;
+
+  CheckEquals(10, fChangedEvents.Count);
+  CheckChanged(0, 2, caRemoved, 0);
+  CheckChanged(1, 2, caRemoved, 0);
+  CheckChanged(2, 3, caRemoved, 0);
+  CheckChanged(3, 3, caRemoved, 0);
+  CheckChanged(4, 4, caRemoved, 0);
+  CheckChanged(5, 4, caRemoved, 0);
+  CheckChanged(6, 5, caRemoved, 0);
+  CheckChanged(7, 5, caRemoved, 0);
+  CheckChanged(8, 6, caRemoved, 0);
+  CheckChanged(9, 6, caRemoved, 0);
+  CheckEquals(0, SUT.Count);
+  CheckFalse(SUT.Contains(2));
 end;
 
 procedure TTestMultiSetChangedEventBase.TestDestroy;
@@ -6114,6 +6691,29 @@ begin
   CheckChanged(1, 2, caRemoved);
   CheckChanged(2, 1, caRemoved);
   CheckChanged(3, 3, caRemoved);
+end;
+
+procedure TTestMultiSetChangedEventBase.TestSetItemCount;
+begin
+  SUT.Add(1);
+  SUT.Add(2, 3);
+  AddEventHandlers;
+  SUT[1] := 3;  // increase existing: 2x caAdded
+  SUT[2] := 1;  // decrease existing: 2x caRemoved
+  SUT[3] := 2;  // add new item:      2x caAdded
+  SUT[2] := 0;  // remove item:       1x caRemoved
+  SUT[1] := 3;  // no-op (same count): no events
+  SUT[99] := 0; // absent item to 0:   no events, no phantom entry
+
+  CheckEquals(7, fChangedEvents.Count);
+  CheckChanged(0, 1, caAdded);
+  CheckChanged(1, 1, caAdded);
+  CheckChanged(2, 2, caRemoved);
+  CheckChanged(3, 2, caRemoved);
+  CheckChanged(4, 3, caAdded);
+  CheckChanged(5, 3, caAdded);
+  CheckChanged(6, 2, caRemoved);
+  CheckFalse(SUT.Contains(99));
 end;
 
 {$ENDREGION}
@@ -6920,6 +7520,164 @@ begin
   list.Delete(4);
 
   CheckEquals([2], e.ToArray);
+end;
+
+procedure TSkipLastTests.FirstOnEmptyResult;
+var
+  source: IEnumerable<Integer>;
+begin
+  source := TEnumerable.From<Integer>([1, 2]);
+
+  CheckException(EInvalidOperationException, procedure
+  begin
+    source.SkipLast(5).First;
+  end);
+  CheckEquals(0, source.SkipLast(2).FirstOrDefault);
+  CheckEquals(1, source.SkipLast(1).First);
+end;
+
+procedure TSkipLastTests.TryGetFirstOnEmptyResult;
+var
+  source: IEnumerable<Integer>;
+  i: Integer;
+begin
+  source := TEnumerable.From<Integer>([1, 2]);
+
+  i := -1;
+  CheckFalse(source.SkipLast(5).TryGetFirst(i));
+  CheckEquals(0, i);
+  i := -1;
+  CheckTrue(source.SkipLast(1).TryGetFirst(i));
+  CheckEquals(1, i);
+end;
+
+procedure TSkipLastTests.FirstAndTryGetFirst_ZeroAndNegativeCount;
+var
+  source, empty: IEnumerable<Integer>;
+  i: Integer;
+begin
+  source := TEnumerable.From<Integer>([1, 2]);
+  empty := TEnumerable.Empty<Integer>;
+
+  CheckEquals(1, source.SkipLast(0).First);
+  CheckEquals(1, source.SkipLast(-1).First);
+  i := -1;
+  CheckTrue(source.SkipLast(0).TryGetFirst(i));
+  CheckEquals(1, i);
+  CheckEquals(0, empty.SkipLast(0).FirstOrDefault);
+  i := -1;
+  CheckFalse(empty.SkipLast(0).TryGetFirst(i));
+  CheckEquals(0, i);
+end;
+
+procedure TSkipLastTests.EmptySource_SkipLast_TryGetFirstAndLast;
+var
+  empty: IEnumerable<Integer>;
+  i: Integer;
+begin
+  empty := TEnumerable.Empty<Integer>;
+
+  i := -1;
+  CheckFalse(empty.SkipLast(1).TryGetFirst(i));
+  CheckEquals(0, i);
+  i := -1;
+  CheckFalse(empty.SkipLast(1).TryGetLast(i));
+  CheckEquals(0, i);
+  CheckEquals(0, empty.SkipLast(1).LastOrDefault);
+end;
+
+procedure TSkipLastTests.TakeLast_FirstAndTryGetFirst;
+var
+  source, empty: IEnumerable<Integer>;
+  i: Integer;
+begin
+  source := TEnumerable.From<Integer>([1, 2]);
+  empty := TEnumerable.Empty<Integer>;
+
+  CheckEquals(1, source.TakeLast(5).First);
+  i := -1;
+  CheckTrue(source.TakeLast(1).TryGetFirst(i));
+  CheckEquals(2, i);
+  i := -1;
+  CheckFalse(empty.TakeLast(1).TryGetFirst(i));
+  CheckEquals(0, i);
+end;
+
+procedure TSkipLastTests.FirstOnUnknownCountSource;
+var
+  source: IEnumerable<Integer>;
+  i: Integer;
+begin
+  source := TEnumerable.Range(0, 5)
+    .Where(function(const i2: Integer): Boolean begin Result := i2 mod 2 = 1; end)
+    .SkipLast(1);
+
+  CheckEquals(1, source.First);
+  i := -1;
+  CheckTrue(source.TryGetFirst(i));
+  CheckEquals(1, i);
+end;
+
+procedure TSkipLastTests.TakeAfterSkipLast_First;
+var
+  source: IEnumerable<Integer>;
+  i: Integer;
+begin
+  source := TEnumerable.From<Integer>([1, 2, 3]);
+
+  CheckEquals(1, source.SkipLast(1).Take(1).First);
+  CheckEquals(0, source.SkipLast(5).Take(1).FirstOrDefault);
+  CheckEquals(0, source.Take(1).SkipLast(5).FirstOrDefault);
+  i := -1;
+  CheckFalse(source.SkipLast(5).Take(1).TryGetFirst(i));
+  CheckEquals(0, i);
+end;
+
+procedure TSkipLastTests.SkipPastEnd_TryGetSpan;
+var
+  source: IEnumerable<Integer>;
+  span: Span<Integer>;
+begin
+  source := TEnumerable.From<Integer>([1, 2, 3]);
+
+  // skipping past the end must not yield a span rooted past the array
+  CheckFalse(source.Skip(5).TryGetSpan(span));
+  CheckFalse(source.Skip(3).TryGetSpan(span));
+
+  CheckTrue(source.Skip(1).TryGetSpan(span));
+  CheckEquals(2, span.Length);
+  CheckEquals([2, 3], span.ToArray);
+
+  CheckTrue(source.Skip(2).Take(1).TryGetSpan(span));
+  CheckEquals(1, span.Length);
+  CheckEquals([3], span.ToArray);
+
+  CheckTrue(source.Skip(1).Take(1).TryGetSpan(span));
+  CheckEquals([2], span.ToArray);
+
+  CheckTrue(source.Skip(0).Take(2).TryGetSpan(span));
+  CheckEquals([1, 2], span.ToArray);
+
+  CheckTrue(source.Skip(1).Take(10).TryGetSpan(span));
+  CheckEquals([2, 3], span.ToArray);
+
+  CheckTrue(source.Skip(1).Take(0).TryGetSpan(span));
+  CheckEquals(0, span.Length);
+end;
+
+procedure TSkipLastTests.SkipPastEnd_TryGetSpanStringElements;
+var
+  source: IEnumerable<string>;
+  span: Span<string>;
+begin
+  source := TEnumerable.From<string>(['a', 'bb', 'ccc']);
+
+  // element size 8 > 4: pointer math with a larger elSize
+  CheckFalse(source.Skip(5).TryGetSpan(span));
+  CheckTrue(source.Skip(1).TryGetSpan(span));
+  CheckEquals(2, span.Length);
+  CheckEqualsString('bb', span.ToArray[0]);
+  CheckEqualsString('ccc', span.ToArray[1]);
 end;
 
 {$ENDREGION}
