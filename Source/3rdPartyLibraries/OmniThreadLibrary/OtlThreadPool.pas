@@ -35,10 +35,17 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, Sean B. Durkin
 ///   Creation date     : 2008-06-12
-///   Last modification : 2026-04-15
-///   Version           : 2.21a
+///   Last modification : 2026-09-16
+///   Version           : 2.21b
 /// </para><para>
 ///   History:
+///     2.21b: 2026-09-16
+///       - Fixed: TOTPWorkerScheduler.CreateInitialClusters used a processor
+///         group number as a positional index into IOmniProcessorGroups
+///         (envGroups[groupNumber]) instead of looking the group up by number,
+///         same mistake as the now-fixed TOmniProcessorGroups.FindGroup. Now
+///         uses FindGroup and raises a clear exception for an unknown group
+///         or an empty processor group list instead of an index/range error.
 ///     2.21a: 2026-04-15
 ///       - Fixed: GlobalOmniThreadPool lazy initialization was not thread-safe.
 ///         Two threads calling simultaneously could create two pools, leaking one.
@@ -1991,6 +1998,7 @@ procedure TOTPWorkerScheduler.CreateInitialClusters(const processorGroups, numaN
 var
   envGroups   : IOmniProcessorGroups;
   envNodes    : IOmniNUMANodes;
+  groupInfo   : IOmniProcessorGroup;
   i           : integer;
   nodeInfo    : IOmniNUMANode;
 {$ENDIF OTL_NUMASupport}
@@ -2008,11 +2016,18 @@ begin
     end;
   end
   else if processorGroups.Count > 0 then begin
-    for i := 0 to processorGroups.Count - 1 do
-      owsClusters.Add(TOTPGroupAffinity.Create(processorGroups[i], envGroups[processorGroups[i]].Affinity.AsMask));
+    for i := 0 to processorGroups.Count - 1 do begin
+      groupInfo := envGroups.FindGroup(processorGroups[i]);
+      if not assigned(groupInfo) then
+        raise Exception.CreateFmt('TOTPWorkerScheduler.Update: Unknown processor group: %d', [processorGroups[i]]);
+      owsClusters.Add(TOTPGroupAffinity.Create(groupInfo.GroupNumber, groupInfo.Affinity.AsMask));
+    end;
   end
-  else
-    owsClusters.Add(TOTPGroupAffinity.Create(0, envGroups[0].Affinity.AsMask));
+  else begin
+    if envGroups.Count = 0 then
+      raise Exception.Create('TOTPWorkerScheduler.Update: No processor groups are available');
+    owsClusters.Add(TOTPGroupAffinity.Create(envGroups[0].GroupNumber, envGroups[0].Affinity.AsMask));
+  end;
   {$ELSE}
   owsClusters.Add(TOTPGroupAffinity.Create(0, Environment.Process.Affinity.Mask));
   {$ENDIF OTL_NUMASupport}

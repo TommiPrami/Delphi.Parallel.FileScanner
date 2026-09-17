@@ -35,10 +35,18 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, scarre, Sean B. Durkin, HHasenack
 ///   Creation date     : 2008-06-12
-///   Last modification : 2026-04-15
-///   Version           : 1.56a
+///   Last modification : 2026-09-16
+///   Version           : 1.56b
 ///</para><para>
 ///   History:
+///     1.56b: 2026-09-16
+///       - Fixed: TOmniEnvironment.LoadNUMAInfo ignored the result of
+///         DSiGetLogicalProcessorInfoEx and only handled the "API not present"
+///         failure case (GetLastError = ERROR_NOT_SUPPORTED). Any other failure
+///         left ProcessorGroups/NUMANodes silently empty instead of raising,
+///         which could later crash TOTPWorkerScheduler.CreateInitialClusters.
+///         Now raises an exception with the OS error code/message for any
+///         other failure.
 ///     1.56a: 2026-04-15
 ///       - Fixed: TOmniValue._ReleaseAndClear did not check assigned(ovIntf) before
 ///         calling ovIntf._Release, causing AV when type was interfaced but pointer nil.
@@ -4308,10 +4316,14 @@ var
   pGroupInfo             : PProcessorGroupInfo;
   processorGroupsInternal: IOmniProcessorGroupsInternal;
   procInfo               : TSystemLogicalProcessorInformationExArr;
+  succeeded              : boolean;
 begin
-  DSiGetLogicalProcessorInfoEx(DSiWin32._LOGICAL_PROCESSOR_RELATIONSHIP.RelationAll, procInfo);
-  if GetLastError = ERROR_NOT_SUPPORTED then
+  succeeded := DSiGetLogicalProcessorInfoEx(DSiWin32._LOGICAL_PROCESSOR_RELATIONSHIP.RelationAll, procInfo);
+  if (not succeeded) and (GetLastError = ERROR_NOT_SUPPORTED) then
     CreateFakeNUMAInfo
+  else if not succeeded then
+    raise Exception.CreateFmt('TOmniEnvironment.LoadNUMAInfo: DSiGetLogicalProcessorInfoEx failed with [%d] %s',
+      [GetLastError, SysErrorMessage(GetLastError)])
   else begin
     numaNodesInternal := (oeNUMANodes as IOmniNUMANodesInternal);
     processorGroupsInternal := (oeProcessorGroups as IOmniProcessorGroupsInternal);
