@@ -103,6 +103,7 @@ begin
       TTestBaseRoutines.Suite,
       TTestManagedObject.Suite,
       TSortTest.Suite,
+      TPartialSortTest.Suite,
       TTestHash.Suite
     ]);
   end;

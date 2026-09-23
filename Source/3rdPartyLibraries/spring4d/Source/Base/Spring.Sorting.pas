@@ -45,6 +45,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_UInt8 = record
@@ -63,6 +66,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_Int16 = record
@@ -81,6 +87,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_UInt16 = record
@@ -99,6 +108,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_Int32 = record
@@ -117,6 +129,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_UInt32 = record
@@ -135,6 +150,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_Int64 = record
@@ -153,6 +171,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_UInt64 = record
@@ -171,6 +192,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_Single = record
@@ -189,6 +213,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_Double = record
@@ -207,6 +234,9 @@ type
     class function PartitionRightBranchless(lo, hi: PDataType; out pivotPos: PDataType): Boolean; static;
     class procedure PatternDefeatingQuickSort(lo, hi: PDataType; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False); static;
+    class procedure Partition(lo, hi: PDataType; out left, right: PDataType); static;
+    class procedure QuickSelect(lo, hi, target: PDataType); static;
+    class procedure PartialQuickSort(lo, hi: PDataType; index, count: NativeInt); static;
   end;
 
   TSort_Ref = record
@@ -216,27 +246,27 @@ type
   private
     class procedure HeapSort(lo: PByte; hi: NativeUInt;
       const compare: TCompareMethod; size: NativeUInt); overload; static;
-    class procedure InsertionSort(lo, hi: PByte; size: NativeInt;
+    class procedure InsertionSort(lo, hi: PByte; size: NativeUInt;
       const compare: TCompareMethod); overload; static;
-    class procedure UnguardedInsertionSort(lo, hi: PByte; size: NativeInt;
+    class procedure UnguardedInsertionSort(lo, hi: PByte; size: NativeUInt;
       const compare: TCompareMethod); overload; static;
     class function PartialInsertionSort(lo, hi: PByte; size: NativeUInt;
       const compare: TCompareMethod): Boolean; overload; static;
-    class function PartitionLeft(lo, hi: PByte; size: NativeInt;
+    class function PartitionLeft(lo, hi: PByte; size: NativeUInt;
       const compare: TCompareMethod): PByte; overload; static;
-    class function PartitionRight(lo, hi: PByte; size: NativeInt;
+    class function PartitionRight(lo, hi: PByte; size: NativeUInt;
       const compare: TCompareMethod; out pivotPos: PByte): Boolean; overload; static;
     class procedure HeapSort(lo: PByte; hi: NativeUInt;
       const compare: TLessThanFunc; size: NativeUInt); overload; static;
-    class procedure InsertionSort(lo, hi: PByte; size: NativeInt;
+    class procedure InsertionSort(lo, hi: PByte; size: NativeUInt;
       const compare: TLessThanFunc); overload; static;
-    class procedure UnguardedInsertionSort(lo, hi: PByte; size: NativeInt;
+    class procedure UnguardedInsertionSort(lo, hi: PByte; size: NativeUInt;
       const compare: TLessThanFunc); overload; static;
     class function PartialInsertionSort(lo, hi: PByte; size: NativeUInt;
       const compare: TLessThanFunc): Boolean; overload; static;
-    class function PartitionLeft(lo, hi: PByte; size: NativeInt;
+    class function PartitionLeft(lo, hi: PByte; size: NativeUInt;
       const compare: TLessThanFunc): PByte; overload; static;
-    class function PartitionRight(lo, hi: PByte; size: NativeInt;
+    class function PartitionRight(lo, hi: PByte; size: NativeUInt;
       const compare: TLessThanFunc; out pivotPos: PByte): Boolean; overload; static;
   public
     class procedure PatternDefeatingQuickSort(lo, hi: PByte; size: NativeUInt;
@@ -245,6 +275,18 @@ type
     class procedure PatternDefeatingQuickSort(lo, hi: PByte; size: NativeUInt;
       const compare: TLessThanFunc; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True); overload; static;
+    class procedure Partition(lo, hi: PByte; size: NativeUInt;
+      const compare: TCompareMethod; const pivot: PByte; out left, right: PByte); overload; static;
+    class procedure Partition(lo, hi: PByte; size: NativeUInt;
+      const compare: TLessThanFunc; const pivot: PByte; out left, right: PByte); overload; static;
+    class procedure QuickSelect(lo, hi, target: PByte; size: NativeUInt;
+      const compare: TCompareMethod; const pivot: PByte); overload; static;
+    class procedure QuickSelect(lo, hi, target: PByte; size: NativeUInt;
+      const compare: TLessThanFunc; const pivot: PByte); overload; static;
+    class procedure PartialQuickSort(lo, hi: PByte; size: NativeUInt;
+      index, count: NativeInt; const compare: TCompareMethod); overload; static;
+    class procedure PartialQuickSort(lo, hi: PByte; size: NativeUInt;
+      index, count: NativeInt; const compare: TLessThanFunc); overload; static;
   end;
 
   TLessThanFunc<T> = function(const left, right: T): Boolean;
@@ -289,6 +331,20 @@ type
     class procedure PatternDefeatingQuickSort<T>(lo, hi: Pointer<T>.Idx;
       const compare: TLessThanFunc<T>; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True); overload; static;
+
+    class procedure Partition<T>(lo, hi: Pointer<T>.Idx; {$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}const compare: TCompareMethod<T>;
+      const pivot: Pointer<T>.Idx; out left, right: Pointer<T>.Idx); overload; static;
+    class procedure QuickSelect<T>(lo, hi, target: Pointer<T>.Idx; {$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}const compare: TCompareMethod<T>;
+      const pivot: Pointer<T>.Idx); overload; static;
+    class procedure PartialQuickSort<T>(lo, hi: Pointer<T>.Idx; index, count: NativeInt;
+      {$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}const compare: TCompareMethod<T>); overload; static;
+
+    class procedure Partition<T>(lo, hi: Pointer<T>.Idx; const compare: TLessThanFunc<T>;
+      const pivot: Pointer<T>.Idx; out left, right: Pointer<T>.Idx); overload; static;
+    class procedure QuickSelect<T>(lo, hi, target: Pointer<T>.Idx; const compare: TLessThanFunc<T>;
+      const pivot: Pointer<T>.Idx); overload; static;
+    class procedure PartialQuickSort<T>(lo, hi: Pointer<T>.Idx; index, count: NativeInt;
+      const compare: TLessThanFunc<T>); overload; static;
   end;
 
 implementation
@@ -300,6 +356,7 @@ uses
 const
   InsertionSortThreshold = 24;
   PartialInsertionSortLimit = 8;
+  MaxStackBufferSize = 64;
   NintherThreshold = 128;
   BlockSize = 64;
   CacheLineSize = 64;
@@ -340,6 +397,15 @@ class function TSort_Int8.PartitionRightBranchless;
 class procedure TSort_Int8.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
 
+class procedure TSort_Int8.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_Int8.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_Int8.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
+
 {$ENDREGION}
 
 
@@ -368,6 +434,15 @@ class function TSort_UInt8.PartitionRightBranchless;
 
 class procedure TSort_UInt8.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
+
+class procedure TSort_UInt8.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_UInt8.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_UInt8.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
 
 {$ENDREGION}
 
@@ -398,6 +473,15 @@ class function TSort_Int16.PartitionRightBranchless;
 class procedure TSort_Int16.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
 
+class procedure TSort_Int16.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_Int16.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_Int16.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
+
 {$ENDREGION}
 
 
@@ -426,6 +510,15 @@ class function TSort_UInt16.PartitionRightBranchless;
 
 class procedure TSort_UInt16.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
+
+class procedure TSort_UInt16.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_UInt16.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_UInt16.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
 
 {$ENDREGION}
 
@@ -456,6 +549,15 @@ class function TSort_Int32.PartitionRightBranchless;
 class procedure TSort_Int32.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
 
+class procedure TSort_Int32.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_Int32.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_Int32.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
+
 {$ENDREGION}
 
 
@@ -484,6 +586,15 @@ class function TSort_UInt32.PartitionRightBranchless;
 
 class procedure TSort_UInt32.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
+
+class procedure TSort_UInt32.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_UInt32.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_UInt32.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
 
 {$ENDREGION}
 
@@ -514,6 +625,15 @@ class function TSort_Int64.PartitionRightBranchless;
 class procedure TSort_Int64.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
 
+class procedure TSort_Int64.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_Int64.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_Int64.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
+
 {$ENDREGION}
 
 
@@ -542,6 +662,15 @@ class function TSort_UInt64.PartitionRightBranchless;
 
 class procedure TSort_UInt64.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
+
+class procedure TSort_UInt64.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_UInt64.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_UInt64.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
 
 {$ENDREGION}
 
@@ -572,6 +701,15 @@ class function TSort_Single.PartitionRightBranchless;
 class procedure TSort_Single.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
 
+class procedure TSort_Single.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_Single.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_Single.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
+
 {$ENDREGION}
 
 
@@ -600,6 +738,15 @@ class function TSort_Double.PartitionRightBranchless;
 
 class procedure TSort_Double.PatternDefeatingQuickSort;
 {$I Spring.Sorting.PatternDefeatingQuickSort.inc}
+
+class procedure TSort_Double.Partition;
+{$I Spring.Sorting.Partition.inc}
+
+class procedure TSort_Double.QuickSelect;
+{$I Spring.Sorting.QuickSelect.inc}
+
+class procedure TSort_Double.PartialQuickSort;
+{$I Spring.Sorting.PartialQuickSort.inc}
 
 {$ENDREGION}
 
@@ -641,7 +788,7 @@ begin
   end;
 end;
 
-class procedure TSort_Ref.InsertionSort(lo, hi: PByte; size: NativeInt;
+class procedure TSort_Ref.InsertionSort(lo, hi: PByte; size: NativeUInt;
   const compare: TCompareMethod);
 var
   cur, sift: PByte;
@@ -661,7 +808,7 @@ begin
   until cur = hi;
 end;
 
-class procedure TSort_Ref.UnguardedInsertionSort(lo, hi: PByte; size: NativeInt;
+class procedure TSort_Ref.UnguardedInsertionSort(lo, hi: PByte; size: NativeUInt;
   const compare: TCompareMethod);
 var
   cur, sift: PByte;
@@ -714,7 +861,7 @@ begin
   Result := True;
 end;
 
-class function TSort_Ref.PartitionLeft(lo, hi: PByte; size: NativeInt;
+class function TSort_Ref.PartitionLeft(lo, hi: PByte; size: NativeUInt;
   const compare: TCompareMethod): PByte;
 var
   first, last: PByte;
@@ -751,7 +898,7 @@ begin
   Result := last;
 end;
 
-class function TSort_Ref.PartitionRight(lo, hi: PByte; size: NativeInt;
+class function TSort_Ref.PartitionRight(lo, hi: PByte; size: NativeUInt;
   const compare: TCompareMethod; out pivotPos: PByte): Boolean;
 var
   first, last: PByte;
@@ -943,7 +1090,7 @@ begin
   end;
 end;
 
-class procedure TSort_Ref.InsertionSort(lo, hi: PByte; size: NativeInt;
+class procedure TSort_Ref.InsertionSort(lo, hi: PByte; size: NativeUInt;
   const compare: TLessThanFunc);
 var
   cur, sift: PByte;
@@ -962,7 +1109,7 @@ begin
   until False;
 end;
 
-class procedure TSort_Ref.UnguardedInsertionSort(lo, hi: PByte; size: NativeInt;
+class procedure TSort_Ref.UnguardedInsertionSort(lo, hi: PByte; size: NativeUInt;
   const compare: TLessThanFunc);
 var
   cur, sift: PByte;
@@ -1009,7 +1156,7 @@ begin
   Result := True;
 end;
 
-class function TSort_Ref.PartitionLeft(lo, hi: PByte; size: NativeInt;
+class function TSort_Ref.PartitionLeft(lo, hi: PByte; size: NativeUInt;
   const compare: TLessThanFunc): PByte;
 var
   first, last: PByte;
@@ -1046,7 +1193,7 @@ begin
   Result := last;
 end;
 
-class function TSort_Ref.PartitionRight(lo, hi: PByte; size: NativeInt;
+class function TSort_Ref.PartitionRight(lo, hi: PByte; size: NativeUInt;
   const compare: TLessThanFunc; out pivotPos: PByte): Boolean;
 var
   first, last: PByte;
@@ -1201,6 +1348,196 @@ begin
       leftMost := False;
     end;
   until False;
+end;
+
+class procedure TSort_Ref.Partition(lo, hi: PByte; size: NativeUInt;
+  const compare: TCompareMethod; const pivot: PByte; out left, right: PByte);
+var
+  mid: PByte;
+  partitionSize: NativeUInt;
+begin
+  partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div size;
+  mid := lo + (partitionSize shr 1) * size;
+  Dec(hi, size);
+
+  if compare(lo, mid) > 0 then BinarySwap(lo, mid, size);
+  if compare(lo, hi) > 0 then BinarySwap(lo, hi, size);
+  if compare(mid, hi) > 0 then BinarySwap(mid, hi, size);
+  Move(mid^, pivot^, size);
+
+  while True do
+  begin
+    while compare(lo, pivot) < 0 do Inc(lo, size);
+    while compare(hi, pivot) > 0 do Dec(hi, size);
+    if lo <= hi then
+    begin
+      BinarySwap(lo, hi, size);
+      Inc(lo, size);
+      Dec(hi, size);
+    end
+    else
+      Break;
+  end;
+
+  left := hi;
+  right := lo;
+end;
+
+class procedure TSort_Ref.Partition(lo, hi: PByte; size: NativeUInt;
+  const compare: TLessThanFunc; const pivot: PByte; out left, right: PByte);
+var
+  mid: PByte;
+  partitionSize: NativeUInt;
+begin
+  partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div size;
+  mid := lo + (partitionSize shr 1) * size;
+  Dec(hi, size);
+
+  if compare(mid, lo) then BinarySwap(lo, mid, size);
+  if compare(hi, lo) then BinarySwap(lo, hi, size);
+  if compare(hi, mid) then BinarySwap(mid, hi, size);
+  Move(mid^, pivot^, size);
+
+  while compare(lo, pivot) do Inc(lo, size);
+  while compare(pivot, hi) do Dec(hi, size);
+  while True do
+  begin
+    if lo <= hi then
+    begin
+      BinarySwap(lo, hi, size);
+      Inc(lo, size);
+      Dec(hi, size);
+    end
+    else
+      Break;
+    while compare(lo, pivot) do Inc(lo, size);
+    while compare(pivot, hi) do Dec(hi, size);
+  end;
+
+  left := hi;
+  right := lo;
+end;
+
+class procedure TSort_Ref.QuickSelect(lo, hi, target: PByte; size: NativeUInt;
+  const compare: TCompareMethod; const pivot: PByte);
+var
+  partitionSize: NativeUInt;
+  left, right: PByte;
+begin
+  repeat
+    partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div size;
+    if partitionSize <= InsertionSortThreshold then
+    begin
+      InsertionSort(lo, hi, size, compare);
+      Exit;
+    end;
+
+    Partition(lo, hi, size, compare, pivot, left, right);
+
+    if target <= left then
+      hi := left + size
+    else if target >= right then
+      lo := right
+    else
+      Exit;
+  until False;
+end;
+
+class procedure TSort_Ref.QuickSelect(lo, hi, target: PByte; size: NativeUInt;
+  const compare: TLessThanFunc; const pivot: PByte);
+var
+  partitionSize: NativeUInt;
+  left, right: PByte;
+begin
+  repeat
+    partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div size;
+    if partitionSize <= InsertionSortThreshold then
+    begin
+      InsertionSort(lo, hi, size, compare);
+      Exit;
+    end;
+
+    Partition(lo, hi, size, compare, pivot, left, right);
+
+    if target <= left then
+      hi := left + size
+    else if target >= right then
+      lo := right
+    else
+      Exit;
+  until False;
+end;
+
+class procedure TSort_Ref.PartialQuickSort(lo, hi: PByte; size: NativeUInt;
+  index, count: NativeInt; const compare: TCompareMethod);
+var
+  last: PByte;
+  pivot: PByte;
+  stackPivot: array[0..MaxStackBufferSize - 1] of Byte;
+  len: NativeUInt;
+begin
+  len := (NativeUInt(hi) - NativeUInt(lo)) div size;
+  if index < 0 then Exit;
+  if count <= 0 then Exit;
+  if NativeUInt(index) + NativeUInt(count) > len then Exit;
+
+  if size > NativeUInt(MaxStackBufferSize) then
+    GetMem(pivot, size)
+  else
+    pivot := @stackPivot[0];
+
+  try
+    last := lo + NativeUInt(index + count - 1) * size;
+
+    if NativeUInt(index) + NativeUInt(count) < len then
+      QuickSelect(lo, hi, last, NativeInt(size), compare, pivot);
+    if index > 0 then
+      QuickSelect(lo, last + size, lo + NativeUInt(index) * size,
+        NativeInt(size), compare, pivot);
+    if count <= InsertionSortThreshold then
+      InsertionSort(lo + NativeUInt(index) * size, last + size, NativeInt(size), compare)
+    else
+      HeapSort(lo + NativeUInt(index) * size, NativeUInt(count) - 1, compare, size);
+  finally
+    if size > NativeUInt(MaxStackBufferSize) then
+      FreeMem(pivot);
+  end;
+end;
+
+class procedure TSort_Ref.PartialQuickSort(lo, hi: PByte; size: NativeUInt;
+  index, count: NativeInt; const compare: TLessThanFunc);
+var
+  last: PByte;
+  pivot: PByte;
+  stackPivot: array[0..MaxStackBufferSize - 1] of Byte;
+  len: NativeUInt;
+begin
+  len := (NativeUInt(hi) - NativeUInt(lo)) div size;
+  if index < 0 then Exit;
+  if count <= 0 then Exit;
+  if NativeUInt(index) + NativeUInt(count) > len then Exit;
+
+  if size > NativeUInt(MaxStackBufferSize) then
+    GetMem(pivot, size)
+  else
+    pivot := @stackPivot[0];
+
+  try
+    last := lo + NativeUInt(index + count - 1) * size;
+
+    if NativeUInt(index) + NativeUInt(count) < len then
+      QuickSelect(lo, hi, last, NativeInt(size), compare, pivot);
+    if index > 0 then
+      QuickSelect(lo, last + size, lo + NativeUInt(index) * size,
+        NativeInt(size), compare, pivot);
+    if count <= InsertionSortThreshold then
+      InsertionSort(lo + NativeUInt(index) * size, last + size, NativeInt(size), compare)
+    else
+      HeapSort(lo + NativeUInt(index) * size, NativeUInt(count) - 1, compare, size);
+  finally
+    if size > NativeUInt(MaxStackBufferSize) then
+      FreeMem(pivot);
+  end;
 end;
 
 {$ENDREGION}
@@ -1971,6 +2308,194 @@ begin
       leftMost := False;
     end;
   until False;
+end;
+
+class procedure TSort.Partition<T>(lo, hi: Pointer<T>.Idx; {$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}const compare: TCompareMethod<T>;
+  const pivot: Pointer<T>.Idx; out left, right: Pointer<T>.Idx);
+var
+  mid: Pointer<T>.Idx;
+  partitionSize: NativeUInt;
+begin
+  partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div NativeUInt(SizeOf(T));
+  mid := lo + (partitionSize shr 1);
+  Dec(hi);
+
+  if compare(lo^[0], mid^[0]) > 0 then BinarySwap(lo, mid, SizeOf(T));
+  if compare(lo^[0], hi^[0]) > 0 then BinarySwap(lo, hi, SizeOf(T));
+  if compare(mid^[0], hi^[0]) > 0 then BinarySwap(mid, hi, SizeOf(T));
+  Move(mid^[0], pivot^[0], SizeOf(T));
+
+  while True do
+  begin
+    while compare(lo^[0], pivot^[0]) < 0 do Inc(lo);
+    while compare(hi^[0], pivot^[0]) > 0 do Dec(hi);
+    if lo <= hi then
+    begin
+      BinarySwap(lo, hi, SizeOf(T));
+      Inc(lo);
+      Dec(hi);
+    end
+    else
+      Break;
+  end;
+
+  left := hi;
+  right := lo;
+end;
+
+class procedure TSort.Partition<T>(lo, hi: Pointer<T>.Idx; const compare: TLessThanFunc<T>;
+  const pivot: Pointer<T>.Idx; out left, right: Pointer<T>.Idx);
+var
+  mid: Pointer<T>.Idx;
+  partitionSize: NativeUInt;
+begin
+  partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div NativeUInt(SizeOf(T));
+  mid := lo + (partitionSize shr 1);
+  Dec(hi);
+
+  if compare(mid^[0], lo^[0]) then BinarySwap(lo, mid, SizeOf(T));
+  if compare(hi^[0], lo^[0]) then BinarySwap(lo, hi, SizeOf(T));
+  if compare(hi^[0], mid^[0]) then BinarySwap(mid, hi, SizeOf(T));
+  Move(mid^[0], pivot^[0], SizeOf(T));
+
+  while compare(lo^[0], pivot^[0]) do Inc(lo);
+  while compare(pivot^[0], hi^[0]) do Dec(hi);
+  while True do
+  begin
+    if lo <= hi then
+    begin
+      BinarySwap(lo, hi, SizeOf(T));
+      Inc(lo);
+      Dec(hi);
+    end
+    else
+      Break;
+    while compare(lo^[0], pivot^[0]) do Inc(lo);
+    while compare(pivot^[0], hi^[0]) do Dec(hi);
+  end;
+
+  left := hi;
+  right := lo;
+end;
+
+class procedure TSort.QuickSelect<T>(lo, hi, target: Pointer<T>.Idx;
+  {$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}const compare: TCompareMethod<T>; const pivot: Pointer<T>.Idx);
+var
+  partitionSize: NativeUInt;
+  left, right: Pointer<T>.Idx;
+begin
+  repeat
+    partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div NativeUInt(SizeOf(T));
+    if partitionSize <= InsertionSortThreshold then
+    begin
+      InsertionSort<T>(lo, hi, compare);
+      Exit;
+    end;
+
+    Partition<T>(lo, hi, compare, pivot, left, right);
+
+    if target <= left then
+      hi := left + 1
+    else if target >= right then
+      lo := right
+    else
+      Exit;
+  until False;
+end;
+
+class procedure TSort.QuickSelect<T>(lo, hi, target: Pointer<T>.Idx;
+  const compare: TLessThanFunc<T>; const pivot: Pointer<T>.Idx);
+var
+  partitionSize: NativeUInt;
+  left, right: Pointer<T>.Idx;
+begin
+  repeat
+    partitionSize := (NativeUInt(hi) - NativeUInt(lo)) div NativeUInt(SizeOf(T));
+    if partitionSize <= InsertionSortThreshold then
+    begin
+      InsertionSort<T>(lo, hi, compare);
+      Exit;
+    end;
+
+    Partition<T>(lo, hi, compare, pivot, left, right);
+
+    if target <= left then
+      hi := left + 1
+    else if target >= right then
+      lo := right
+    else
+      Exit;
+  until False;
+end;
+
+class procedure TSort.PartialQuickSort<T>(lo, hi: Pointer<T>.Idx; index, count: NativeInt;
+  {$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}const compare: TCompareMethod<T>);
+var
+  last: Pointer<T>.Idx;
+  pivot: Pointer<T>.Idx;
+  stackPivot: array[0..MaxStackBufferSize - 1] of Byte;
+  len: NativeUInt;
+begin
+  len := (NativeUInt(hi) - NativeUInt(lo)) div NativeUInt(SizeOf(T));
+  if index < 0 then Exit;
+  if count <= 0 then Exit;
+  if NativeUInt(index) + NativeUInt(count) > len then Exit;
+
+  if SizeOf(T) > NativeUInt(MaxStackBufferSize) then
+    GetMem(pivot, SizeOf(T))
+  else
+    pivot := @stackPivot[0];
+
+  try
+    last := lo + (index + count - 1);
+
+    if NativeUInt(index) + NativeUInt(count) < len then
+      QuickSelect<T>(lo, hi, last, compare, pivot);
+    if index > 0 then
+      QuickSelect<T>(lo, last + 1, lo + index, compare, pivot);
+    if count <= InsertionSortThreshold then
+      InsertionSort<T>(lo + index, last + 1, compare)
+    else
+      HeapSort<T>(lo + index, last + 1, compare);
+  finally
+    if SizeOf(T) > NativeUInt(MaxStackBufferSize) then
+      FreeMem(pivot);
+  end;
+end;
+
+class procedure TSort.PartialQuickSort<T>(lo, hi: Pointer<T>.Idx; index, count: NativeInt;
+  const compare: TLessThanFunc<T>);
+var
+  last: Pointer<T>.Idx;
+  pivot: Pointer<T>.Idx;
+  stackPivot: array[0..MaxStackBufferSize - 1] of Byte;
+  len: NativeUInt;
+begin
+  len := (NativeUInt(hi) - NativeUInt(lo)) div NativeUInt(SizeOf(T));
+  if index < 0 then Exit;
+  if count <= 0 then Exit;
+  if NativeUInt(index) + NativeUInt(count) > len then Exit;
+
+  if SizeOf(T) > NativeUInt(MaxStackBufferSize) then
+    GetMem(pivot, SizeOf(T))
+  else
+    pivot := @stackPivot[0];
+
+  try
+    last := lo + (index + count - 1);
+
+    if NativeUInt(index) + NativeUInt(count) < len then
+      QuickSelect<T>(lo, hi, last, compare, pivot);
+    if index > 0 then
+      QuickSelect<T>(lo, last + 1, lo + index, compare, pivot);
+    if count <= InsertionSortThreshold then
+      InsertionSort<T>(lo + index, last + 1, compare)
+    else
+      HeapSort<T>(lo + index, last + 1, compare);
+  finally
+    if SizeOf(T) > NativeUInt(MaxStackBufferSize) then
+      FreeMem(pivot);
+  end;
 end;
 
 {$ENDREGION}

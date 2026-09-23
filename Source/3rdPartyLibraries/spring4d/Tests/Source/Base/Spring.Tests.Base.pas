@@ -130,6 +130,32 @@ type
     class operator Equal(const left, right: TCustomRecord): Boolean;
   end;
 
+  TOperatorRecord1 = packed record
+    value: ShortInt;
+    class operator LessThan(const left, right: TOperatorRecord1): Boolean;
+  end;
+
+  TOperatorRecord2 = packed record
+    value: SmallInt;
+    class operator LessThan(const left, right: TOperatorRecord2): Boolean;
+  end;
+
+  TOperatorRecord4 = packed record
+    value: Integer;
+    class operator LessThan(const left, right: TOperatorRecord4): Boolean;
+  end;
+
+  TOperatorRecord8 = packed record
+    value: Int64;
+    class operator LessThan(const left, right: TOperatorRecord8): Boolean;
+  end;
+
+  TOperatorRecord12 = packed record
+    pad: Integer;
+    value: Int64;
+    class operator LessThan(const left, right: TOperatorRecord12): Boolean;
+  end;
+
   TTestNullableCustomRecord = class(TTestCase)
   published
     procedure TestEqualsUsingOperatorOverload;
@@ -676,8 +702,8 @@ type
 {$ENDIF}
   end;
 
-  TSortTest = class(TTestCase)
-  private type
+  TSortTestBase = class(TTestCase)
+  public type
     TString1 = string[1];
     TString2 = string[2];
     TString3 = string[3];
@@ -732,10 +758,41 @@ type
     TRec12 = packed record
       a, b, c: Integer;
     end;
+  protected
+    class function RandomChar: AnsiChar; static;
+    class function GenString1: TString1; static;
+    class function GenString2: TString2; static;
+    class function GenString3: TString3; static;
+    class function GenString4: TString4; static;
+    class function GenString7: TString7; static;
+    class function GenSet8: TSet8; static;
+    class function GenSet16: TSet16; static;
+    class function GenSet32: TSet32; static;
+    class function GenSet64: TSet64; static;
+    class function GenSet256: TSet256; static;
+    class function GenArray1: TArray1; static;
+    class function GenArray2: TArray2; static;
+    class function GenArray3: TArray3; static;
+    class function GenArray4: TArray4; static;
+    class function GenArray5: TArray5; static;
+    class function GenArray8: TArray8; static;
+    class function GenRec1: TRec1; static;
+    class function GenRec2: TRec2; static;
+    class function GenRec3: TRec3; static;
+    class function GenRec4: TRec4; static;
+    class function GenRec5: TRec5; static;
+    class function GenRec8: TRec8; static;
+    class function GenRec12: TRec12; static;
+    class function GenEnum8: TEnum8; static;
+    class function GenEnum16: TEnum16; static;
+    class function GenEnum32: TEnum32; static;
+    class function GenEnum64: TEnum64; static;
+  end;
+
+  TSortTest = class(TSortTestBase)
   private const Count = 10000;
     class procedure TestPassing<T>(const value: T); static;
     procedure TestSort<T>(const genvalue: Func<T>);
-    class function RandomChar: AnsiChar; static;
   published
     procedure Test_Int8;
     procedure Test_Int16;
@@ -751,6 +808,163 @@ type
     procedure Test_Array;
     procedure Test_Variant;
     procedure Test_Record;
+  end;
+
+  TPartialSortTest = class(TSortTestBase)
+  public type
+    TReversedComparer<T> = class(TInterfacedObject, IComparer<T>)
+    public
+      function Compare(const left, right: T): Integer;
+    end;
+  protected
+    { -- generic helpers for the multi-type tests -- }
+    class function Sorted<T>(const values: array of T): TArray<T>; static;
+    procedure CheckRangeSortedGeneric<T>(const values: array of T; index, count: Integer);
+    procedure CheckPartialSortGeneric<T>(const values, orig: array of T; index, count: Integer);
+    procedure TestDefaultSortPartial<T>(const genValue: Func<T>);
+    procedure TestComparerSortPartial<T>(const genValue: Func<T>);
+    procedure TestComparisonSortPartial<T>(const genValue: Func<T>);
+    procedure CheckOperatorRecordPartial<T>(const original: array of T;
+      const keyOf: Func<T, Integer>);
+
+    { -- Int32 helpers ported from the original standalone test unit -- }
+    procedure CheckRangeSorted(const values: TArray<Integer>; index, count: NativeInt);
+    procedure CheckPartialSort(const values, orig: TArray<Integer>; index, count: NativeInt);
+    procedure CheckMatchesFullSort(const values, orig: TArray<Integer>; index, count: NativeInt);
+    procedure Check(const ACondition: Boolean; const AFormat: string; const Args: array of const); reintroduce; overload;
+    procedure RandomStressTest(const Sizes: array of Integer;
+          iterations: Integer; valueMin, valueMax: Integer;
+          testAllRanges: Boolean);
+    procedure CheckPermutations(const Input: TArray<Integer>);
+  published
+    { -- generic/default comparer over many element types -- }
+    procedure Test_Int8;
+    procedure Test_UInt8;
+    procedure Test_Int16;
+    procedure Test_UInt16;
+    procedure Test_UInt32;
+    procedure Test_Int32;
+    procedure Test_Int64;
+    procedure Test_UInt64;
+    procedure Test_NativeInt;
+    procedure Test_NativeUInt;
+    procedure Test_Single;
+    procedure Test_Double;
+    procedure Test_Extended;
+    procedure Test_Comp;
+    procedure Test_Currency;
+    procedure Test_String;
+    procedure Test_ShortString;
+    procedure Test_Set;
+    procedure Test_Array;
+    procedure Test_Variant;
+    procedure Test_Record;
+    procedure Test_Enum;
+    procedure Test_RecordWithLessThanOperator;
+    procedure Test_AnsiChar;
+    procedure Test_WideChar;
+    procedure Test_Char;
+    procedure Test_Boolean;
+    procedure Test_Pointer;
+    procedure TestDefaultPartialSort_DoesNotFullSort;
+
+    { -- explicit comparer and comparison overloads -- }
+    procedure Test_Comparer_Int32;
+    procedure Test_Comparison_Int32;
+    procedure Test_Comparer_Int64;
+    procedure Test_Comparison_Double;
+    procedure Test_Comparer_String;
+    procedure Test_Comparer_UInt32;
+    procedure Test_Comparison_UInt32;
+    procedure Test_ReverseOrderViaComparer;
+
+    { -- Property-based permutation tests -- }
+    procedure TestPermutations_3Elements;
+    procedure TestPermutations_4Elements;
+    procedure TestPermutations_5Elements;
+    procedure TestPermutations_6Elements_AllRanges;
+
+    { -- Random stress tests -- }
+    procedure TestRandomSmallArrays;
+    procedure TestRandomMediumArrays;
+    procedure TestRandomLargeArrays;
+    procedure TestRandomHugeArrays;
+    procedure TestRandomExtremeRanges;
+    procedure TestRandomAllRanges;
+    procedure TestLargeRanges;
+
+    { -- Multiset preservation -- }
+    procedure TestMultisetPreservation_Small;
+    procedure TestMultisetPreservation_Medium;
+    procedure TestMultisetPreservation_Large;
+    procedure TestMultisetPreservation_Duplicates;
+
+    { -- Idempotency -- }
+    procedure TestIdempotent_SmallRange;
+    procedure TestIdempotent_FullArray;
+    procedure TestIdempotent_MultipleRanges;
+
+    { -- Overlapping range tests -- }
+    procedure TestOverlappingRanges_LeftOverlap;
+    procedure TestOverlappingRanges_RightOverlap;
+    procedure TestOverlappingRanges_Nested;
+    procedure TestOverlappingRanges_Adiacent;
+
+    { -- Edge values -- }
+    procedure TestMinInt_MaxInt;
+    procedure TestZeroesAndOnes;
+    procedure TestAlternatingValues;
+    procedure TestSingleRunDuplicates;
+    procedure TestLongDuplicateRun;
+    procedure TestAllEqualElements;
+
+    { -- Quickselect threshold tests -- }
+    procedure TestAtThreshold_Size3;
+    procedure TestAtThreshold_Size4;
+    procedure TestAtThreshold_Size5;
+    procedure TestAtThreshold_Size6;
+
+    { -- Boundary and error handling -- }
+    procedure TestZeroCount_NoOp;
+    procedure TestNegativeIndex_Raises;
+    procedure TestNegativeCount_Raises;
+    procedure TestOutOfBounds_Raises;
+    procedure TestIndexEqualsLength_Raises;
+    procedure TestIndexGreaterThanLength_Raises;
+    procedure TestEmptyArray_Range_Raises;
+    procedure TestConsistentWithSort;
+    procedure TestCountEqualToLength;
+    procedure TestIndexAtLastElement;
+    procedure TestIndexPlusCountEqualsLength;
+
+    { -- Already sorted variants -- }
+    procedure TestAlreadySorted_FullRange;
+    procedure TestAlreadySorted_SubRange;
+    procedure TestReverseSorted_FullRange;
+    procedure TestReverseSorted_SubRange;
+
+    { -- Specific regression patterns -- }
+    procedure TestRangeAtStart_Distinct;
+    procedure TestRangeAtEnd_Distinct;
+    procedure TestSingleElement_MultiplePositions;
+    procedure TestTwoElement_Array;
+    procedure TestTwoElement_Range;
+
+    { -- Comprehensive range coverage -- }
+    procedure TestAllRangesOfSize5;
+    procedure TestAllRangesOfSize10;
+    procedure TestAllRangesOfSize20;
+
+    { -- Value correctness against full sort -- }
+    procedure TestMatchesFullSort_VariousRanges;
+    procedure TestMatchesFullSort_Random100;
+    procedure TestMatchesFullSort_Random1000;
+
+    { -- Element ordering invariants -- }
+    procedure TestLeftOfRange_AllSmallerOrEqual;
+    procedure TestRightOfRange_AllGreaterOrEqual;
+    procedure TestRangeInternallySorted;
+    procedure TestElementsOutsideRange_Unordered;
   end;
 
   TWeakTest = class(TTestCase)
@@ -1211,6 +1425,31 @@ end;
 class operator TCustomRecord.Equal(const left, right: TCustomRecord): Boolean;
 begin
   Result := (left.x = right.y) and (left.y = right.x);
+end;
+
+class operator TOperatorRecord1.LessThan(const left, right: TOperatorRecord1): Boolean;
+begin
+  Result := left.value < right.value;
+end;
+
+class operator TOperatorRecord2.LessThan(const left, right: TOperatorRecord2): Boolean;
+begin
+  Result := left.value < right.value;
+end;
+
+class operator TOperatorRecord4.LessThan(const left, right: TOperatorRecord4): Boolean;
+begin
+  Result := left.value < right.value;
+end;
+
+class operator TOperatorRecord8.LessThan(const left, right: TOperatorRecord8): Boolean;
+begin
+  Result := left.value < right.value;
+end;
+
+class operator TOperatorRecord12.LessThan(const left, right: TOperatorRecord12): Boolean;
+begin
+  Result := left.value < right.value;
 end;
 
 {$ENDREGION}
@@ -4965,12 +5204,211 @@ end;
 {$ENDREGION}
 
 
-{$REGION 'TSortTest'}
+{$REGION 'TSortTestBase'}
 
-class function TSortTest.RandomChar: AnsiChar;
+class function TSortTestBase.RandomChar: AnsiChar;
 begin
   Result := AnsiChar(Chr(65 + Random(26)));
 end;
+
+class function TSortTestBase.GenString1: TString1;
+begin
+  Result[1] := RandomChar;
+end;
+
+class function TSortTestBase.GenString2: TString2;
+begin
+  Result[1] := RandomChar;
+  Result[2] := RandomChar;
+end;
+
+class function TSortTestBase.GenString3: TString3;
+begin
+  Result[1] := RandomChar;
+  Result[2] := RandomChar;
+  Result[3] := RandomChar;
+end;
+
+class function TSortTestBase.GenString4: TString4;
+begin
+  Result[1] := RandomChar;
+  Result[2] := RandomChar;
+  Result[3] := RandomChar;
+  Result[4] := RandomChar;
+end;
+
+class function TSortTestBase.GenString7: TString7;
+var
+  i: Integer;
+begin
+  for i := 1 to 7 do
+    Result[i] := RandomChar;
+end;
+
+class function TSortTestBase.GenSet8: TSet8;
+var
+  i: TEnum8;
+begin
+  Result := [];
+  for i := Low(TEnum8) to High(TEnum8) do
+    if Random(2) = 0 then
+      Include(Result, i);
+end;
+
+class function TSortTestBase.GenSet16: TSet16;
+var
+  i: TEnum16;
+begin
+  Result := [];
+  for i := Low(TEnum16) to High(TEnum16) do
+    if Random(2) = 0 then
+      Include(Result, i);
+end;
+
+class function TSortTestBase.GenSet32: TSet32;
+var
+  i: TEnum32;
+begin
+  Result := [];
+  for i := Low(TEnum32) to High(TEnum32) do
+    if Random(2) = 0 then
+      Include(Result, i);
+end;
+
+class function TSortTestBase.GenSet64: TSet64;
+var
+  i: TEnum64;
+begin
+  Result := [];
+  for i := Low(TEnum64) to High(TEnum64) do
+    if Random(2) = 0 then
+      Include(Result, i);
+end;
+
+class function TSortTestBase.GenSet256: TSet256;
+var
+  i: Byte;
+begin
+  Result := [];
+  for i := Low(Byte) to High(Byte) do
+    if Random(2) = 0 then
+      Include(Result, i);
+end;
+
+class function TSortTestBase.GenArray1: TArray1;
+begin
+  Result[0] := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenArray2: TArray2;
+begin
+  Result[0] := Random(High(Byte));
+  Result[1] := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenArray3: TArray3;
+begin
+  Result[0] := Random(High(Byte));
+  Result[1] := Random(High(Byte));
+  Result[2] := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenArray4: TArray4;
+begin
+  Result[0] := Random(High(Byte));
+  Result[1] := Random(High(Byte));
+  Result[2] := Random(High(Byte));
+  Result[3] := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenArray5: TArray5;
+var
+  i: Integer;
+begin
+  for i := 0 to 4 do
+    Result[i] := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenArray8: TArray8;
+var
+  i: Integer;
+begin
+  for i := 0 to 7 do
+    Result[i] := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenRec1: TRec1;
+begin
+  Result.a := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenRec2: TRec2;
+begin
+  Result.a := Random(High(Byte));
+  Result.b := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenRec3: TRec3;
+begin
+  Result.a := Random(High(Byte));
+  Result.b := Random(High(Byte));
+  Result.c := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenRec4: TRec4;
+begin
+  Result.a := Random(High(Byte));
+  Result.b := Random(High(Byte));
+  Result.c := Random(High(Byte));
+  Result.d := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenRec5: TRec5;
+begin
+  Result.a := Random(High(Byte));
+  Result.b := Random(High(Byte));
+  Result.c := Random(High(Byte));
+  Result.d := Random(High(Byte));
+  Result.e := Random(High(Byte));
+end;
+
+class function TSortTestBase.GenRec8: TRec8;
+begin
+  Result.a := Random(High(Integer));
+  Result.b := Random(High(Integer));
+end;
+
+class function TSortTestBase.GenRec12: TRec12;
+begin
+  Result.a := Random(High(Integer));
+  Result.b := Random(High(Integer));
+  Result.c := Random(High(Integer));
+end;
+
+class function TSortTestBase.GenEnum8: TEnum8;
+begin
+  Result := TEnum8(Random(8));
+end;
+
+class function TSortTestBase.GenEnum16: TEnum16;
+begin
+  Result := TEnum16(Random(16));
+end;
+
+class function TSortTestBase.GenEnum32: TEnum32;
+begin
+  Result := TEnum32(Random(32));
+end;
+
+class function TSortTestBase.GenEnum64: TEnum64;
+begin
+  Result := TEnum64(Random(64));
+end;
+
+{$ENDREGION}
+
+
+{$REGION 'TSortTest'}
 
 class procedure TSortTest.TestPassing<T>(const value: T);
 begin
@@ -5039,92 +5477,30 @@ end;
 
 procedure TSortTest.Test_String;
 begin
-  TestSort<TString1>(function: TString1 begin
-    Result[1] := RandomChar;
-  end);
-  TestSort<TString2>(function: TString2 begin
-    Result[1] := RandomChar;
-    Result[2] := RandomChar;
-  end);
-  TestSort<TString3>(function: TString3 begin
-    Result[1] := RandomChar;
-    Result[2] := RandomChar;
-    Result[3] := RandomChar;
-  end);
-  TestSort<TString4>(function: TString4 begin
-    Result[1] := RandomChar;
-    Result[2] := RandomChar;
-    Result[3] := RandomChar;
-    Result[4] := RandomChar;
-  end);
-  TestSort<TString7>(function: TString7 var i: Integer; begin
-    for i := 1 to 7 do
-      Result[i] := RandomChar;
-  end);
+  TestSort<TString1>(GenString1);
+  TestSort<TString2>(GenString2);
+  TestSort<TString3>(GenString3);
+  TestSort<TString4>(GenString4);
+  TestSort<TString7>(GenString7);
 end;
 
 procedure TSortTest.Test_Set;
 begin
-  TestSort<TSet8>(function: TSet8 var i: TEnum8; begin
-    Result := [];
-    for i := Low(TEnum8) to High(TEnum8) do
-      if Random(2) = 0 then
-        Include(Result, i);
-  end);
-  TestSort<TSet16>(function: TSet16 var i: TEnum16; begin
-    Result := [];
-    for i := Low(TEnum16) to High(TEnum16) do
-      if Random(2) = 0 then
-        Include(Result, i);
-  end);
-  TestSort<TSet32>(function: TSet32 var i: TEnum32; begin
-    Result := [];
-    for i := Low(TEnum32) to High(TEnum32) do
-      if Random(2) = 0 then
-        Include(Result, i);
-  end);
-  TestSort<TSet64>(function: TSet64 var i: TEnum64; begin
-    Result := [];
-    for i := Low(TEnum64) to High(TEnum64) do
-      if Random(2) = 0 then
-        Include(Result, i);
-  end);
-  TestSort<TSet256>(function: TSet256 var i: Byte; begin
-    Result := [];
-    for i := Low(Byte) to High(Byte) do
-      if Random(2) = 0 then
-        Include(Result, i);
-  end);
+  TestSort<TSet8>(GenSet8);
+  TestSort<TSet16>(GenSet16);
+  TestSort<TSet32>(GenSet32);
+  TestSort<TSet64>(GenSet64);
+  TestSort<TSet256>(GenSet256);
 end;
 
 procedure TSortTest.Test_Array;
 begin
-  TestSort<TArray1>(function: TArray1 begin
-    Result[0] := Random(High(Byte));
-  end);
-  TestSort<TArray2>(function: TArray2 begin
-    Result[0] := Random(High(Byte));
-    Result[1] := Random(High(Byte));
-  end);
-  TestSort<TArray3>(function: TArray3 begin
-    Result[0] := Random(High(Byte));
-    Result[1] := Random(High(Byte));
-    Result[2] := Random(High(Byte));
-  end);
-  TestSort<TArray4>(function: TArray4 begin
-    Result[0] := Random(High(Byte));
-    Result[1] := Random(High(Byte));
-    Result[2] := Random(High(Byte));
-    Result[3] := Random(High(Byte));
-  end);
-  TestSort<TArray5>(function: TArray5 var i: Integer; begin
-    for i := 0 to 4 do
-      Result[i] := Random(High(Byte));
-  end);
-  TestSort<TArray8>(function: TArray8 var i: Integer; begin
-    for i := 0 to 7 do
-      Result[i] := Random(High(Byte));
-  end);
+  TestSort<TArray1>(GenArray1);
+  TestSort<TArray2>(GenArray2);
+  TestSort<TArray3>(GenArray3);
+  TestSort<TArray4>(GenArray4);
+  TestSort<TArray5>(GenArray5);
+  TestSort<TArray8>(GenArray8);
 end;
 
 procedure TSortTest.Test_Variant;
@@ -5136,44 +5512,1495 @@ end;
 
 procedure TSortTest.Test_Record;
 begin
-  TestSort<TRec1>(function: TRec1 begin
-    Result.a := Random(High(Byte));
-  end);
-  TestSort<TRec2>(function: TRec2 begin
-    Result.a := Random(High(Byte));
-    Result.b := Random(High(Byte));
-  end);
-  TestSort<TRec3>(function: TRec3 begin
-    Result.a := Random(High(Byte));
-    Result.b := Random(High(Byte));
-    Result.c := Random(High(Byte));
-  end);
-  TestSort<TRec4>(function: TRec4 begin
-    Result.a := Random(High(Byte));
-    Result.b := Random(High(Byte));
-    Result.c := Random(High(Byte));
-    Result.d := Random(High(Byte));
-  end);
-  TestSort<TRec5>(function: TRec5 begin
-    Result.a := Random(High(Byte));
-    Result.b := Random(High(Byte));
-    Result.c := Random(High(Byte));
-    Result.d := Random(High(Byte));
-    Result.e := Random(High(Byte));
-  end);
-  TestSort<TRec8>(function: TRec8 begin
-    Result.a := Random(High(Integer));
-    Result.b := Random(High(Integer));
-  end);
-  TestSort<TRec12>(function: TRec12 begin
-    Result.a := Random(High(Integer));
-    Result.b := Random(High(Integer));
-    Result.c := Random(High(Integer));
-  end);
+  TestSort<TRec1>(GenRec1);
+  TestSort<TRec2>(GenRec2);
+  TestSort<TRec3>(GenRec3);
+  TestSort<TRec4>(GenRec4);
+  TestSort<TRec5>(GenRec5);
+  TestSort<TRec8>(GenRec8);
+  TestSort<TRec12>(GenRec12);
 end;
 
 {$ENDREGION}
 
+
+{$REGION 'TPartialSortTest'}
+
+function SortedCopy(const values: TArray<Integer>): TArray<Integer>;
+begin
+  Result := Copy(values);
+  TArray.Sort<Integer>(Result);
+end;
+
+function NextPermutationArray(var values: TArray<Integer>): Boolean;
+var
+  i, j, hi: NativeInt;
+  temp: Integer;
+begin
+  hi := High(values);
+
+  i := hi - 1;
+  while (i >= 0) and (values[i] >= values[i + 1]) do
+    Dec(i);
+  if i < 0 then
+    Exit(False);
+
+  j := hi;
+  while values[j] <= values[i] do
+    Dec(j);
+
+  temp := values[i];
+  values[i] := values[j];
+  values[j] := temp;
+
+  Inc(i);
+  j := hi;
+  while i < j do
+  begin
+    temp := values[i];
+    values[i] := values[j];
+    values[j] := temp;
+    Inc(i);
+    Dec(j);
+  end;
+  Result := True;
+end;
+
+procedure TPartialSortTest.CheckRangeSorted(const values: TArray<Integer>; index, count: NativeInt);
+var
+  i, last: NativeInt;
+begin
+  if count <= 0 then
+    Exit;
+  last := index + count - 1;
+
+  // Elements inside the range must be sorted ascending
+  for i := index to last - 1 do
+    Check(values[i] <= values[i + 1], 'Range not sorted: values[%d]=%d > values[%d]=%d', [i, values[i], i + 1, values[i + 1]]);
+
+  // Every element before the range must be <= min(range) = values[index]
+  for i := 0 to index - 1 do
+    Check(values[i] <= values[index], 'Left boundary violated: values[%d]=%d > values[%d]=%d', [i, values[i], index, values[index]]);
+
+  // Every element after the range must be >= max(range) = values[last]
+  for i := last + 1 to High(values) do
+    Check(values[last] <= values[i], 'Right boundary violated: values[%d]=%d > values[%d]=%d', [last, values[last], i, values[i]]);
+end;
+
+procedure TPartialSortTest.CheckPartialSort(const values, orig: TArray<Integer>; index, count: NativeInt);
+var
+  sorted: TArray<Integer>;
+  i: NativeInt;
+begin
+  CheckRangeSorted(values, index, count);
+
+  // Range must match what full sort would produce on the original (unaltered) data
+  sorted := SortedCopy(orig);
+  for i := index to index + count - 1 do
+    Check(sorted[i] = values[i], 'Element mismatch at %d: expected %d, got %d', [i, sorted[i], values[i]]);
+end;
+
+procedure TPartialSortTest.CheckMatchesFullSort(const values, orig: TArray<Integer>; index, count: NativeInt);
+var
+  sorted: TArray<Integer>;
+  i, last: NativeInt;
+begin
+  sorted := SortedCopy(orig);
+  last := index + count - 1;
+  for i := index to last do
+    Check(sorted[i] = values[i], 'values[%d] should be %d (from full sort), was %d', [i, sorted[i], values[i]]);
+end;
+
+{ -- Random stress test helper -- }
+
+procedure TPartialSortTest.RandomStressTest(const Sizes: array of Integer;
+  iterations: Integer; valueMin, valueMax: Integer;
+  testAllRanges: Boolean);
+var
+  values, orig: TArray<Integer>;
+  n, i, rangeIdx, rangeCount, s: NativeInt;
+  valueRange: Integer;
+begin
+  // Avoid overflow when valueMax = MaxInt and valueMin = 0
+  if valueMax < valueMin then
+    valueRange := MaxInt
+  else
+    valueRange := valueMax - valueMin;
+
+  for s := Low(Sizes) to High(Sizes) do
+  begin
+    n := Sizes[s];
+    SetLength(values, n);
+
+    for i := 1 to iterations do
+    begin
+      for rangeIdx := 0 to n - 1 do
+        values[rangeIdx] := Random(valueRange) + valueMin;
+
+      if testAllRanges then
+      begin
+        orig := Copy(values);
+        for rangeIdx := 0 to n - 1 do
+        begin
+          rangeCount := Random(n - rangeIdx) + 1;
+          TArray.SortPartial<Integer>(values, rangeIdx, rangeCount);
+          CheckPartialSort(values, orig, rangeIdx, rangeCount);
+        end;
+      end
+      else
+      begin
+        orig := Copy(values);
+        rangeIdx := Random(n);
+        rangeCount := Random(n - rangeIdx) + 1;
+        TArray.SortPartial<Integer>(values, rangeIdx, rangeCount);
+        CheckPartialSort(values, orig, rangeIdx, rangeCount);
+      end;
+    end;
+  end;
+end;
+
+{ -- Permutation tests -- }
+
+procedure TPartialSortTest.CheckPermutations(const Input: TArray<Integer>);
+var
+  current, perm: TArray<Integer>;
+  n, rangeIdx, rangeCount: NativeInt;
+begin
+  n := Length(Input);
+  current := Copy(Input);
+  TArray.Sort<Integer>(current);
+
+  repeat
+    for rangeIdx:= 0 to n - 1 do
+      for rangeCount := 1 to n - rangeIdx do
+      begin
+        perm := Copy(current);
+        TArray.SortPartial<Integer>(perm, rangeIdx, rangeCount);
+        CheckPartialSort(perm, current, rangeIdx, rangeCount);
+      end;
+  until not NextPermutationArray(current);
+end;
+
+procedure TPartialSortTest.TestPermutations_3Elements;
+begin
+  CheckPermutations(TArray<Integer>.Create(1, 2, 3));
+end;
+
+procedure TPartialSortTest.TestPermutations_4Elements;
+begin
+  CheckPermutations(TArray<Integer>.Create(10, 20, 30, 40));
+end;
+
+procedure TPartialSortTest.TestPermutations_5Elements;
+begin
+  CheckPermutations(TArray<Integer>.Create(1, 5, 3, 7, 2));
+end;
+
+procedure TPartialSortTest.TestPermutations_6Elements_AllRanges;
+begin
+  CheckPermutations(TArray<Integer>.Create(3, 1, 4, 2, 5, 9));
+end;
+
+{ -- Random stress tests -- }
+
+procedure TPartialSortTest.TestRandomSmallArrays;
+var
+  sizes: array[1..10] of Integer;
+  s: NativeInt;
+begin
+  for s := 1 to 10 do
+    sizes[s] := s;
+  RandomStressTest(sizes, 100, -30, 30, True);
+end;
+
+procedure TPartialSortTest.TestRandomMediumArrays;
+begin
+  RandomStressTest([50, 100], 20, -500, 500, True);
+end;
+
+procedure TPartialSortTest.TestRandomLargeArrays;
+begin
+  RandomStressTest([500, 1000], 20, -50000, 50000, False);
+end;
+
+procedure TPartialSortTest.TestRandomHugeArrays;
+begin
+  RandomStressTest([10000], 20, 0, MaxInt, False);
+end;
+
+procedure TPartialSortTest.TestRandomExtremeRanges;
+var
+  values: TArray<Integer>;
+  i, idx: NativeInt;
+begin
+  SetLength(values, 100);
+  for i:= 1 to 20 do
+  begin
+    for idx := 0 to 99 do
+      values[idx] := Random(1000);
+    TArray.SortPartial<Integer>(values, Random(100), 1);
+    TArray.SortPartial<Integer>(values, 0, 100);
+    CheckRangeSorted(values, 0, 100);
+    TArray.SortPartial<Integer>(values, 0, 50);
+    CheckRangeSorted(values, 0, 50);
+    TArray.SortPartial<Integer>(values, 50, 50);
+    CheckRangeSorted(values, 50, 50);
+  end;
+end;
+
+procedure TPartialSortTest.TestRandomAllRanges;
+var
+  values, orig: TArray<Integer>;
+  n, rangeIdx, c, j: NativeInt;
+begin
+  n := 15;
+  SetLength(values, n);
+  for rangeIdx := 0 to n - 1 do
+    for c := 1 to n - rangeIdx do
+    begin
+      for j := 0 to n - 1 do
+        values[j] := (rangeIdx * n + c + j * 31) mod 97 - 48;
+      orig := Copy(values);
+      TArray.SortPartial<Integer>(values, rangeIdx, c);
+      CheckPartialSort(values, orig, rangeIdx, c);
+    end;
+end;
+
+procedure TPartialSortTest.TestLargeRanges;
+const
+  ElementCount = 20000;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  // A range larger than the insertion sort threshold must not be finished
+  // with an O(n^2) insertion sort - this covers the whole array as well as a
+  // large sub range.
+  SetLength(values, ElementCount);
+  for i := 0 to High(values) do
+    values[i] := Random(MaxInt);
+  orig := Copy(values);
+
+  TArray.SortPartial<Integer>(values, 0, ElementCount);
+  for i := 0 to High(values) - 1 do
+    Check(values[i] <= values[i + 1], 'Full range not sorted at %d', [i]);
+  CheckMatchesFullSort(values, orig, 0, ElementCount);
+
+  values := Copy(orig);
+  TArray.SortPartial<Integer>(values, 5000, 10000);
+  CheckPartialSort(values, orig, 5000, 10000);
+end;
+
+{ -- Multiset preservation -- }
+
+procedure TPartialSortTest.TestMultisetPreservation_Small;
+var
+  values, orig: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 1, 3);
+  CheckPartialSort(values, orig, 1, 3);
+end;
+
+procedure TPartialSortTest.TestMultisetPreservation_Medium;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 50);
+  for i := 0 to 49 do
+    values[i] := Random(200);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 15, 20);
+  CheckPartialSort(values, orig, 15, 20);
+end;
+
+procedure TPartialSortTest.TestMultisetPreservation_Large;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 500);
+  for i := 0 to 499 do
+    values[i] := Random(10000);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 100, 200);
+  CheckPartialSort(values, orig, 100, 200);
+end;
+
+procedure TPartialSortTest.TestMultisetPreservation_Duplicates;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 30);
+  for i := 0 to 29 do
+    values[i] := (Random(5) * 10);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 5, 20);
+  CheckPartialSort(values, orig, 5, 20);
+end;
+
+{ -- Idempotency -- }
+
+procedure TPartialSortTest.TestIdempotent_SmallRange;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 20);
+  for i := 0 to 19 do
+    values[i] := Random(100);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 5, 10);
+  TArray.SortPartial<Integer>(values, 5, 10);
+  CheckPartialSort(values, orig, 5, 10);
+end;
+
+procedure TPartialSortTest.TestIdempotent_FullArray;
+var
+  values: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 50);
+  for i:= 0 to 49 do
+    values[i] := Random(200);
+  TArray.SortPartial<Integer>(values, 0, Length(values));
+  // Re-sort the full array
+  TArray.SortPartial<Integer>(values, 0, Length(values));
+  // Verify still correctly sorted
+  for i := 0 to High(values) - 1 do
+    Check(values[i] <= values[i + 1], 'Not sorted at %d', [i]);
+end;
+
+procedure TPartialSortTest.TestIdempotent_MultipleRanges;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 100);
+  for i:= 0 to 99 do
+    values[i] := Random(500);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 0, 10);
+  TArray.SortPartial<Integer>(values, 20, 30);
+  TArray.SortPartial<Integer>(values, 60, 20);
+  TArray.SortPartial<Integer>(values, 0, 10);
+  TArray.SortPartial<Integer>(values, 20, 30);
+  TArray.SortPartial<Integer>(values, 60, 20);
+  CheckPartialSort(values, orig, 0, 10);
+  CheckPartialSort(values, orig, 20, 30);
+  CheckPartialSort(values, orig, 60, 20);
+end;
+
+{ -- Overlapping range tests -- }
+
+procedure TPartialSortTest.TestOverlappingRanges_LeftOverlap;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 20);
+  for i:= 0 to 19 do
+    values[i] := Random(100);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 5, 10);
+  TArray.SortPartial<Integer>(values, 10, 8);
+  CheckPartialSort(values, orig, 10, 8);
+end;
+
+procedure TPartialSortTest.TestOverlappingRanges_RightOverlap;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 20);
+  for i:= 0 to 19 do
+    values[i] := Random(100);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 5, 10);
+  TArray.SortPartial<Integer>(values, 0, 8);
+  CheckPartialSort(values, orig, 0, 8);
+end;
+
+procedure TPartialSortTest.TestOverlappingRanges_Nested;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 20);
+  for i:= 0 to 19 do
+    values[i] := Random(100);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 3, 14);
+  TArray.SortPartial<Integer>(values, 7, 6);
+  CheckPartialSort(values, orig, 7, 6);
+end;
+
+procedure TPartialSortTest.TestOverlappingRanges_Adiacent;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 20);
+  for i:= 0 to 19 do
+    values[i] := Random(100);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 0, 5);
+  TArray.SortPartial<Integer>(values, 5, 5);
+  CheckPartialSort(values, orig, 0, 10);
+end;
+
+{ -- Edge values -- }
+
+procedure TPartialSortTest.TestMinInt_MaxInt;
+var
+  values, orig: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(Low(Integer), High(Integer), 0, Low(Integer) + 1, High(Integer) - 1);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 0, Length(values));
+  CheckRangeSorted(values, 0, Length(values));
+  CheckMatchesFullSort(values, orig, 0, Length(values));
+end;
+
+procedure TPartialSortTest.TestZeroesAndOnes;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 20);
+  for i := 0 to 19 do
+    values[i] := Random(2);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 5, 10);
+  CheckPartialSort(values, orig, 5, 10);
+end;
+
+procedure TPartialSortTest.TestAlternatingValues;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 20);
+  for i:= 0 to 19 do
+    if (i mod 2 = 0) then
+      values[i] := i * 10
+    else
+      values[i] := i;
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 3, 10);
+  CheckPartialSort(values, orig, 3, 10);
+end;
+
+procedure TPartialSortTest.TestSingleRunDuplicates;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 10);
+  values[0] := 1; values[1] := 1; values[2] := 1; values[3] := 1;
+  for i := 4 to 9 do values[i] := i - 2;
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 2, 5);
+  CheckPartialSort(values, orig, 2, 5);
+end;
+
+procedure TPartialSortTest.TestLongDuplicateRun;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 100);
+  for i:= 0 to 99 do
+    if (i mod 3 = 0) then
+      values[i] := 7
+    else if (i mod 3 = 1) then
+      values[i] := 42
+    else
+      values[i] := -5;
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 20, 60);
+  CheckPartialSort(values, orig, 20, 60);
+end;
+
+procedure TPartialSortTest.TestAllEqualElements;
+var
+  values, orig: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 30);
+  for i:= 0 to 29 do
+    values[i] := 0;
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 10, 10);
+  CheckPartialSort(values, orig, 10, 10);
+end;
+
+{ -- Quickselect threshold tests -- }
+
+procedure TPartialSortTest.TestAtThreshold_Size3;
+var
+  current, perm: TArray<Integer>;
+begin
+  current := TArray<Integer>.Create(100, 200, 300);
+  TArray.Sort<Integer>(current);
+
+  repeat
+    perm := Copy(current);
+    TArray.SortPartial<Integer>(perm, 0, 3);
+    CheckPartialSort(perm, current, 0, 3);
+  until not NextPermutationArray(current);
+end;
+
+procedure TPartialSortTest.TestAtThreshold_Size4;
+var
+  current, perm: TArray<Integer>;
+begin
+  current := TArray<Integer>.Create(99, 1, 50, 75);
+  TArray.Sort<Integer>(current);
+
+  repeat
+    perm := Copy(current);
+    TArray.SortPartial<Integer>(perm, 0, 4);
+    CheckPartialSort(perm, current, 0, 4);
+  until not NextPermutationArray(current);
+end;
+
+procedure TPartialSortTest.TestAtThreshold_Size5;
+var
+  current, perm: TArray<Integer>;
+begin
+  current := TArray<Integer>.Create(5, 4, 3, 2, 1);
+  TArray.Sort<Integer>(current);
+
+  repeat
+    perm := Copy(current);
+    TArray.SortPartial<Integer>(perm, 0, 5);
+    CheckPartialSort(perm, current, 0, 5);
+  until not NextPermutationArray(current);
+end;
+
+procedure TPartialSortTest.TestAtThreshold_Size6;
+var
+  current, perm: TArray<Integer>;
+begin
+  current := TArray<Integer>.Create(6, 5, 4, 3, 2, 1);
+  TArray.Sort<Integer>(current);
+
+  repeat
+    perm := Copy(current);
+    TArray.SortPartial<Integer>(perm, 0, 6);
+    CheckPartialSort(perm, current, 0, 6);
+  until not NextPermutationArray(current);
+end;
+
+{ -- Boundary and error handling -- }
+
+procedure TPartialSortTest.TestZeroCount_NoOp;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  // count = 0 is a valid range and must be a no-op (consistent with TArray.Sort)
+  TArray.SortPartial<Integer>(values, 0, 0);
+  CheckEquals(5, values[0]);
+  CheckEquals(3, values[1]);
+  CheckEquals(1, values[2]);
+end;
+
+procedure TPartialSortTest.TestNegativeIndex_Raises;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, -1, 3);
+    end);
+end;
+
+procedure TPartialSortTest.TestNegativeCount_Raises;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, 1, -1);
+    end);
+end;
+
+procedure TPartialSortTest.TestOutOfBounds_Raises;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, 3, 3);
+    end);
+end;
+
+procedure TPartialSortTest.TestIndexEqualsLength_Raises;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  // index = Length is only valid for count = 0
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, Length(values), 1);
+    end);
+end;
+
+procedure TPartialSortTest.TestIndexGreaterThanLength_Raises;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, Length(values) + 1, 1);
+    end);
+end;
+
+procedure TPartialSortTest.TestEmptyArray_Range_Raises;
+var
+  values: TArray<Integer>;
+begin
+  SetLength(values, 0);
+  TArray.SortPartial<Integer>(values, 0, 0);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, 0, 1);
+    end);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, -1, 1);
+    end);
+end;
+
+procedure TPartialSortTest.TestConsistentWithSort;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.Sort<Integer>(values, TComparer<Integer>.Default, -1, 3);
+    end);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, -1, 3);
+    end);
+
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.Sort<Integer>(values, TComparer<Integer>.Default, 3, 3);
+    end);
+  CheckException(EArgumentOutOfRangeException,
+    procedure
+    begin
+      TArray.SortPartial<Integer>(values, 3, 3);
+    end);
+end;
+
+procedure TPartialSortTest.TestCountEqualToLength;
+var
+  values: TArray<Integer>;
+  i: NativeInt;
+begin
+  values := TArray<Integer>.Create(42, 7, 19, 3, 88, 51, 0, 16, 33, 27);
+  TArray.SortPartial<Integer>(values, 0, Length(values));
+  for i := 0 to High(values) - 1 do
+    Check(values[i] <= values[i + 1], 'Not sorted at %d', [i]);
+end;
+
+procedure TPartialSortTest.TestIndexAtLastElement;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  TArray.SortPartial<Integer>(values, 4, 1);
+  CheckRangeSorted(values, 4, 1);
+  CheckEquals(5, values[4]);
+end;
+
+procedure TPartialSortTest.TestIndexPlusCountEqualsLength;
+var
+  values, orig: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(9, 7, 5, 3, 1);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 3, 2);
+  CheckPartialSort(values, orig, 3, 2);
+end;
+
+{ -- Already sorted variants -- }
+
+procedure TPartialSortTest.TestAlreadySorted_FullRange;
+var
+  values: TArray<Integer>;
+  i: NativeInt;
+  sorted: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+  TArray.SortPartial<Integer>(values, 0, Length(values));
+  sorted := SortedCopy(values);
+  for i:= Low(values) to High(values) do
+    Check(sorted[i] = values[i], 'Mismatch at %d', [i]);
+end;
+
+procedure TPartialSortTest.TestAlreadySorted_SubRange;
+var
+  values: TArray<Integer>;
+  i: NativeInt;
+  sorted: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+  TArray.SortPartial<Integer>(values, 3, 4);
+  sorted := SortedCopy(values);
+  for i:= 3 to 6 do
+    Check(sorted[i] = values[i], 'Mismatch at %d', [i]);
+end;
+
+procedure TPartialSortTest.TestReverseSorted_FullRange;
+var
+  values: TArray<Integer>;
+  i: NativeInt;
+  sorted: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(10, 9, 8, 7, 6, 5, 4, 3, 2, 1);
+  TArray.SortPartial<Integer>(values, 0, Length(values));
+  sorted := SortedCopy(values);
+  for i:= 0 to High(values) do
+    Check(sorted[i] = values[i], 'Mismatch at %d', [i]);
+end;
+
+procedure TPartialSortTest.TestReverseSorted_SubRange;
+var
+  values: TArray<Integer>;
+  i: NativeInt;
+  sorted: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(10, 9, 8, 7, 6, 5, 4, 3, 2, 1);
+  TArray.SortPartial<Integer>(values, 3, 4);
+  CheckRangeSorted(values, 3, 4);
+  sorted := SortedCopy(values);
+  for i:= 3 to 6 do
+    Check(sorted[i] = values[i], 'Mismatch at %d', [i]);
+end;
+
+{ -- Regression patterns -- }
+
+procedure TPartialSortTest.TestRangeAtStart_Distinct;
+var
+  values, orig: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 4, 3, 2, 1, 10, 8, 9, 6, 7);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 0, 5);
+  CheckPartialSort(values, orig, 0, 5);
+end;
+
+procedure TPartialSortTest.TestRangeAtEnd_Distinct;
+var
+  values, orig: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(8, 1, 5, 10, 3, 9, 7, 6, 4, 2);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 5, 5);
+  CheckPartialSort(values, orig, 5, 5);
+end;
+
+procedure TPartialSortTest.TestSingleElement_MultiplePositions;
+var
+  values: TArray<Integer>;
+  expected: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  expected := SortedCopy(values);
+
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  TArray.SortPartial<Integer>(values, 0, 1);
+  CheckEquals(expected[0], values[0], 'Position 0 should be 1');
+
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  TArray.SortPartial<Integer>(values, 1, 1);
+  CheckEquals(expected[1], values[1], 'Position 1 should be 2');
+
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  TArray.SortPartial<Integer>(values, 2, 1);
+  CheckEquals(expected[2], values[2], 'Position 2 should be 3');
+
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  TArray.SortPartial<Integer>(values, 3, 1);
+  CheckEquals(expected[3], values[3], 'Position 3 should be 4');
+
+  values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+  TArray.SortPartial<Integer>(values, 4, 1);
+  CheckEquals(expected[4], values[4], 'Position 4 should be 5');
+end;
+
+procedure TPartialSortTest.TestTwoElement_Array;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(2, 1);
+  TArray.SortPartial<Integer>(values, 0, 2);
+  CheckEquals(1, values[0]);
+  CheckEquals(2, values[1]);
+end;
+
+procedure TPartialSortTest.TestTwoElement_Range;
+var
+  values, orig: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(10, 50, 5, 55, 1, 60, 20, 40);
+  orig := Copy(values);
+  TArray.SortPartial<Integer>(values, 2, 2);
+  CheckPartialSort(values, orig, 2, 2);
+end;
+
+{ -- Comprehensive range coverage -- }
+
+procedure TPartialSortTest.TestAllRangesOfSize5;
+var
+  values, orig: TArray<Integer>;
+  rangeIdx, c: NativeInt;
+begin
+  for rangeIdx := 0 to 4 do
+    for c := 1 to 5 - rangeIdx do
+    begin
+      values := TArray<Integer>.Create(5, 3, 1, 4, 2);
+      orig := Copy(values);
+      TArray.SortPartial<Integer>(values, rangeIdx, c);
+      CheckPartialSort(values, orig, rangeIdx, c);
+    end;
+end;
+
+procedure TPartialSortTest.TestAllRangesOfSize10;
+var
+  values, orig: TArray<Integer>;
+  rangeIdx, c: NativeInt;
+begin
+  for rangeIdx := 0 to 9 do
+    for c := 1 to 10 - rangeIdx do
+    begin
+      values := TArray<Integer>.Create(10, 9, 8, 7, 6, 5, 4, 3, 2, 1);
+      orig := Copy(values);
+      TArray.SortPartial<Integer>(values, rangeIdx, c);
+      CheckPartialSort(values, orig, rangeIdx, c);
+    end;
+end;
+
+procedure TPartialSortTest.TestAllRangesOfSize20;
+var
+  template, values, orig: TArray<Integer>;
+  rangeIdx, c: NativeInt;
+begin
+  template := TArray<Integer>.Create(
+    47, 12, 83, 5, 91, 28, 66, 34, 72, 19,
+    55, 8, 93, 41, 60, 25, 77, 15, 88, 38);
+
+  for rangeIdx := 0 to 19 do
+    for c := 1 to 20 - rangeIdx do
+    begin
+      values := Copy(template);
+      orig := Copy(values);
+      TArray.SortPartial<Integer>(values, rangeIdx, c);
+      CheckPartialSort(values, orig, rangeIdx, c);
+    end;
+end;
+
+{ -- Value correctness against full sort -- }
+
+procedure TPartialSortTest.TestMatchesFullSort_VariousRanges;
+var
+  values, orig: TArray<Integer>;
+  i, rangeIdx, c: NativeInt;
+begin
+  for rangeIdx := 0 to 29 do
+    for c := 1 to 30 - rangeIdx do
+    begin
+      SetLength(values, 30);
+      for i:= 0 to 29 do
+        values[i] := (i * 37 + 13) mod 100;
+      orig := Copy(values);
+      TArray.SortPartial<Integer>(values, rangeIdx, c);
+      CheckMatchesFullSort(values, orig, rangeIdx, c);
+    end;
+end;
+
+procedure TPartialSortTest.TestMatchesFullSort_Random100;
+var
+  values, orig: TArray<Integer>;
+  i, rangeIdx, c: NativeInt;
+begin
+  SetLength(values, 100);
+  for i:= 1 to 50 do
+  begin
+    for rangeIdx := 0 to 99 do
+      values[rangeIdx] := Random(500);
+    orig := Copy(values);
+    rangeIdx := Random(100);
+    c := Random(100 - rangeIdx) + 1;
+    TArray.SortPartial<Integer>(values, rangeIdx, c);
+    CheckMatchesFullSort(values, orig, rangeIdx, c);
+  end;
+end;
+
+procedure TPartialSortTest.TestMatchesFullSort_Random1000;
+var
+  values, orig: TArray<Integer>;
+  i, rangeIdx, c: NativeInt;
+begin
+  SetLength(values, 1000);
+  for i:= 1 to 20 do
+  begin
+    for rangeIdx := 0 to 999 do
+      values[rangeIdx] := Random(10000);
+    orig := Copy(values);
+    rangeIdx := Random(500);
+    c := Random(500) + 1;
+    if rangeIdx + c > 1000 then
+      c := 1000 - rangeIdx;
+    TArray.SortPartial<Integer>(values, rangeIdx, c);
+    CheckMatchesFullSort(values, orig, rangeIdx, c);
+  end;
+end;
+
+{ -- Element ordering invariants -- }
+
+procedure TPartialSortTest.TestLeftOfRange_AllSmallerOrEqual;
+var
+  values: TArray<Integer>;
+  i, j: NativeInt;
+begin
+  SetLength(values, 50);
+  for i := 0 to 49 do
+    values[i] := Random(100);
+  TArray.SortPartial<Integer>(values, 10, 30);
+  for i:= 10 to 39 do
+    for j := 0 to 9 do
+      Check(values[i] >= values[j], 'Range element A[%d]=%d < left A[%d]=%d', [i, values[i], j, values[j]]);
+end;
+
+procedure TPartialSortTest.TestRightOfRange_AllGreaterOrEqual;
+var
+  values: TArray<Integer>;
+  i, j: NativeInt;
+begin
+  SetLength(values, 50);
+  for i:= 0 to 49 do
+    values[i] := Random(100);
+  TArray.SortPartial<Integer>(values, 10, 30);
+  for i:= 10 to 39 do
+    for j := 40 to 49 do
+      Check(values[i] <= values[j], 'Range element A[%d]=%d > right A[%d]=%d', [i, values[i], j, values[j]]);
+end;
+
+procedure TPartialSortTest.TestRangeInternallySorted;
+var
+  values: TArray<Integer>;
+  i: NativeInt;
+begin
+  SetLength(values, 100);
+  for i:= 0 to 99 do
+    values[i] := Random(1000);
+  TArray.SortPartial<Integer>(values, 20, 60);
+  for i:= 20 to 79 do
+    Check(values[i] <= values[i + 1], 'Not sorted at %d', [i]);
+end;
+
+procedure TPartialSortTest.TestElementsOutsideRange_Unordered;
+var
+  values: TArray<Integer>;
+begin
+  values := TArray<Integer>.Create(10, 1, 20, 2, 30, 3, 40, 4, 50, 5);
+  TArray.SortPartial<Integer>(values, 4, 3);
+  CheckRangeSorted(values, 4, 3);
+end;
+
+{ -- Check with lazy formatting -- }
+
+procedure TPartialSortTest.Check(const ACondition: Boolean; const AFormat: string; const Args: array of const);
+begin
+  FCheckCalled := True;
+  if not ACondition then
+    Fail(Format(AFormat, Args), ReturnAddress);
+end;
+
+
+
+{ -- Generic multi-type helpers and tests -- }
+
+class function TPartialSortTest.Sorted<T>(const values: array of T): TArray<T>;
+begin
+  SetLength(Result, Length(values));
+  if Length(values) > 0 then
+    Move(values[0], Result[0], Length(values) * SizeOf(T));
+  TArray.Sort<T>(Result);
+end;
+
+procedure TPartialSortTest.CheckRangeSortedGeneric<T>(const values: array of T; index, count: Integer);
+var
+  i, last: Integer;
+  comparer: IComparer<T>;
+begin
+  if count <= 0 then
+    Exit;
+  comparer := TComparer<T>.Default;
+  last := index + count - 1;
+
+  for i := index to last - 1 do
+    Check(comparer.Compare(values[i], values[i + 1]) <= 0, Format('Range not sorted at %d', [i]));
+
+  for i := 0 to index - 1 do
+    Check(comparer.Compare(values[i], values[index]) <= 0, Format('Left boundary violated at %d', [i]));
+
+  for i := last + 1 to High(values) do
+    Check(comparer.Compare(values[last], values[i]) <= 0, Format('Right boundary violated at %d', [i]));
+end;
+
+procedure TPartialSortTest.CheckPartialSortGeneric<T>(const values, orig: array of T; index, count: Integer);
+var
+  expected: TArray<T>;
+  comparer: IComparer<T>;
+  i: Integer;
+begin
+  CheckRangeSortedGeneric<T>(values, index, count);
+
+  comparer := TComparer<T>.Default;
+  expected := Sorted<T>(orig);
+  for i := index to index + count - 1 do
+    Check(comparer.Compare(expected[i], values[i]) = 0, Format('Element mismatch at %d', [i]));
+end;
+
+procedure TPartialSortTest.TestDefaultSortPartial<T>(const genValue: Func<T>);
+const
+  ElementCount = 1000;
+var
+  values, orig, sortedAll: TArray<T>;
+  i, start, len: Integer;
+begin
+  SetLength(values, ElementCount);
+  for i := 0 to High(values) do
+    values[i] := genValue;
+  orig := Copy(values);
+
+  start := Random(ElementCount);
+  len := Random(ElementCount - start) + 1;
+  TArray.SortPartial<T>(values, start, len);
+  CheckPartialSortGeneric<T>(values, orig, start, len);
+
+  sortedAll := Sorted<T>(orig);
+  values := Copy(orig);
+  TArray.SortPartial<T>(values, 0, ElementCount);
+  for i := 0 to High(values) do
+    Check(TComparer<T>.Default.Compare(sortedAll[i], values[i]) = 0, Format('Full range mismatch at %d', [i]));
+end;
+
+procedure TPartialSortTest.TestComparerSortPartial<T>(const genValue: Func<T>);
+const
+  ElementCount = 500;
+var
+  values, orig: TArray<T>;
+  i, start, len: Integer;
+begin
+  SetLength(values, ElementCount);
+  for i := 0 to High(values) do
+    values[i] := genValue;
+  orig := Copy(values);
+
+  start := Random(ElementCount);
+  len := Random(ElementCount - start) + 1;
+  TArray.SortPartial<T>(values, TComparer<T>.Default, start, len);
+  CheckPartialSortGeneric<T>(values, orig, start, len);
+end;
+
+procedure TPartialSortTest.TestComparisonSortPartial<T>(const genValue: Func<T>);
+const
+  ElementCount = 500;
+var
+  values, orig: TArray<T>;
+  comparison: TComparison<T>;
+  i, start, len: Integer;
+begin
+  SetLength(values, ElementCount);
+  for i := 0 to High(values) do
+    values[i] := genValue;
+  orig := Copy(values);
+
+  comparison :=
+    function(const left, right: T): Integer
+    begin
+      Result := TComparer<T>.Default.Compare(left, right);
+    end;
+
+  start := Random(ElementCount);
+  len := Random(ElementCount - start) + 1;
+  TArray.SortPartial<T>(values, comparison, start, len);
+  CheckPartialSortGeneric<T>(values, orig, start, len);
+end;
+
+procedure TPartialSortTest.Test_Int8;
+begin
+  TestDefaultSortPartial<Int8>(function: Int8 begin Result := Int8(Random(256) - 128) end);
+end;
+
+procedure TPartialSortTest.Test_UInt8;
+begin
+  TestDefaultSortPartial<UInt8>(function: UInt8 begin Result := UInt8(Random(256)) end);
+end;
+
+procedure TPartialSortTest.Test_Int16;
+begin
+  TestDefaultSortPartial<Int16>(function: Int16 begin Result := Int16(Random(65536) - 32768) end);
+end;
+
+procedure TPartialSortTest.Test_UInt16;
+begin
+  TestDefaultSortPartial<UInt16>(function: UInt16 begin Result := UInt16(Random(65536)) end);
+end;
+
+procedure TPartialSortTest.Test_UInt32;
+begin
+  TestDefaultSortPartial<UInt32>(function: UInt32 begin Result := UInt32(Random(High(Int32))) end);
+end;
+
+procedure TPartialSortTest.Test_Int32;
+begin
+  TestDefaultSortPartial<Int32>(function: Int32 begin Result := Random(High(Int32)) end);
+end;
+
+procedure TPartialSortTest.Test_Int64;
+begin
+  TestDefaultSortPartial<Int64>(function: Int64 begin Result := Random(High(Int32)) end);
+end;
+
+procedure TPartialSortTest.Test_UInt64;
+begin
+  TestDefaultSortPartial<UInt64>(function: UInt64 begin Result := UInt64(Random(High(Int32))) end);
+end;
+
+procedure TPartialSortTest.Test_NativeInt;
+begin
+  TestDefaultSortPartial<NativeInt>(function: NativeInt begin Result := NativeInt(Random(High(Int32))) end);
+end;
+
+procedure TPartialSortTest.Test_NativeUInt;
+begin
+  TestDefaultSortPartial<NativeUInt>(function: NativeUInt begin Result := NativeUInt(Random(High(Int32))) end);
+end;
+
+procedure TPartialSortTest.Test_Single;
+begin
+  TestDefaultSortPartial<Single>(function: Single begin Result := Random() * 1000 end);
+end;
+
+procedure TPartialSortTest.Test_Double;
+begin
+  TestDefaultSortPartial<Double>(function: Double begin Result := Random() * 1000 end);
+end;
+
+procedure TPartialSortTest.Test_String;
+begin
+  TestDefaultSortPartial<string>(function: string begin Result := IntToStr(Random(1000)) end);
+end;
+
+procedure TPartialSortTest.Test_Extended;
+begin
+  TestDefaultSortPartial<Extended>(function: Extended begin Result := Random() * 1000 end);
+end;
+
+procedure TPartialSortTest.Test_Comp;
+begin
+  TestDefaultSortPartial<Comp>(function: Comp begin Result := Random() * 1000 end);
+end;
+
+procedure TPartialSortTest.Test_Currency;
+begin
+  TestDefaultSortPartial<Currency>(function: Currency begin Result := Random() * 1000 end);
+end;
+
+procedure TPartialSortTest.Test_ShortString;
+begin
+  TestDefaultSortPartial<TString1>(GenString1);
+  TestDefaultSortPartial<TString2>(GenString2);
+  TestDefaultSortPartial<TString3>(GenString3);
+  TestDefaultSortPartial<TString4>(GenString4);
+  TestDefaultSortPartial<TString7>(GenString7);
+end;
+
+procedure TPartialSortTest.Test_Set;
+begin
+  TestDefaultSortPartial<TSet8>(GenSet8);
+  TestDefaultSortPartial<TSet16>(GenSet16);
+  TestDefaultSortPartial<TSet32>(GenSet32);
+  TestDefaultSortPartial<TSet64>(GenSet64);
+  TestDefaultSortPartial<TSet256>(GenSet256);
+end;
+
+procedure TPartialSortTest.Test_Array;
+begin
+  TestDefaultSortPartial<TArray1>(GenArray1);
+  TestDefaultSortPartial<TArray2>(GenArray2);
+  TestDefaultSortPartial<TArray3>(GenArray3);
+  TestDefaultSortPartial<TArray4>(GenArray4);
+  TestDefaultSortPartial<TArray5>(GenArray5);
+  TestDefaultSortPartial<TArray8>(GenArray8);
+end;
+
+procedure TPartialSortTest.Test_Variant;
+begin
+  TestDefaultSortPartial<Variant>(function: Variant begin
+    Result := Random(High(Integer));
+  end);
+end;
+
+procedure TPartialSortTest.Test_Record;
+begin
+  TestDefaultSortPartial<TRec1>(GenRec1);
+  TestDefaultSortPartial<TRec2>(GenRec2);
+  TestDefaultSortPartial<TRec3>(GenRec3);
+  TestDefaultSortPartial<TRec4>(GenRec4);
+  TestDefaultSortPartial<TRec5>(GenRec5);
+  TestDefaultSortPartial<TRec8>(GenRec8);
+  TestDefaultSortPartial<TRec12>(GenRec12);
+end;
+
+procedure TPartialSortTest.Test_Enum;
+begin
+  TestDefaultSortPartial<TEnum8>(GenEnum8);
+  TestDefaultSortPartial<TEnum16>(GenEnum16);
+  TestDefaultSortPartial<TEnum32>(GenEnum32);
+  TestDefaultSortPartial<TEnum64>(GenEnum64);
+end;
+
+procedure TPartialSortTest.CheckOperatorRecordPartial<T>(const original: array of T;
+  const keyOf: Func<T, Integer>);
+var
+  values, expected: TArray<T>;
+  i, index, count: Integer;
+begin
+  SetLength(values, Length(original));
+  if Length(original) > 0 then
+    Move(original[0], values[0], Length(original) * SizeOf(T));
+  expected := Copy(values);
+  TArray.Sort<T>(expected);
+
+  index := Length(original) div 4;
+  count := Length(original) div 3;
+  TArray.SortPartial<T>(values, index, count);
+
+  for i := index to index + count - 2 do
+    Check(keyOf(values[i]) < keyOf(values[i + 1]), 'range not sorted at %d', [i]);
+  for i := index to index + count - 1 do
+    Check(keyOf(values[i]) = keyOf(expected[i]), 'mismatch at %d: expected %d, got %d',
+      [i, keyOf(expected[i]), keyOf(values[i])]);
+  for i := 0 to index - 1 do
+    Check(keyOf(values[i]) <= keyOf(values[index]), 'left boundary violated at %d', [i]);
+  for i := index + count to High(values) do
+    Check(keyOf(values[index + count - 1]) <= keyOf(values[i]), 'right boundary violated at %d', [i]);
+end;
+
+procedure TPartialSortTest.Test_RecordWithLessThanOperator;
+const
+  ElementCount = 100;
+var
+  r1: TArray<TOperatorRecord1>;
+  r2: TArray<TOperatorRecord2>;
+  r4: TArray<TOperatorRecord4>;
+  r8: TArray<TOperatorRecord8>;
+  r12: TArray<TOperatorRecord12>;
+  i: Integer;
+begin
+  // Records that only define LessThan must be ordered by that operator and not
+  // by the byte-wise comparer fallback. The signed fields make both orders
+  // differ; the sized variants exercise each TLessThanFunc overload.
+  SetLength(r1, ElementCount);
+  SetLength(r2, ElementCount);
+  SetLength(r4, ElementCount);
+  SetLength(r8, ElementCount);
+  SetLength(r12, ElementCount);
+  for i := 0 to ElementCount - 1 do
+  begin
+    r1[i].value := ShortInt((i * 97 + 13) mod 256 - 128);
+    r2[i].value := SmallInt((i * 1009 + 7) mod 65536 - 32768);
+    r4[i].value := (i * 97 + 13) mod ElementCount - 50;
+    r8[i].value := (i * 97 + 13) mod ElementCount - 50;
+    r12[i].pad := (i * 13) mod 251;
+    r12[i].value := (i * 97 + 13) mod ElementCount - 50;
+  end;
+
+  {$IFDEF DELPHIXE7_UP}
+  CheckOperatorRecordPartial<TOperatorRecord1>(r1,
+    function(const v: TOperatorRecord1): Integer begin Result := v.value end);
+  CheckOperatorRecordPartial<TOperatorRecord2>(r2,
+    function(const v: TOperatorRecord2): Integer begin Result := v.value end);
+  CheckOperatorRecordPartial<TOperatorRecord4>(r4,
+    function(const v: TOperatorRecord4): Integer begin Result := v.value end);
+  CheckOperatorRecordPartial<TOperatorRecord8>(r8,
+    function(const v: TOperatorRecord8): Integer begin Result := v.value end);
+  CheckOperatorRecordPartial<TOperatorRecord12>(r12,
+    function(const v: TOperatorRecord12): Integer begin Result := v.value end);
+  {$ELSE}
+  Pass;
+  {$ENDIF}
+end;
+
+procedure TPartialSortTest.Test_AnsiChar;
+begin
+  TestDefaultSortPartial<AnsiChar>(function: AnsiChar begin Result := AnsiChar(Random(256)) end);
+end;
+
+procedure TPartialSortTest.Test_WideChar;
+begin
+  TestDefaultSortPartial<WideChar>(function: WideChar begin Result := WideChar(Random(65536)) end);
+end;
+
+procedure TPartialSortTest.Test_Char;
+begin
+  TestDefaultSortPartial<Char>(function: Char begin Result := Char(Random(256)) end);
+end;
+
+procedure TPartialSortTest.Test_Boolean;
+begin
+  TestDefaultSortPartial<Boolean>(function: Boolean begin Result := Random(2) = 0 end);
+end;
+
+procedure TPartialSortTest.Test_Pointer;
+begin
+  TestDefaultSortPartial<Pointer>(
+    function: Pointer
+    begin
+      Result := Pointer(NativeUInt(Random(100000)) * SizeOf(Pointer) + 1);
+    end);
+end;
+
+procedure TPartialSortTest.TestDefaultPartialSort_DoesNotFullSort;
+const
+  Count = 64;
+var
+  enumValues: TArray<TEnum64>;
+  compValues: TArray<Comp>;
+  i: Integer;
+  sorted: Boolean;
+begin
+  // Enums have no dedicated PartialQuickSort overload and are routed through
+  // OrdinalTypePartialSorters - verify they are actually partially sorted and
+  // do not silently fall back to a full sort of the whole array.
+  SetLength(enumValues, Count);
+  for i := 0 to Count - 1 do
+    enumValues[i] := TEnum64((i * 33 + 7) mod Count);
+  TArray.SortPartial<TEnum64>(enumValues, 0, 1);
+  Check(Integer(enumValues[0]) = 0, 'enum partial sort did not place the minimum at index 0');
+  sorted := True;
+  for i := 0 to High(enumValues) - 1 do
+    if Integer(enumValues[i]) > Integer(enumValues[i + 1]) then
+    begin
+      sorted := False;
+      Break;
+    end;
+  Check(not sorted, 'enum partial sort fell back to a full sort');
+
+  // Comp is a tkFloat/size 8 type whose FloatType is neither ftDouble nor
+  // ftCurrency - verify it is partially sorted via Float64TypePartialSorters.
+  SetLength(compValues, Count);
+  for i := 0 to Count - 1 do
+    compValues[i] := (i * 33 + 7) mod Count;
+  TArray.SortPartial<Comp>(compValues, 0, 1);
+  Check(compValues[0] = 0, 'Comp partial sort did not place the minimum at index 0');
+  sorted := True;
+  for i := 0 to High(compValues) - 1 do
+    if compValues[i] > compValues[i + 1] then
+    begin
+      sorted := False;
+      Break;
+    end;
+  Check(not sorted, 'Comp partial sort fell back to a full sort');
+end;
+
+procedure TPartialSortTest.Test_Comparer_Int32;
+begin
+  TestComparerSortPartial<Int32>(function: Int32 begin Result := Random(High(Int32)) end);
+end;
+
+procedure TPartialSortTest.Test_Comparison_Int32;
+begin
+  TestComparisonSortPartial<Int32>(function: Int32 begin Result := Random(High(Int32)) end);
+end;
+
+procedure TPartialSortTest.Test_Comparer_Int64;
+begin
+  TestComparerSortPartial<Int64>(function: Int64 begin Result := Random(High(Int32)) end);
+end;
+
+procedure TPartialSortTest.Test_Comparison_Double;
+begin
+  TestComparisonSortPartial<Double>(function: Double begin Result := Random() * 1000 end);
+end;
+
+procedure TPartialSortTest.Test_Comparer_String;
+begin
+  TestComparerSortPartial<string>(function: string begin Result := IntToStr(Random(1000)) end);
+end;
+
+procedure TPartialSortTest.Test_Comparer_UInt32;
+begin
+  TestComparerSortPartial<UInt32>(function: UInt32 begin Result := UInt32(Random(High(Int32))) end);
+end;
+
+procedure TPartialSortTest.Test_Comparison_UInt32;
+begin
+  TestComparisonSortPartial<UInt32>(function: UInt32 begin Result := UInt32(Random(High(Int32))) end);
+end;
+
+function TPartialSortTest.TReversedComparer<T>.Compare(const left, right: T): Integer;
+begin
+  Result := -TComparer<T>.Default.Compare(left, right);
+end;
+
+procedure TPartialSortTest.Test_ReverseOrderViaComparer;
+var
+  values, orig: TArray<Integer>;
+  comparer: IComparer<Integer>;
+  i, index, count: Integer;
+begin
+  SetLength(values, 100);
+  for i := 0 to High(values) do
+    values[i] := Random(100);
+  orig := Copy(values);
+
+  comparer := TReversedComparer<Integer>.Create;
+
+  index := 20;
+  count := 30;
+  TArray.SortPartial<Integer>(values, comparer, index, count);
+
+  for i := index to index + count - 2 do
+    Check(values[i] >= values[i + 1], Format('Reverse range not sorted at %d', [i]));
+
+  TArray.Sort<Integer>(orig, comparer);
+  for i := index to index + count - 1 do
+    Check(orig[i] = values[i], Format('Reverse mismatch at %d', [i]));
+end;
+
+{}
 
 {$REGION 'TTestHash'}
 

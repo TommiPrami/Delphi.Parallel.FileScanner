@@ -2730,6 +2730,7 @@ type
     end;
     TPatternDefeatingQuickSort = procedure (lo, hi: Pointer; threads: Integer = 1;
       depthLimit: Integer = -1; leftMost: Boolean = True; branchless: Boolean = False);
+    TPartialQuickSort = procedure (lo, hi: Pointer; index, count: NativeInt);
   protected
     const FoldedTypeKinds = [tkInteger, tkChar, tkEnumeration, tkClass, tkMethod, tkWChar, tkInterface, tkInt64, tkUString, tkClassRef, tkPointer, tkProcedure];
     const PointerTypeKinds = [tkClass, tkInterface, tkDynArray, tkUString, tkClassRef, tkPointer, tkProcedure];
@@ -2748,6 +2749,20 @@ type
     const Float64TypeSorters: array[Boolean] of Pointer = (
       @TSort_Int64.PatternDefeatingQuickSort,
       @TSort_Double.PatternDefeatingQuickSort
+    );
+    const OrdinalTypePartialSorters: array[TOrdTypeEx] of Pointer = (
+      @TSort_Int8.PartialQuickSort,
+      @TSort_UInt8.PartialQuickSort,
+      @TSort_Int16.PartialQuickSort,
+      @TSort_UInt16.PartialQuickSort,
+      @TSort_Int32.PartialQuickSort,
+      @TSort_UInt32.PartialQuickSort,
+      @TSort_Int64.PartialQuickSort,
+      @TSort_UInt64.PartialQuickSort
+    );
+    const Float64TypePartialSorters: array[Boolean] of Pointer = (
+      @TSort_Int64.PartialQuickSort,
+      @TSort_Double.PartialQuickSort
     );
 
     class function QuickSortPartition<T>(const values: Span<T>; {$IFDEF SUPPORTS_CONSTREF}[ref]{$ENDIF}const compare: TCompareMethod<T>): NativeInt; overload; static;
@@ -2810,6 +2825,23 @@ type
     class procedure PatternDefeatingQuickSort_Double(lo, hi: Pointer; const comparer: IComparer<Double>; threads: Integer = 1); static;
     class procedure PatternDefeatingQuickSort_Extended(lo, hi: Pointer; const comparer: IComparer<Extended>; threads: Integer = 1); static;
     class procedure PatternDefeatingQuickSort_Method(lo, hi: Pointer; const comparer: IComparer<TMethodPointer>; threads: Integer = 1); static;
+    {$ENDIF}
+
+    {$IFDEF DELPHIXE7_UP}
+    class procedure PartialQuickSort_Int8(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int8>); overload; static;
+    class procedure PartialQuickSort_Int8(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int8>); overload; static;
+    class procedure PartialQuickSort_Int16(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int16>); overload; static;
+    class procedure PartialQuickSort_Int16(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int16>); overload; static;
+    class procedure PartialQuickSort_Int24(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int24>); overload; static;
+    class procedure PartialQuickSort_Int24(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int24>); overload; static;
+    class procedure PartialQuickSort_Int32(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int32>); overload; static;
+    class procedure PartialQuickSort_Int32(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int32>); overload; static;
+    class procedure PartialQuickSort_Int64(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int64>); overload; static;
+    class procedure PartialQuickSort_Int64(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int64>); overload; static;
+    class procedure PartialQuickSort_Single(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Single>); static;
+    class procedure PartialQuickSort_Double(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Double>); static;
+    class procedure PartialQuickSort_Extended(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Extended>); static;
+    class procedure PartialQuickSort_Method(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<TMethodPointer>); static;
     {$ENDIF}
 
     class function IndexOf_Int8(lo: PInt8; const item: Int8; index, count: NativeInt): NativeInt; static; inline;
@@ -3219,6 +3251,56 @@ type
     class procedure Sort<T>(var values: array of T;
       const comparison: TComparison<T>; index, count: Integer); overload; static;
 
+    /// <summary>
+    ///   Partially sorts the specified range of elements in an array using the
+    ///   default comparer.
+    /// </summary>
+    /// <param name="values">
+    ///   The array whose elements to partially sort.
+    /// </param>
+    /// <param name="index">
+    ///   The zero-based starting index of the range to sort.
+    /// </param>
+    /// <param name="count">
+    ///   The number of elements in the range to sort.
+    /// </param>
+    /// <exception cref="EArgumentOutOfRangeException">
+    ///   <paramref name="index"/> is negative or greater than the length of
+    ///   <paramref name="values"/>, or <paramref name="count"/> is negative, or
+    ///   <paramref name="index"/> + <paramref name="count"/> is greater than the
+    ///   length of <paramref name="values"/>.
+    /// </exception>
+    /// <remarks>
+    ///   After the call the elements in the range [index, index + count) are
+    ///   sorted and hold the same elements a full sort of the array would place
+    ///   at those positions. The order of the elements outside of the range is
+    ///   unspecified. Passing a <paramref name="count"/> of zero is valid and
+    ///   does nothing.
+    /// </remarks>
+    class procedure SortPartial<T>(var values: array of T; index, count: NativeInt); overload; static;
+
+    /// <summary>
+    ///   Partially sorts the specified range of elements in an array using the
+    ///   specified comparer.
+    /// </summary>
+    /// <remarks>
+    ///   See <see cref="SortPartial&lt;T&gt;(array of T, NativeInt, NativeInt)"/>
+    ///   for the semantics of the range and the handling of invalid ranges.
+    /// </remarks>
+    class procedure SortPartial<T>(var values: array of T;
+      const comparer: IComparer<T>; index, count: NativeInt); overload; static;
+
+    /// <summary>
+    ///   Partially sorts the specified range of elements in an array using the
+    ///   specified comparison.
+    /// </summary>
+    /// <remarks>
+    ///   See <see cref="SortPartial&lt;T&gt;(array of T, NativeInt, NativeInt)"/>
+    ///   for the semantics of the range and the handling of invalid ranges.
+    /// </remarks>
+    class procedure SortPartial<T>(var values: array of T;
+      const comparison: TComparison<T>; index, count: NativeInt); overload; static;
+
 {$IFDEF DELPHIXE7_UP}
     /// <summary>
     ///   When <c>True</c> any managed reference type is treated as Pointer by
@@ -3612,8 +3694,8 @@ procedure UnregisterWeakRef(address: Pointer; const instance: TObject);
 
 procedure MoveManaged(source, target, typeInfo: Pointer; count: NativeInt);
 
-procedure CheckIndex(index, size: Integer); inline;
-procedure CheckRange(index, count, size: Integer); inline;
+procedure CheckIndex(index, size: NativeInt); inline;
+procedure CheckRange(index, count, size: NativeInt); inline;
 
 procedure BinarySwap(left, right: Pointer; size: NativeInt);
 function BinaryCompare(left, right: Pointer; size: NativeInt): Integer;
@@ -5303,14 +5385,14 @@ begin
   target := source;
 end;
 
-procedure CheckIndex(index, size: Integer);
+procedure CheckIndex(index, size: NativeInt);
 begin
-  if Cardinal(index) >= Cardinal(size) then RaiseHelper.ArgumentOutOfRange_Index;
+  if NativeUInt(index) >= NativeUInt(size) then RaiseHelper.ArgumentOutOfRange_Index;
 end;
 
-procedure CheckRange(index, count, size: Integer);
+procedure CheckRange(index, count, size: NativeInt);
 begin
-  if Cardinal(index) > Cardinal(size) then RaiseHelper.ArgumentOutOfRange_Index;
+  if NativeUInt(index) > NativeUInt(size) then RaiseHelper.ArgumentOutOfRange_Index;
   {$Q-}
   if (count < 0) or (index > size - count) then RaiseHelper.ArgumentOutOfRange_Count;
   {$IFDEF OVERFLOWCHECKS_ON}{$Q+}{$ENDIF}
@@ -13930,6 +14012,112 @@ begin
   TSort.PatternDefeatingQuickSort<TMethodPointer>(lo, hi, compare, threads);
 end;
 
+class procedure TArray.PartialQuickSort_Int8(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int8>);
+var
+  compare: TCompareMethod<Int8>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Int8>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int8(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int8>);
+begin
+  TSort.PartialQuickSort<Int8>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int16(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int16>);
+var
+  compare: TCompareMethod<Int16>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Int16>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int16(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int16>);
+begin
+  TSort.PartialQuickSort<Int16>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int24(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int24>);
+var
+  compare: TCompareMethod<Int24>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Int24>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int24(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int24>);
+begin
+  TSort.PartialQuickSort<Int24>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int32(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int32>);
+var
+  compare: TCompareMethod<Int32>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Int32>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int32(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int32>);
+begin
+  TSort.PartialQuickSort<Int32>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int64(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Int64>);
+var
+  compare: TCompareMethod<Int64>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Int64>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Int64(lo, hi: Pointer; index, count: NativeInt; const compare: TLessThanFunc<Int64>);
+begin
+  TSort.PartialQuickSort<Int64>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Single(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Single>);
+var
+  compare: TCompareMethod<Single>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Single>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Double(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Double>);
+var
+  compare: TCompareMethod<Double>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Double>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Extended(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<Extended>);
+var
+  compare: TCompareMethod<Extended>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<Extended>(lo, hi, index, count, compare);
+end;
+
+class procedure TArray.PartialQuickSort_Method(lo, hi: Pointer; index, count: NativeInt; const comparer: IComparer<TMethodPointer>);
+var
+  compare: TCompareMethod<TMethodPointer>;
+begin
+  TMethod(compare).Data := Pointer(comparer);
+  TMethod(compare).Code := PPVTable(comparer)^[3];
+  TSort.PartialQuickSort<TMethodPointer>(lo, hi, index, count, compare);
+end;
+
 class procedure TArray.IntroSort_Int8(const values: Span<Int8>; const compare: TMethod);
 begin
   TArray.IntroSort<Int8>(values, TCompareMethod<Int8>(compare));
@@ -14873,6 +15061,303 @@ begin
     end;
     {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
   end;
+end;
+
+class procedure TArray.SortPartial<T>(var values: array of T; index, count: NativeInt);
+var
+  len: NativeUInt;
+  comparer, lessThan: Pointer;
+  compare: TCompareMethod<T>;
+begin
+  CheckRange(index, count, Length(values));
+  if count = 0 then Exit;
+
+  {$R-}
+  len := Length(values);
+
+  {$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkInteger, tkChar, tkEnumeration, tkWChar, tkInt64:
+      case SizeOf(T) of
+        1:
+          if TypeInfo(T) = TypeInfo(Int8) then
+            TSort_Int8.PartialQuickSort(@values[0], @values[len], index, count)
+          else if (TypeInfo(T) = TypeInfo(UInt8))
+            or (TypeInfo(T) = TypeInfo(AnsiChar)) then
+            TSort_UInt8.PartialQuickSort(@values[0], @values[len], index, count)
+          else
+            TPartialQuickSort(OrdinalTypePartialSorters[GetOrdTypeEx(TypeInfo(T))])(@values[0], @values[len], index, count);
+        2:
+          if TypeInfo(T) = TypeInfo(Int16) then
+            TSort_Int16.PartialQuickSort(@values[0], @values[len], index, count)
+          else if (TypeInfo(T) = TypeInfo(UInt16))
+            or (TypeInfo(T) = TypeInfo(WideChar)) then
+            TSort_UInt16.PartialQuickSort(@values[0], @values[len], index, count)
+          else
+            TPartialQuickSort(OrdinalTypePartialSorters[GetOrdTypeEx(TypeInfo(T))])(@values[0], @values[len], index, count);
+        4:
+          if (TypeInfo(T) = TypeInfo(Int32))
+            or (TypeInfo(T) = TypeInfo(NativeInt)) then
+            TSort_Int32.PartialQuickSort(@values[0], @values[len], index, count)
+          else if (TypeInfo(T) = TypeInfo(UInt32))
+            or (TypeInfo(T) = TypeInfo(NativeUInt)) then
+            TSort_UInt32.PartialQuickSort(@values[0], @values[len], index, count)
+          else
+            TPartialQuickSort(OrdinalTypePartialSorters[GetOrdTypeEx(TypeInfo(T))])(@values[0], @values[len], index, count);
+        8:
+          if (TypeInfo(T) = TypeInfo(Int64))
+            or (TypeInfo(T) = TypeInfo(NativeInt)) then
+            TSort_Int64.PartialQuickSort(@values[0], @values[len], index, count)
+          else if (TypeInfo(T) = TypeInfo(UInt64))
+            or (TypeInfo(T) = TypeInfo(NativeUInt)) then
+            TSort_UInt64.PartialQuickSort(@values[0], @values[len], index, count)
+          else
+            TPartialQuickSort(OrdinalTypePartialSorters[GetOrdTypeEx(TypeInfo(T))])(@values[0], @values[len], index, count);
+      end;
+    tkFloat:
+      case SizeOf(T) of
+        // ftSingle
+        4: TSort_Single.PartialQuickSort(@values[0], @values[len], index, count);
+        // ftDouble, ftCurrency, ftComp
+        8:
+          if TypeInfo(T) = TypeInfo(Double) then
+            TSort_Double.PartialQuickSort(@values[0], @values[len], index, count)
+          else if TypeInfo(T) = TypeInfo(Currency) then
+            TSort_Int64.PartialQuickSort(@values[0], @values[len], index, count)
+          else
+            TPartialQuickSort(Float64TypePartialSorters[GetTypeInfoData(TypeInfo(T)).FloatType = ftDouble])(@values[0], @values[len], index, count);
+        // ftExtended
+        10, 16:
+        begin
+          comparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+          PartialQuickSort_Extended(@values[0], @values[len], index, count, IComparer<Extended>(comparer));
+        end;
+      else
+        RaiseHelper.NotSupported;
+      end;
+    tkString:
+    begin
+      comparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+      TMethod(compare).Data := Pointer(comparer);
+      TMethod(compare).Code := PPVTable(comparer)^[3];
+      TSort_Ref.PartialQuickSort(@values[0], @values[len], SizeOf(T), index, count, TSort_Ref.TCompareMethod(compare));
+    end;
+    tkSet, tkVariant, tkArray, tkRecord{$IF Declared(tkMRecord)}, tkMRecord{$IFEND}:
+      if not System.HasWeakRef(T) then
+      begin
+        if GetTypeKind(T) in [tkRecord{$IF Declared(tkMRecord)}, tkMRecord{$IFEND}] then
+        begin
+          lessThan := GetLessThanOperator(TypeInfo(T));
+          if Assigned(lessThan) then
+          begin
+            case SizeOf(T) of
+              1: PartialQuickSort_Int8(@values[0], @values[len], index, count, TLessThanFunc<Int8>(lessThan));
+              2: PartialQuickSort_Int16(@values[0], @values[len], index, count, TLessThanFunc<Int16>(lessThan));
+            {$IFDEF CPU32BITS}
+              3: PartialQuickSort_Int24(@values[0], @values[len], index, count, TLessThanFunc<Int24>(lessThan));
+            {$ENDIF}
+              4: PartialQuickSort_Int32(@values[0], @values[len], index, count, TLessThanFunc<Int32>(lessThan));
+            {$IFDEF PASS_64BIT_VALUE_REGISTER}
+              8: PartialQuickSort_Int64(@values[0], @values[len], index, count, TLessThanFunc<Int64>(lessThan));
+            {$ENDIF}
+            else
+              TSort_Ref.PartialQuickSort(@values[0], @values[len], SizeOf(T), index, count, TSort_Ref.TLessThanFunc(lessThan));
+            end;
+            Exit;
+          end;
+        end;
+
+        comparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+        case SizeOf(T) of
+          1: PartialQuickSort_Int8(@values[0], @values[len], index, count, IComparer<Int8>(comparer));
+          2: PartialQuickSort_Int16(@values[0], @values[len], index, count, IComparer<Int16>(comparer));
+          3: PartialQuickSort_Int24(@values[0], @values[len], index, count, IComparer<Int24>(comparer));
+          4: PartialQuickSort_Int32(@values[0], @values[len], index, count, IComparer<Int32>(comparer));
+        {$IFDEF PASS_64BIT_VALUE_REGISTER}
+          8: PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(comparer));
+        {$ENDIF}
+        else
+        begin
+          TMethod(compare).Data := Pointer(comparer);
+          TMethod(compare).Code := PPVTable(comparer)^[3];
+          TSort_Ref.PartialQuickSort(@values[0], @values[len], SizeOf(T), index, count, TSort_Ref.TCompareMethod(compare));
+        end;
+        end;
+      end
+      else
+      begin
+        comparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+        TMethod(compare).Data := Pointer(comparer);
+        TMethod(compare).Code := PPVTable(comparer)^[3];
+        TSort.PartialQuickSort<T>(@values[0], @values[len], index, count, compare);
+      end;
+    tkClass, tkLString, tkWString, tkDynArray, tkUString:
+    begin
+      comparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+      case SizeOf(T) of
+        4: PartialQuickSort_Int32(@values[0], @values[len], index, count, IComparer<Int32>(comparer));
+        8: PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(comparer));
+      end;
+    end;
+    tkMethod:
+    begin
+      comparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+      PartialQuickSort_Method(@values[0], @values[len], index, count, IComparer<TMethodPointer>(comparer));
+    end;
+    tkInterface, tkClassRef, tkPointer, tkProcedure:
+      case SizeOf(T) of
+        4: TSort_UInt32.PartialQuickSort(@values[0], @values[len], index, count);
+        8: TSort_UInt64.PartialQuickSort(@values[0], @values[len], index, count);
+      end;
+  else{$ELSE}begin{$ENDIF}
+    comparer := _LookupVtableInfo(giComparer, TypeInfo(T), SizeOf(T));
+    TMethod(compare).Data := Pointer(comparer);
+    TMethod(compare).Code := PPVTable(comparer)^[3];
+    TSort.PartialQuickSort<T>(TSort.Pointer<T>.Idx(@values[0]), TSort.Pointer<T>.Idx(@values[len]), index, count, compare);
+  end;
+  {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
+end;
+
+class procedure TArray.SortPartial<T>(var values: array of T;
+  const comparer: IComparer<T>; index, count: NativeInt);
+var
+  len: NativeUInt;
+  compare: TCompareMethod<T>;
+begin
+  CheckRange(index, count, Length(values));
+  if count = 0 then Exit;
+
+  {$R-}
+  len := Length(values);
+
+  {$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkInteger, tkChar, tkEnumeration, tkClass, tkWChar, tkLString, tkWString,
+    tkInterface, tkInt64, tkDynArray, tkUString, tkClassRef, tkPointer, tkProcedure:
+      case SizeOf(T) of
+        1: PartialQuickSort_Int8(@values[0], @values[len], index, count, IComparer<Int8>(comparer));
+        2: PartialQuickSort_Int16(@values[0], @values[len], index, count, IComparer<Int16>(comparer));
+        4: PartialQuickSort_Int32(@values[0], @values[len], index, count, IComparer<Int32>(comparer));
+        8: PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(comparer));
+      end;
+    tkFloat:
+      case SizeOf(T) of
+        4: PartialQuickSort_Single(@values[0], @values[len], index, count, IComparer<Single>(comparer));
+        10, 16: PartialQuickSort_Extended(@values[0], @values[len], index, count, IComparer<Extended>(comparer));
+      else
+        if GetTypeInfoData(TypeInfo(T)).FloatType = ftDouble then
+          PartialQuickSort_Double(@values[0], @values[len], index, count, IComparer<Double>(comparer))
+        else
+          PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(comparer));
+      end;
+    tkString:
+    begin
+      TMethod(compare).Data := Pointer(comparer);
+      TMethod(compare).Code := PPVTable(comparer)^[3];
+      TSort_Ref.PartialQuickSort(@values[0], @values[len], SizeOf(T), index, count, TSort_Ref.TCompareMethod(compare));
+    end;
+    tkSet, tkVariant, tkArray, tkRecord{$IF Declared(tkMRecord)}, tkMRecord{$IFEND}:
+      if not System.HasWeakRef(T) then
+        case SizeOf(T) of
+          1: PartialQuickSort_Int8(@values[0], @values[len], index, count, IComparer<Int8>(comparer));
+          2: PartialQuickSort_Int16(@values[0], @values[len], index, count, IComparer<Int16>(comparer));
+          3: PartialQuickSort_Int24(@values[0], @values[len], index, count, IComparer<Int24>(comparer));
+          4: PartialQuickSort_Int32(@values[0], @values[len], index, count, IComparer<Int32>(comparer));
+        {$IFDEF PASS_64BIT_VALUE_REGISTER}
+          8: PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(comparer));
+        {$ENDIF}
+        else
+        begin
+          TMethod(compare).Data := Pointer(comparer);
+          TMethod(compare).Code := PPVTable(comparer)^[3];
+          TSort_Ref.PartialQuickSort(@values[0], @values[len], SizeOf(T), index, count, TSort_Ref.TCompareMethod(compare));
+        end;
+        end
+      else
+      begin
+        TMethod(compare).Data := Pointer(comparer);
+        TMethod(compare).Code := PPVTable(comparer)^[3];
+        TSort.PartialQuickSort<T>(@values[0], @values[len], index, count, compare);
+      end;
+    tkMethod:
+      PartialQuickSort_Method(@values[0], @values[len], index, count, IComparer<TMethodPointer>(comparer));
+  else{$ELSE}begin{$ENDIF}
+    TMethod(compare).Data := Pointer(comparer);
+    TMethod(compare).Code := PPVTable(comparer)^[3];
+    TSort.PartialQuickSort<T>(TSort.Pointer<T>.Idx(@values[0]), TSort.Pointer<T>.Idx(@values[len]), index, count, compare);
+  end;
+  {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
+end;
+
+class procedure TArray.SortPartial<T>(var values: array of T;
+  const comparison: TComparison<T>; index, count: NativeInt);
+var
+  len: NativeUInt;
+  compare: TCompareMethod<T>;
+begin
+  CheckRange(index, count, Length(values));
+  if count = 0 then Exit;
+
+  {$R-}
+  len := Length(values);
+
+  {$IFDEF DELPHIXE7_UP}
+  case GetTypeKind(T) of
+    tkInteger, tkChar, tkEnumeration, tkClass, tkWChar, tkLString, tkWString,
+    tkInterface, tkInt64, tkDynArray, tkUString, tkClassRef, tkPointer, tkProcedure:
+      case SizeOf(T) of
+        1: PartialQuickSort_Int8(@values[0], @values[len], index, count, IComparer<Int8>(PPointer(@comparison)^));
+        2: PartialQuickSort_Int16(@values[0], @values[len], index, count, IComparer<Int16>(PPointer(@comparison)^));
+        4: PartialQuickSort_Int32(@values[0], @values[len], index, count, IComparer<Int32>(PPointer(@comparison)^));
+        8: PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(PPointer(@comparison)^));
+      end;
+    tkFloat:
+      case SizeOf(T) of
+        4: PartialQuickSort_Single(@values[0], @values[len], index, count, IComparer<Single>(PPointer(@comparison)^));
+        10, 16: PartialQuickSort_Extended(@values[0], @values[len], index, count, IComparer<Extended>(PPointer(@comparison)^));
+      else
+        if GetTypeInfoData(TypeInfo(T)).FloatType = ftDouble then
+          PartialQuickSort_Double(@values[0], @values[len], index, count, IComparer<Double>(PPointer(@comparison)^))
+        else
+          PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(PPointer(@comparison)^));
+      end;
+    tkString:
+    begin
+      TMethod(compare).Data := PPointer(@comparison)^;
+      TMethod(compare).Code := PPVTable(PPointer(@comparison)^)^[3];
+      TSort_Ref.PartialQuickSort(@values[0], @values[len], SizeOf(T), index, count, TSort_Ref.TCompareMethod(compare));
+    end;
+    tkSet, tkVariant, tkArray, tkRecord{$IF Declared(tkMRecord)}, tkMRecord{$IFEND}:
+      if not System.HasWeakRef(T) then
+        case SizeOf(T) of
+          1: PartialQuickSort_Int8(@values[0], @values[len], index, count, IComparer<Int8>(PPointer(@comparison)^));
+          2: PartialQuickSort_Int16(@values[0], @values[len], index, count, IComparer<Int16>(PPointer(@comparison)^));
+          3: PartialQuickSort_Int24(@values[0], @values[len], index, count, IComparer<Int24>(PPointer(@comparison)^));
+          4: PartialQuickSort_Int32(@values[0], @values[len], index, count, IComparer<Int32>(PPointer(@comparison)^));
+        {$IFDEF PASS_64BIT_VALUE_REGISTER}
+          8: PartialQuickSort_Int64(@values[0], @values[len], index, count, IComparer<Int64>(PPointer(@comparison)^));
+        {$ENDIF}
+        else
+        begin
+          TMethod(compare).Data := PPointer(@comparison)^;
+          TMethod(compare).Code := PPVTable(PPointer(@comparison)^)^[3];
+          TSort_Ref.PartialQuickSort(@values[0], @values[len], SizeOf(T), index, count, TSort_Ref.TCompareMethod(compare));
+        end;
+        end
+      else
+      begin
+        TMethod(compare).Data := PPointer(@comparison)^;
+        TMethod(compare).Code := PPVTable(PPointer(@comparison)^)^[3];
+        TSort.PartialQuickSort<T>(@values[0], @values[len], index, count, compare);
+      end;
+    tkMethod:
+      PartialQuickSort_Method(@values[0], @values[len], index, count, IComparer<TMethodPointer>(PPointer(@comparison)^));
+  else{$ELSE}begin{$ENDIF}
+    TMethod(compare).Data := PPointer(@comparison)^;
+    TMethod(compare).Code := PPVTable(PPointer(@comparison)^)^[3];
+    TSort.PartialQuickSort<T>(TSort.Pointer<T>.Idx(@values[0]), TSort.Pointer<T>.Idx(@values[len]), index, count, compare);
+  end;
+  {$IFDEF RANGECHECKS_ON}{$R+}{$ENDIF}
 end;
 
 {$ENDREGION}
