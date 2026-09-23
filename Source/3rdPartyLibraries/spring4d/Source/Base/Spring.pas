@@ -14268,7 +14268,7 @@ begin
         2:
           if TypeInfo(T) = TypeInfo(Int16) then
             TSort_Int16.PatternDefeatingQuickSort(@values[0], @values[len])
-          else if (TypeInfo(T) = TypeInfo(UInt8))
+          else if (TypeInfo(T) = TypeInfo(UInt16))
             or (TypeInfo(T) = TypeInfo(WideChar)) then
             TSort_UInt16.PatternDefeatingQuickSort(@values[0], @values[len])
           else
@@ -14417,7 +14417,7 @@ begin
         2:
           if TypeInfo(T) = TypeInfo(Int16) then
             TSort_Int16.PatternDefeatingQuickSort(@values[0], @values[len], 0)
-          else if (TypeInfo(T) = TypeInfo(UInt8))
+          else if (TypeInfo(T) = TypeInfo(UInt16))
             or (TypeInfo(T) = TypeInfo(WideChar)) then
             TSort_UInt16.PatternDefeatingQuickSort(@values[0], @values[len], 0)
           else
