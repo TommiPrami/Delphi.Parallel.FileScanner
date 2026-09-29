@@ -79,31 +79,35 @@ begin
   UpdateGUIState(ASender as TControl, False);
   try
     LOTLValueQueue := TOmniQueue.Create;
-    LParallelScanner := TParallelFileScanner.Create(GetExtensions);
     try
-      LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
-      LExcludes := GetExcludes;
+      LParallelScanner := TParallelFileScanner.Create(GetExtensions);
+      try
+        LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
+        LExcludes := GetExcludes;
 
-      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount, tpNormal) then
-      begin
-        var LValue: TOmniValue;
-
-        while LOTLValueQueue.TryDequeue(LValue) do
+        if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount, tpNormal) then
         begin
-          LResultFileName := LValue;
+          var LValue: TOmniValue;
 
-          MemoLog.Lines.Add(LResultFileName);
-        end;
+          while LOTLValueQueue.TryDequeue(LValue) do
+          begin
+            LResultFileName := LValue;
 
-        MemoLog.Lines.Add('');
-        MemoLog.Lines.Add('OK ' + LFileCount.ToString + ' files.');
-      end
-      else
-        MemoLog.Lines.Add('No files found.');
+            MemoLog.Lines.Add(LResultFileName);
+          end;
 
-      LogCommon(LParallelScanner);
+          MemoLog.Lines.Add('');
+          MemoLog.Lines.Add('OK ' + LFileCount.ToString + ' files.');
+        end
+        else
+          MemoLog.Lines.Add('No files found.');
+
+        LogCommon(LParallelScanner);
+      finally
+        LParallelScanner.Free;
+      end;
     finally
-      LParallelScanner.Free;
+      LOTLValueQueue.Free;
     end;
   finally
     UpdateGUIState(ASender as TControl, True);
@@ -297,20 +301,24 @@ begin
     LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
     LExcludes := GetExcludes;
     LOTLValueQueue := TOmniQueue.Create;
-    LFileCount := 0;
+    try
+      LFileCount := 0;
 
-    LStopwatch := TStopwatch.StartNew;
-    LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount, tpNormal);
-    LStopwatch.Stop;
+      LStopwatch := TStopwatch.StartNew;
+      LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount, tpNormal);
+      LStopwatch.Stop;
 
-    AFileCount := LFileCount;
-    Result := LStopwatch.Elapsed.TotalMilliseconds;
+      AFileCount := LFileCount;
+      Result := LStopwatch.Elapsed.TotalMilliseconds;
 
-    // Drain (outside the timed section) before the queue is released: releasing a non-empty
-    // OmniThreadLibrary queue repeatedly can fault, so empty it between runs.
-    var LValue: TOmniValue;
-    while LOTLValueQueue.TryDequeue(LValue) do
-      ;
+      // Drain (outside the timed section) before the queue is released: releasing a non-empty
+      // OmniThreadLibrary queue can fault, so empty it first.
+      var LValue: TOmniValue;
+      while LOTLValueQueue.TryDequeue(LValue) do
+        ;
+    finally
+      LOTLValueQueue.Free; // must be freed every run or the benchmark loop leaks a queue per iteration
+    end;
   finally
     LParallelScanner.Free;
   end;
