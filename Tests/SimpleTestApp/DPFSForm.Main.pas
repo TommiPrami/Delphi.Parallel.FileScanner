@@ -16,6 +16,7 @@ type
   TDPFSMainForm = class(TForm)
     ButtonOtlQueue: TButton;
     ButtonParallelScan: TButton;
+    ButtonParallelScanOtl: TButton;
     ButtonParallelScanSpring: TButton;
     CheckBoxConvertRelativePathsToAbsolute: TCheckBox;
     ComboBoxDirectories: TComboBox;
@@ -25,6 +26,7 @@ type
     EditLoopCount: TEdit;
     procedure ButtonOtlQueueClick(ASender: TObject);
     procedure ButtonParallelScanClick(ASender: TObject);
+    procedure ButtonParallelScanOtlClick(ASender: TObject);
     procedure ButtonParallelScanSpringClick(ASender: TObject);
     procedure ButtonSpeedTestClick(ASender: TObject);
     procedure FormCreate(ASender: TObject);
@@ -32,12 +34,15 @@ type
     function GetExcludes: TFileScanExclusions;
     function GetExtensions: TArray<string>;
     function GetSearchDirectories: TArray<string>;
-    function TimedRtlScan(var AFileCount: Integer): Double;
+    function TimedPplScan(var AFileCount: Integer): Double;
+    function TimedStringListScan(const AScannerClass: TParallelFileScannerClass; var AFileCount: Integer): Double;
     procedure BenchmarkScan(const ACaption: string; const ATimedScan: TTimedScan; const ALoopCount: Integer);
     procedure LogCommon(const AParallelScanner: TParallelFileScannerCustom);
+    procedure StringListScan(const AScannerClass: TParallelFileScannerClass; const ASender: TObject);
     procedure UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
     function TimedOtlQueueScan(var AFileCount: Integer): Double;
+    function TimedOtlScan(var AFileCount: Integer): Double;
     {$ENDIF}
     {$IFDEF USE_SPRING4D}
     function TimedSpringScan(var AFileCount: Integer): Double;
@@ -51,22 +56,20 @@ implementation
 
 uses
   FastMM5
-{$IF DEFINED(USE_SPRING4D) or DEFINED(USE_OMNI_THREAD_LIBRARY)}
-  {$IF DEFINED(USE_SPRING4D) and DEFINED(USE_OMNI_THREAD_LIBRARY)}
-  , DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections, OtlTaskControl, OtlContainers, OtlCommon;
-  {$ELSEIF DEFINED(USE_SPRING4D)}
-  , DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections;
-{$ELSE}
-  , OtlTaskControl, OtlContainers, OtlCommon;
-  {$IFEND}
+{$IF DEFINED(USE_OMNI_THREAD_LIBRARY)}
+  , DPFSUnit.Parallel.FileScanner.OTL, OtlCommon, OtlContainers
 {$IFEND}
+{$IF DEFINED(USE_SPRING4D)}
+  , DPFSUnit.Parallel.FileScanner.Spring, Spring.Collections
+{$IFEND}
+  ;
 
 {$R *.dfm}
 
 procedure TDPFSMainForm.ButtonOtlQueueClick(ASender: TObject);
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
 var
-  LParallelScanner: TParallelFileScanner;
+  LParallelScanner: TParallelFileScannerOTL;
   LOTLValueQueue: TOmniQueue;
   LExcludes: TFileScanExclusions;
   LResultFileName: string;
@@ -80,12 +83,12 @@ begin
   try
     LOTLValueQueue := TOmniQueue.Create;
     try
-      LParallelScanner := TParallelFileScanner.Create(GetExtensions);
+      LParallelScanner := TParallelFileScannerOTL.Create(GetExtensions);
       try
         LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
         LExcludes := GetExcludes;
 
-        if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount, tpNormal) then
+        if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount) then
         begin
           var LValue: TOmniValue;
 
@@ -116,37 +119,15 @@ begin
 end;
 
 procedure TDPFSMainForm.ButtonParallelScanClick(ASender: TObject);
-var
-  LParallelScanner: TParallelFileScanner;
-  LFilesList: TStringList;
-  LExcludes: TFileScanExclusions;
 begin
-  UpdateGUIState(ASender as TControl, False);
-  try
-    LFilesList := TStringList.Create;
-    LParallelScanner := TParallelFileScanner.Create(GetExtensions);
-    try
-      LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
-      LExcludes := GetExcludes;
+  StringListScan(TParallelFileScanner, ASender);
+end;
 
-      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList
-      {$IFDEF USE_OMNI_THREAD_LIBRARY}, tpNormal {$ENDIF}) then
-      begin
-        MemoLog.Lines.AddStrings(LFilesList);
-        MemoLog.Lines.Add('');
-        MemoLog.Lines.Add('OK ' + LFilesList.Count.ToString + ' files.');
-      end
-      else
-        MemoLog.Lines.Add('No files found.');
-
-      LogCommon(LParallelScanner);
-    finally
-      LParallelScanner.Free;
-      LFilesList.Free;
-    end;
-  finally
-    UpdateGUIState(ASender as TControl, True);
-  end;
+procedure TDPFSMainForm.ButtonParallelScanOtlClick(ASender: TObject);
+begin
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  StringListScan(TParallelFileScannerOTL, ASender);
+{$ENDIF}
 end;
 
 procedure TDPFSMainForm.ButtonParallelScanSpringClick(ASender: TObject);
@@ -166,8 +147,7 @@ begin
       LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
       LExcludes := GetExcludes;
 
-      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList
-        {$IFDEF USE_OMNI_THREAD_LIBRARY}, tpNormal {$ENDIF}) then
+      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList) then
       begin
         MemoLog.Lines.AddStrings(LFilesList.ToArray);
         MemoLog.Lines.Add('');
@@ -205,9 +185,11 @@ begin
     MemoLog.Lines.Add('Extensions : ' + string.Join(' ', GetExtensions));
     MemoLog.Lines.Add('');
 
-    BenchmarkScan('Default (RTL TStringList)', TimedRtlScan, LLoopCount);
+    BenchmarkScan('RTL PPL TStringList', TimedPplScan, LLoopCount);
     Application.ProcessMessages; // keep the app responsive between the (frozen) timed loops
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
+    BenchmarkScan('OTL TStringList', TimedOtlScan, LLoopCount);
+    Application.ProcessMessages;
     BenchmarkScan('OTL value queue', TimedOtlQueueScan, LLoopCount);
     Application.ProcessMessages;
     {$ENDIF}
@@ -261,22 +243,27 @@ begin
   end;
 end;
 
-function TDPFSMainForm.TimedRtlScan(var AFileCount: Integer): Double;
+function TDPFSMainForm.TimedPplScan(var AFileCount: Integer): Double;
+begin
+  Result := TimedStringListScan(TParallelFileScanner, AFileCount);
+end;
+
+// One TStringList scan with a scanner of class AScannerClass - the same code for every threading library.
+function TDPFSMainForm.TimedStringListScan(const AScannerClass: TParallelFileScannerClass; var AFileCount: Integer): Double;
 var
-  LParallelScanner: TParallelFileScanner;
+  LParallelScanner: TParallelFileScannerCustom;
   LFilesList: TStringList;
   LExcludes: TFileScanExclusions;
   LStopwatch: TStopwatch;
 begin
-  LParallelScanner := TParallelFileScanner.Create(GetExtensions);
+  LParallelScanner := AScannerClass.Create(GetExtensions);
   LFilesList := TStringList.Create;
   try
     LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
     LExcludes := GetExcludes;
 
     LStopwatch := TStopwatch.StartNew;
-    LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList
-      {$IFDEF USE_OMNI_THREAD_LIBRARY}, tpNormal {$ENDIF});
+    LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList);
     LStopwatch.Stop;
 
     Result := LStopwatch.Elapsed.TotalMilliseconds;
@@ -290,13 +277,13 @@ end;
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
 function TDPFSMainForm.TimedOtlQueueScan(var AFileCount: Integer): Double;
 var
-  LParallelScanner: TParallelFileScanner;
+  LParallelScanner: TParallelFileScannerOTL;
   LOTLValueQueue: TOmniQueue;
   LExcludes: TFileScanExclusions;
   LStopwatch: TStopwatch;
   LFileCount: Integer;
 begin
-  LParallelScanner := TParallelFileScanner.Create(GetExtensions);
+  LParallelScanner := TParallelFileScannerOTL.Create(GetExtensions);
   try
     LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
     LExcludes := GetExcludes;
@@ -305,7 +292,7 @@ begin
       LFileCount := 0;
 
       LStopwatch := TStopwatch.StartNew;
-      LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount, tpNormal);
+      LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LOTLValueQueue, LFileCount);
       LStopwatch.Stop;
 
       AFileCount := LFileCount;
@@ -322,6 +309,11 @@ begin
   finally
     LParallelScanner.Free;
   end;
+end;
+
+function TDPFSMainForm.TimedOtlScan(var AFileCount: Integer): Double;
+begin
+  Result := TimedStringListScan(TParallelFileScannerOTL, AFileCount);
 end;
 {$ENDIF}
 
@@ -340,8 +332,7 @@ begin
     LFilesList := TCollections.CreateList<string>;
 
     LStopwatch := TStopwatch.StartNew;
-    LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList
-      {$IFDEF USE_OMNI_THREAD_LIBRARY}, tpNormal {$ENDIF});
+    LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList);
     LStopwatch.Stop;
 
     AFileCount := LFilesList.Count;
@@ -360,6 +351,8 @@ begin
   {$IFNDEF USE_OMNI_THREAD_LIBRARY}
   ButtonOtlQueue.Enabled := False;
   ButtonOtlQueue.Caption := ButtonOtlQueue.Caption + ' (needs USE_OMNI_THREAD_LIBRARY)';
+  ButtonParallelScanOtl.Enabled := False;
+  ButtonParallelScanOtl.Caption := ButtonParallelScanOtl.Caption + ' (needs USE_OMNI_THREAD_LIBRARY)';
   {$ENDIF}
 
   {$IFNDEF USE_SPRING4D}
@@ -404,6 +397,41 @@ begin
   MemoLog.Lines.Add('  Elapsed time: ' + AParallelScanner.DiskScanTimeForFiles.ToString
     + ' ms. (excluding fetching skipped files count)');
   MemoLog.Lines.Add('  ' + AParallelScanner.SkippedFilesCount.ToString + ' files skipped');
+end;
+
+// Scans into a TStringList with a scanner of class AScannerClass and logs the result - the same code for every
+// threading library.
+procedure TDPFSMainForm.StringListScan(const AScannerClass: TParallelFileScannerClass; const ASender: TObject);
+var
+  LParallelScanner: TParallelFileScannerCustom;
+  LFilesList: TStringList;
+  LExcludes: TFileScanExclusions;
+begin
+  UpdateGUIState(ASender as TControl, False);
+  try
+    LFilesList := TStringList.Create;
+    LParallelScanner := AScannerClass.Create(GetExtensions);
+    try
+      LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
+      LExcludes := GetExcludes;
+
+      if LParallelScanner.GetFileList(GetSearchDirectories, LExcludes, LFilesList) then
+      begin
+        MemoLog.Lines.AddStrings(LFilesList);
+        MemoLog.Lines.Add('');
+        MemoLog.Lines.Add('OK ' + LFilesList.Count.ToString + ' files.');
+      end
+      else
+        MemoLog.Lines.Add('No files found.');
+
+      LogCommon(LParallelScanner);
+    finally
+      LParallelScanner.Free;
+      LFilesList.Free;
+    end;
+  finally
+    UpdateGUIState(ASender as TControl, True);
+  end;
 end;
 
 procedure TDPFSMainForm.UpdateGUIState(const ASender: TControl; const AEnabled: Boolean);

@@ -1,5 +1,8 @@
 ﻿unit DPFSUnit.Parallel.FileScanner.Spring;
 
+// Windows only, like DPFSUnit.Parallel.FileScanner, so TThreadPriority being Windows-specific is fine.
+{$WARN SYMBOL_PLATFORM OFF}
+
 interface
 
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
@@ -7,24 +10,17 @@ interface
 {$IFDEF USE_SPRING4D}
 uses
   System.Classes, System.SysUtils, System.Diagnostics,
-  DPFSUnit.Parallel.FileScanner, Spring.Collections
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , OtlTaskControl
-{$ENDIF};
+  DPFSUnit.Parallel.FileScanner, Spring.Collections;
 
 type
-  // Spring4D-flavoured scanner: shares the parallel walk (CollectFiles) with the base class and
-  // fills an IList<string> directly.
-  TParallelFileScannerSpring = class(TParallelFileScannerCustom)
+  // Spring4D-flavoured scanner: the RTL scanner (workers on the RTL PPL), with GetFileList overloads that fill an
+  // IList<string> directly from the shared walk (CollectFiles).
+  TParallelFileScannerSpring = class(TParallelFileScanner)
   public
-    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
-      {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-      {$ENDIF}): Boolean; reintroduce; overload;
-    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
-      {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-      {$ENDIF}): Boolean; reintroduce; overload;
+    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean; overload;
+    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
+      const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean; overload;
   end;
 {$ENDIF}
 
@@ -35,10 +31,7 @@ implementation
 { TParallelFileScannerSpring }
 
 function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: IList<string>
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+  const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean;
 var
   LFileScanStopWatch: TStopwatch;
   LMergeSorted: Boolean;
@@ -49,10 +42,7 @@ begin
   // sorted when they go into an empty list; items the caller added earlier still need the full sort below.
   LMergeSorted := FSortResultList and (AFileNamesList.Count = 0);
 
-  AFileNamesList.AddRange(CollectFiles(ADirectories, AExclusions, LMergeSorted
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-    , APriority
-{$ENDIF}));
+  AFileNamesList.AddRange(CollectFiles(ADirectories, AExclusions, LMergeSorted, APriority));
 
   if FSortResultList and not LMergeSorted then
     AFileNamesList.Sort(
@@ -68,15 +58,9 @@ begin
 end;
 
 function TParallelFileScannerSpring.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: IList<string>
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+  const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean;
 begin
-  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , APriority
-{$ENDIF});
+  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList, APriority);
 end;
 
 {$ENDIF}

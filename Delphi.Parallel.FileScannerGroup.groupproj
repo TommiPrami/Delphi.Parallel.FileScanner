@@ -6,6 +6,9 @@
         <Projects Include="Tests\ScannerTests\DPFSScannerTests.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="Tests\UnitTests\DPFSUnitTests.dproj">
+            <Dependencies/>
+        </Projects>
         <Projects Include="Tests\SimpleTestApp\DPFSSimpleTestAPP.dproj">
             <Dependencies/>
         </Projects>
@@ -26,6 +29,15 @@
     <Target Name="DPFSScannerTests:Make">
         <MSBuild Projects="Tests\ScannerTests\DPFSScannerTests.dproj" Targets="Make"/>
     </Target>
+    <Target Name="DPFSUnitTests">
+        <MSBuild Projects="Tests\UnitTests\DPFSUnitTests.dproj"/>
+    </Target>
+    <Target Name="DPFSUnitTests:Clean">
+        <MSBuild Projects="Tests\UnitTests\DPFSUnitTests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="DPFSUnitTests:Make">
+        <MSBuild Projects="Tests\UnitTests\DPFSUnitTests.dproj" Targets="Make"/>
+    </Target>
     <Target Name="DPFSSimpleTestAPP">
         <MSBuild Projects="Tests\SimpleTestApp\DPFSSimpleTestAPP.dproj"/>
     </Target>
@@ -36,13 +48,13 @@
         <MSBuild Projects="Tests\SimpleTestApp\DPFSSimpleTestAPP.dproj" Targets="Make"/>
     </Target>
     <Target Name="Build">
-        <CallTarget Targets="DPFSScannerTests;DPFSSimpleTestAPP"/>
+        <CallTarget Targets="DPFSScannerTests;DPFSUnitTests;DPFSSimpleTestAPP"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="DPFSScannerTests:Clean;DPFSSimpleTestAPP:Clean"/>
+        <CallTarget Targets="DPFSScannerTests:Clean;DPFSUnitTests:Clean;DPFSSimpleTestAPP:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="DPFSScannerTests:Make;DPFSSimpleTestAPP:Make"/>
+        <CallTarget Targets="DPFSScannerTests:Make;DPFSUnitTests:Make;DPFSSimpleTestAPP:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

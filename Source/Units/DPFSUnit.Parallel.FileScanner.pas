@@ -1,14 +1,12 @@
 ﻿unit DPFSUnit.Parallel.FileScanner;
 
+// Windows only (FindFirstFileEx, Windows thread priorities), so TThreadPriority being Windows-specific is fine.
+{$WARN SYMBOL_PLATFORM OFF}
+
 interface
 
-{$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
-
 uses
-  System.Classes, System.Generics.Collections, System.IOUtils, System.SyncObjs, System.SysUtils
-  {$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , OtlTaskControl, OtlContainers
-  {$ENDIF};
+  System.Classes, System.Generics.Collections, System.IOUtils, System.SyncObjs, System.SysUtils;
 
 type
   TDirectoryWalkProc = reference to procedure(const AFileName: string);
@@ -34,6 +32,10 @@ type
     property PathSuffixesString: string read GetPathSuffixesString;
   end;
 
+  // Base class of the scanners: pattern matching, the load-balanced parallel walk and the results - everything but
+  // running the walk's workers, which is left to a descendant's ExecuteWorkers, so this unit needs nothing outside
+  // the RTL. TParallelFileScanner (below) runs them on the RTL PPL, TParallelFileScannerOTL
+  // (DPFSUnit.Parallel.FileScanner.OTL) on OmniThreadLibrary. Priorities are the RTL's TThreadPriority throughout.
   TParallelFileScannerCustom = class(TObject)
   strict private
     FSkippedDirectories: TStringList;
@@ -45,12 +47,7 @@ type
     FComplexPatterns: TArray<string>; // patterns that still need full TPath.MatchesPattern
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     function GetSkippedFilesCount: Integer;
-    function GetWorkerCount: Integer;
     procedure AddSkippedDirectories(const APath: string);
-  strict protected
-    const
-      CURRENT_DIR: string = '.';
-      PARENT_DIR: string = '..';
   strict protected
     FDiskScanTimeForFiles: Double;
     FExclusions: TFileScanExclusions;
@@ -58,17 +55,26 @@ type
     FLock: TMonitor;
     FSkippedFilesCount: Integer;
     FSortResultList: Boolean;
-    procedure ResetCounters;
-    procedure PrepareExclusions;
-    procedure PrepareExtensions;
+    // Shared parallel walk behind the list results: returns every matching file, in CompareText order when
+    // ASort is set - each worker sorts its own share in parallel, then the shares are merged.
+    function CollectFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const ASort: Boolean;
+      const APriority: TThreadPriority): TArray<string>;
     function ExcludedFileNameBySuffix(const AFileName: string): Boolean;
     function ExcludedPathByPrefix(const APath: string): Boolean;
+    // Workers per walk: one per core. Workers that find nothing to do just wait for a hand-off, so using every
+    // core costs little.
+    function GetWorkerCount: Integer; virtual;
     function MatchesAnyExtension(const AFileName: PChar; const AFileNameLength: Integer): Boolean;
     function PrepareRootDirectories(const ADirectories: TArray<string>): TArray<string>;
-    // Enumerates one directory (non-recursively) in a single pass: matching files go to AFileFound,
-    // non-excluded subdirectories are appended to ASubDirectories. APath and the subdirectories it adds
-    // end in a path delimiter.
-    procedure ScanDirectory(const APath: string; const AFileFound: TDirectoryWalkProc; const ASubDirectories: TList<string>);
+    // The threading library's part: calls AWorker once for every worker index 0..AWorkerCount-1, in parallel at
+    // APriority, and returns when all of them have returned; an exception in a worker must be raised here, in the
+    // calling thread. Running some of them one after another is fine - the walk completes with however many
+    // workers run at the same time.
+    procedure ExecuteWorkers(const AWorkerCount: Integer; const AWorker: TProc<Integer>;
+      const APriority: TThreadPriority); virtual; abstract;
+    procedure PrepareExclusions;
+    procedure PrepareExtensions;
+    procedure ResetCounters;
     // Load-balanced parallel walk. AWorkerCount workers each walk a subtree depth-first on a private stack
     // and hand the shallowest pending directories (the biggest subtrees) to any worker that has run out of
     // work, so a dominant subtree is spread across all cores instead of pinning one thread.
@@ -78,53 +84,35 @@ type
     // results can be post-processed in parallel.
     procedure RunParallelWalk(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
       const AWorkerCount: Integer; const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>;
-      const AFinishWorker: TProc<Integer>
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF});
-    // Shared parallel walk behind the list results: returns every matching file, in CompareText order when
-    // ASort is set - each worker sorts its own share in parallel, then the shares are merged.
-    function CollectFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const ASort: Boolean
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): TArray<string>;
-    // RTL scan/merge core (TStringList result). Spring4D has its own native merge.
-    procedure ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AResult: TStringList
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF});
-    // GetFileList overloads
-    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): Boolean; overload; virtual;
-    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): Boolean; overload; virtual;
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; overload; virtual;
-    {$ENDIF}
+      const AFinishWorker: TProc<Integer>; const APriority: TThreadPriority);
+    // Enumerates one directory (non-recursively) in a single pass: matching files go to AFileFound,
+    // non-excluded subdirectories are appended to ASubDirectories. APath and the subdirectories it adds
+    // end in a path delimiter.
+    procedure ScanDirectory(const APath: string; const AFileFound: TDirectoryWalkProc; const ASubDirectories: TList<string>);
+    // TStringList scan core; the Spring4D scanner fills its IList<string> from CollectFiles itself.
+    procedure ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AResult: TStringList; const APriority: TThreadPriority);
   public
-    constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload;
+    constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload; virtual;
     constructor Create(const AExtensions: TStringList; const ASortResultList: Boolean = True); overload;
     destructor Destroy; override;
 
+    // Adds every matching file to AFileNamesList, in CompareText order when SortResultList is set. APriority is
+    // the priority of the worker threads during the scan.
+    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean; overload;
+    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
+      const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean; overload;
     // Streaming scan: AFileFoundCallback fires for every matching file AS IT IS FOUND, from
     // multiple worker threads concurrently - the callback MUST be thread-safe. Each file is
     // delivered once (overlapping roots are merged before the walk), in nondeterministic order;
-    // SortResultList does not apply here. Available on both the RTL and Spring4D scanner classes.
+    // SortResultList does not apply here. Available on every scanner class.
     function ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): Boolean; overload;
+      const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer;
+      const APriority: TThreadPriority = tpNormal): Boolean; overload;
     function ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-    {$ENDIF}): Boolean; overload;
+      const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer;
+      const APriority: TThreadPriority = tpNormal): Boolean; overload;
 
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
     property SkippedFilesCount: Integer read GetSkippedFilesCount;
@@ -132,20 +120,13 @@ type
     property ConvertRelativePathsToAbsolute: Boolean read FConvertRelativePathsToAbsolute write FConvertRelativePathsToAbsolute;
   end;
 
+  TParallelFileScannerClass = class of TParallelFileScannerCustom;
+
+  // Scanner on the RTL alone: the workers run on the RTL PPL (System.Threading).
   TParallelFileScanner = class(TParallelFileScannerCustom)
-  public
-    function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
-      {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-      {$ENDIF}): Boolean; overload; override;
-    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: TStringList
-      {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      ; const APriority: TOTLThreadPriority = tpNormal
-      {$ENDIF}): Boolean; overload; override;
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesList: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean; override;
-    {$ENDIF}
+  strict protected
+    procedure ExecuteWorkers(const AWorkerCount: Integer; const AWorker: TProc<Integer>;
+      const APriority: TThreadPriority); override;
   end;
 
   procedure InitArrayDataFromStrings(var AArray: TArray<string>; const AArrayData: TStrings);
@@ -153,16 +134,15 @@ type
 implementation
 
 uses
-  Winapi.Windows, System.Diagnostics, System.Generics.Defaults, System.Math
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , OtlCollections, OtlComm, OtlCommon, OtlParallel, OtlTask, GpStuff
-{$ELSE}
-  , System.Threading
-{$ENDIF};
+  Winapi.Windows, System.Diagnostics, System.Generics.Defaults, System.Math, System.Threading;
 
 const
   // Not declared in Winapi.Windows: hint FindFirstFileEx to use a larger buffer (fewer kernel round-trips).
   FIND_FIRST_EX_LARGE_FETCH = $00000002;
+  // TThreadPriority as SetThreadPriority values - the same mapping TThread.Priority uses.
+  THREAD_PRIORITIES: array[TThreadPriority] of Integer = (THREAD_PRIORITY_IDLE, THREAD_PRIORITY_LOWEST,
+    THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_NORMAL, THREAD_PRIORITY_ABOVE_NORMAL, THREAD_PRIORITY_HIGHEST,
+    THREAD_PRIORITY_TIME_CRITICAL);
 
 // Opens ADirectory (which ends in a path delimiter) for enumeration via FindFirstFileEx. FindExInfoBasic
 // skips 8.3 short-name retrieval and FIND_FIRST_EX_LARGE_FETCH fetches in larger batches - both markedly
@@ -744,10 +724,7 @@ begin
 end;
 
 function TParallelFileScannerCustom.CollectFiles(const ADirectories: TArray<string>;
-  const AExclusions: TFileScanExclusions; const ASort: Boolean
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): TArray<string>;
+  const AExclusions: TFileScanExclusions; const ASort: Boolean; const APriority: TThreadPriority): TArray<string>;
 var
   LComparer: IComparer<string>;
   LWorkerCount: Integer;
@@ -777,10 +754,8 @@ begin
       begin
         if ASort then
           LWorkerFiles[AWorkerIndex].Sort(LComparer);
-      end
-    {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      , APriority
-    {$ENDIF});
+      end,
+      APriority);
 
     if ASort then
       Result := MergeSortedLists(LWorkerFiles, LComparer)
@@ -793,10 +768,7 @@ begin
 end;
 
 procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AResult: TStringList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF});
+  const AResult: TStringList; const APriority: TThreadPriority);
 var
   LFiles: TArray<string>;
   LFileScanStopWatch: TStopwatch;
@@ -809,10 +781,7 @@ begin
   // pass: overlapping roots are merged before the walk (PrepareRootDirectories).
   LMergeSorted := FSortResultList and (AResult.Count = 0) and not AResult.Sorted;
 
-  LFiles := CollectFiles(ADirectories, AExclusions, LMergeSorted
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-    , APriority
-{$ENDIF});
+  LFiles := CollectFiles(ADirectories, AExclusions, LMergeSorted, APriority);
 
   AResult.Capacity := AResult.Count + Length(LFiles);
   AResult.AddStrings(LFiles);
@@ -825,10 +794,8 @@ begin
 end;
 
 function TParallelFileScannerCustom.ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+  const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer;
+  const APriority: TThreadPriority = tpNormal): Boolean;
 var
   LFileScanStopWatch: TStopwatch;
   LFileCount: Integer;
@@ -852,10 +819,7 @@ begin
           AtomicIncrement(LFileCount);
         end;
     end,
-    nil
-  {$IFDEF USE_OMNI_THREAD_LIBRARY}
-    , APriority
-  {$ENDIF});
+    nil, APriority);
 
   AFileCount := LFileCount;
   Result := AFileCount > 0;
@@ -865,10 +829,8 @@ begin
 end;
 
 function TParallelFileScannerCustom.ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+  const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer;
+  const APriority: TThreadPriority = tpNormal): Boolean;
 var
   LCallbackProc: TFileFoundCallbackProc;
 begin
@@ -877,79 +839,25 @@ begin
   // straight through would resolve right back into this overload).
   LCallbackProc := AFileFoundCallback;
 
-  Result := ScanFiles(ADirectories, AExclusions, LCallbackProc, AFileCount
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-    , APriority
-{$ENDIF});
+  Result := ScanFiles(ADirectories, AExclusions, LCallbackProc, AFileCount, APriority);
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TStringList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+  const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean;
 begin
-  ScanInto(ADirectories, AExclusions, AFileNamesList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-    , APriority
-{$ENDIF});
+  ScanInto(ADirectories, AExclusions, AFileNamesList, APriority);
 
   Result := AFileNamesList.Count > 0;
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TStringList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+  const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean;
 begin
-  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , APriority
-{$ENDIF});
+  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList, APriority);
 end;
-
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
-var
-  LFileScanStopWatch: TStopwatch;
-  LFileCount: TGp4AlignedInt;
-begin
-  LFileScanStopWatch := TStopwatch.StartNew;
-
-  AFileCount := 0;
-  LFileCount.Value := 0;
-
-  // Created inside the factory (not kept in a captured local) to avoid a self-referencing closure frame.
-  RunParallelWalk(ADirectories, AExclusions, GetWorkerCount,
-    function(AWorkerIndex: Integer): TDirectoryWalkProc
-    begin
-      Result :=
-        procedure(const AFileName: string)
-        var
-          LOmniValue: TOmniValue;
-        begin
-          // IOmniValueQueue is thread-safe and LOmniValue is local to this callback,
-          // so no external lock is needed around the enqueue.
-          LOmniValue.AsString := AFileName;
-          AFileNamesOmniValueQueue.Enqueue(LOmniValue);
-          LFileCount.Increment;
-        end;
-    end,
-    nil, APriority);
-
-  AFileCount := LFileCount.Value;
-  Result := AFileCount > 0;
-
-  LFileScanStopWatch.Stop;
-  FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
-end;
-{$ENDIF}
 
 function TParallelFileScannerCustom.GetWorkerCount: Integer;
 begin
-  // Workers that find nothing to do just wait for a hand-off, so using every core costs little.
   Result := Max(1, TThread.ProcessorCount);
 end;
 
@@ -1008,15 +916,11 @@ end;
 
 procedure TParallelFileScannerCustom.RunParallelWalk(const ADirectories: TArray<string>;
   const AExclusions: TFileScanExclusions; const AWorkerCount: Integer;
-  const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF});
+  const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>;
+  const APriority: TThreadPriority);
 var
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  LTaskConfig: IOmniTaskConfig;
-{$ENDIF}
   LRoots: TArray<string>;
+  LWorker: TProc<Integer>;
   LWorkPool: TDirectoryWorkPool;
 begin
   FExclusions := AExclusions;
@@ -1032,21 +936,8 @@ begin
 
   LWorkPool := TDirectoryWorkPool.Create(LRoots);
   try
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-    LTaskConfig := Parallel.TaskConfig;
-    LTaskConfig.SetPriority(APriority);
-
-    // A range of AWorkerCount split over NumTasks(AWorkerCount) gives each pooled task exactly one
-    // index, which doubles as the worker's slot for its private file sink.
-    Parallel
-      .&for(0, AWorkerCount - 1)
-      .TaskConfig(LTaskConfig)
-      .NumTasks(AWorkerCount)
-      .Execute(
-{$ELSE}
-    TParallel
-      .&for(0, AWorkerCount - 1,
-{$ENDIF}
+    // One worker; AWorkerIndex (0..AWorkerCount-1) doubles as its slot for a private file sink.
+    LWorker :=
       procedure(AWorkerIndex: Integer)
       var
         LDirectory: string;
@@ -1088,8 +979,9 @@ begin
         finally
           LLocalStack.Free;
         end;
-      end
-    );
+      end;
+
+    ExecuteWorkers(AWorkerCount, LWorker, APriority);
   finally
     LWorkPool.Free;
   end;
@@ -1102,37 +994,27 @@ end;
 
 { TParallelFileScanner }
 
-function TParallelFileScanner.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TStringList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
+procedure TParallelFileScanner.ExecuteWorkers(const AWorkerCount: Integer; const AWorker: TProc<Integer>;
+  const APriority: TThreadPriority);
 begin
-  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , APriority
-{$ENDIF});
-end;
+  // TParallel.For raises a worker's exception (wrapped in EAggregateException) in the calling thread.
+  TParallel.&For(0, AWorkerCount - 1,
+    procedure(AWorkerIndex: Integer)
+    var
+      LPreviousPriority: Integer;
+    begin
+      // PPL threads are shared by the whole process, so the priority is only borrowed for the worker.
+      LPreviousPriority := GetThreadPriority(GetCurrentThread);
 
-function TParallelFileScanner.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TStringList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF}): Boolean;
-begin
-  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  , APriority
-{$ENDIF});
+      if LPreviousPriority <> THREAD_PRIORITIES[APriority] then
+        SetThreadPriority(GetCurrentThread, THREAD_PRIORITIES[APriority]);
+      try
+        AWorker(AWorkerIndex);
+      finally
+        if LPreviousPriority <> THREAD_PRIORITIES[APriority] then
+          SetThreadPriority(GetCurrentThread, LPreviousPriority);
+      end;
+    end);
 end;
-
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-function TParallelFileScanner.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
-begin
-  Result := inherited GetFileList(ADirectories, AExclusions, AFileNamesList, AFileCount, APriority);
-end;
-{$ENDIF}
-
 
 end.

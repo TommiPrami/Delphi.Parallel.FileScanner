@@ -14,16 +14,53 @@ dominant subtree (a vendored library folder, `C:\Windows\WinSxS`, ...) is theref
 across all cores instead of pinning one thread, while a balanced tree pays almost nothing
 for the coordination: the shared lock is only taken when work actually changes hands.
 
-## Variants
+Entries are examined straight in the find-data buffer; a path string is only built for a
+matching file or a subdirectory to walk. With `SortResultList`, every worker sorts its own
+files as soon as its walk is done (in parallel) and the results are merged, instead of one
+full sort at the end.
 
-- `TParallelFileScanner` &mdash; returns results in a standard RTL `TStringList`.
-- `TParallelFileScannerSpring` &mdash; returns results in a Spring4D `IList<string>`.
+## Matching rules
 
-The threading backend is selected at compile time in
-`Source/Units/DPFSUnit.Parallel.FileScanner.inc`:
+- Roots are walked once each: a root that is the same as, or inside, another root is
+  dropped before the walk (case-insensitively), so overlapping roots do not produce
+  duplicate results. A nested root inside an excluded prefix is still scanned, since it
+  was asked for explicitly.
+- Extensions, path prefixes and filename suffixes are compared ordinally and
+  case-insensitively, the way the file system compares names &mdash; not by the current
+  locale's rules.
+- The sorted order is `CompareText` order.
 
-- Define `USE_OMNI_THREAD_LIBRARY` to use OmniThreadLibrary (the default).
-- Leave it undefined to use the RTL PPL (`System.Threading`).
+## Scanner classes
+
+All of them share `TParallelFileScannerCustom` (in `DPFSUnit.Parallel.FileScanner`), which
+does all the work &mdash; matching, the walk, sorting &mdash; and has the common API:
+`GetFileList` into a `TStringList`, and the streaming `ScanFiles` callbacks. Only running
+the walk's workers is left to the descendant, so code can be written against
+`TParallelFileScannerCustom` whatever the threading library. Worker priorities are the
+RTL's `TThreadPriority`.
+
+| Class | Unit | Workers run on | Needs | Extra results |
+| --- | --- | --- | --- | --- |
+| `TParallelFileScanner` | `DPFSUnit.Parallel.FileScanner` | RTL PPL (`System.Threading`) | RTL only | &mdash; |
+| `TParallelFileScannerOTL` | `DPFSUnit.Parallel.FileScanner.OTL` | OmniThreadLibrary | OmniThreadLibrary | OTL value queue (`TOmniQueue`) |
+| `TParallelFileScannerSpring` | `DPFSUnit.Parallel.FileScanner.Spring` | RTL PPL (`System.Threading`) | Spring4D | Spring4D `IList<string>` |
+
+`DPFSUnit.Parallel.FileScanner` alone is all you need without external libraries. The
+defines in `Source/Units/DPFSUnit.Parallel.FileScanner.inc` (`USE_OMNI_THREAD_LIBRARY`,
+`USE_SPRING4D`) only switch the optional units on and off: undefined, they compile to empty
+units, and the demo app disables the buttons that use them.
+
+With OmniThreadLibrary the workers are pooled tasks that each call owns and releases
+itself (not `Parallel.For`, whose Unobserved tasks are only released once the calling
+thread processes their termination messages), so scanning needs no message loop: a
+console app, a service, a worker thread or a loop of back-to-back scans is fine. They run
+in the scanner's own pool of at most one thread per core (at most 56), so back-to-back
+scans reuse the same threads, and a scan started from inside a `ScanFiles` callback runs
+on that callback's thread. `TParallelFileScannerOTL.ToOTLThreadPriority` converts the
+priority; OTL has no time-critical level, so `tpTimeCritical` becomes OTL's `tpHighest`.
+
+With every scanner class an exception in a worker, e.g. one raised by a `ScanFiles`
+callback, is raised in the caller.
 
 ## Memory manager
 
@@ -33,10 +70,30 @@ stalls to a scan; FastMM5 (used by the demo app, first unit in its `.dpr`) does 
 
 ## Tests
 
-`Tests/ScannerTests` is a console regression test: it checks that every result-container
-API (RTL `TStringList`, the OmniThreadLibrary value queue, and the Spring4D `IList<string>`)
-returns the same file set as a straightforward flat enumeration, and that prefix exclusion
-keeps excluded subtrees out. It exits with a non-zero code on failure.
+`Tests/UnitTests` (`DPFSUnitTests`) is the DUnitX suite, for Win32 and Win64. The shared
+tests run on every scanner class (`TParallelFileScanner`, `TParallelFileScannerOTL`): every
+result API returns the same file set as a straightforward flat enumeration of this
+repository's `Source` tree, prefix exclusion keeps excluded subtrees out, overlapping roots
+give no duplicates, sorted results are in `CompareText` order, the workers run at the
+requested priority, a worker's exception reaches the caller, a scan from inside a callback
+works, and back-to-back scans pile up no handles or memory. Then the OTL value queue, the
+priority conversion and the Spring4D `IList<string>` are tested.
+
+| Configuration | Runs the tests with |
+| --- | --- |
+| `Debug`, `Release` | the DUnitX console runner (NUnit XML to `dunitx-results.xml`) |
+| `Debug - TestInsight`, `Release - TestInsight` | TestInsight in the IDE (`TESTINSIGHT` defined) |
+
+Debug builds run with FastMM5 in debug mode, so memory errors fail loudly. The worker
+exception test raises `EScannerTestCallbackFailure` on purpose; add it to the debugger's
+ignored exceptions when running under the debugger. From the command line, build a
+non-TestInsight configuration (a TestInsight build only talks to the IDE), e.g.
+`msbuild Tests\UnitTests\DPFSUnitTests.dproj /p:Config=Debug /p:Platform=Win64`, and run
+`DPFSUnitTests.exe --exitbehavior:Continue`.
+
+`Tests/ScannerTests` (`DPFSScannerTests`) keeps the checks that need a process of their
+own, since they measure process-wide state from a clean start: that back-to-back scans keep
+the OTL scanner pool's thread count bounded. It exits with a non-zero code on failure.
 
 ## TODO
 

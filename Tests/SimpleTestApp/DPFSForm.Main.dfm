@@ -2,7 +2,7 @@ object DPFSMainForm: TDPFSMainForm
   Left = 0
   Top = 0
   Caption = 'Delphi Parallel FileScanner Simple Test App'
-  ClientHeight = 441
+  ClientHeight = 472
   ClientWidth = 932
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
@@ -14,7 +14,7 @@ object DPFSMainForm: TDPFSMainForm
   OnCreate = FormCreate
   DesignSize = (
     932
-    441)
+    472)
   TextHeight = 15
   object ComboBoxDirectories: TComboBox
     AlignWithMargins = True
@@ -41,23 +41,40 @@ object DPFSMainForm: TDPFSMainForm
     Top = 32
     Width = 926
     Height = 25
-    Hint = 
-      'Scan directories in parallel and collect the results in a standa' +
-      'rd RTL TStringList.'
+    Hint =
+      'Scan directories in parallel on the RTL PPL (TParallelFileScanne' +
+      'r) and collect the results in a standard RTL TStringList.'
     Align = alTop
-    Caption = 'Default Parallel Scan'
+    Caption = 'RTL PPL parallel scan'
     TabOrder = 0
     OnClick = ButtonParallelScanClick
   end
-  object ButtonParallelScanSpring: TButton
+  object ButtonParallelScanOtl: TButton
     AlignWithMargins = True
     Left = 8
     Top = 63
     Width = 916
     Height = 25
-    Hint = 
-      'Scan directories in parallel and collect the results in a Spring' +
-      '4D IList<string>.'
+    Hint =
+      'Scan directories in parallel on OmniThreadLibrary (TParallelFile' +
+      'ScannerOTL) and collect the results in a standard RTL TStringLis' +
+      't.'
+    Margins.Left = 8
+    Margins.Right = 8
+    Align = alTop
+    Caption = 'OTL parallel scan'
+    TabOrder = 7
+    OnClick = ButtonParallelScanOtlClick
+  end
+  object ButtonParallelScanSpring: TButton
+    AlignWithMargins = True
+    Left = 8
+    Top = 94
+    Width = 916
+    Height = 25
+    Hint =
+      'Scan directories in parallel on the RTL PPL (TParallelFileScanne' +
+      'rSpring) and collect the results in a Spring4D IList<string>.'
     Margins.Left = 8
     Margins.Right = 8
     Align = alTop
@@ -68,7 +85,7 @@ object DPFSMainForm: TDPFSMainForm
   object MemoLog: TMemo
     AlignWithMargins = True
     Left = 3
-    Top = 189
+    Top = 220
     Width = 916
     Height = 249
     Margins.Left = 8
@@ -87,12 +104,12 @@ object DPFSMainForm: TDPFSMainForm
   object ButtonOtlQueue: TButton
     AlignWithMargins = True
     Left = 8
-    Top = 94
+    Top = 125
     Width = 916
     Height = 25
-    Hint = 
-      'Scan directories in parallel, streaming the results through an O' +
-      'mniThreadLibrary value queue.'
+    Hint =
+      'Scan directories in parallel on OmniThreadLibrary (TParallelFile' +
+      'ScannerOTL), streaming the results through an OTL value queue.'
     Margins.Left = 8
     Margins.Right = 8
     Align = alTop
@@ -103,7 +120,7 @@ object DPFSMainForm: TDPFSMainForm
   object CheckBoxConvertRelativePathsToAbsolute: TCheckBox
     AlignWithMargins = True
     Left = 8
-    Top = 166
+    Top = 197
     Width = 916
     Height = 17
     Margins.Left = 8
@@ -115,7 +132,7 @@ object DPFSMainForm: TDPFSMainForm
   object PanelSpeedTest: TPanel
     AlignWithMargins = True
     Left = 3
-    Top = 125
+    Top = 156
     Width = 926
     Height = 35
     Align = alTop
