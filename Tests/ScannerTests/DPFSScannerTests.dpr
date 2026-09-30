@@ -300,6 +300,160 @@ begin
   end;
 end;
 
+// The raw result must not hold a file twice (compared case-insensitively) and must match the expected set.
+procedure CheckNoDuplicatesAndSameAsBaseline(const ATestName: string; const ARaw, ABaseline: TStringList);
+var
+  LSet: TStringList;
+begin
+  LSet := NormalizedSet(ARaw.ToStringArray);
+  try
+    if LSet.Count <> ARaw.Count then
+    begin
+      Writeln(Format('[FAIL] %-22s %d files returned, only %d distinct', [ATestName, ARaw.Count, LSet.Count]));
+      Inc(GFailures);
+    end
+    else
+      CheckSameAsBaseline(ATestName, LSet, ABaseline);
+  finally
+    LSet.Free;
+  end;
+end;
+
+// Overlapping roots - the root again, spelled with a trailing delimiter and in upper case, plus a nested one -
+// must be walked once: every file exactly once, and the same set as scanning the root alone.
+procedure CheckOverlappingRoots(const ABaseline: TStringList);
+var
+  LExclusions: TFileScanExclusions;
+  LFileCount: Integer;
+  LList: TStringList;
+  LRoots: TArray<string>;
+  LScanner: TParallelFileScanner;
+begin
+  LRoots := [GScanRoots[0], TPath.Combine(GScanRoots[0], 'Units'), IncludeTrailingPathDelimiter(GScanRoots[0]),
+    GScanRoots[0].ToUpper];
+  LScanner := TParallelFileScanner.Create(Extensions);
+  LList := TStringList.Create;
+  try
+    LScanner.ConvertRelativePathsToAbsolute := True;
+    LScanner.GetFileList(LRoots, LExclusions, LList);
+    CheckNoDuplicatesAndSameAsBaseline('overlapping roots', LList, ABaseline);
+
+    LList.Clear;
+    LFileCount := 0;
+    LScanner.ScanFiles(LRoots, LExclusions,
+      procedure(const AFileName: string)
+      begin
+        TMonitor.Enter(LList);
+        try
+          LList.Add(AFileName);
+        finally
+          TMonitor.Exit(LList);
+        end;
+      end,
+      LFileCount);
+    CheckNoDuplicatesAndSameAsBaseline('overlapping (stream)', LList, ABaseline);
+  finally
+    LList.Free;
+    LScanner.Free;
+  end;
+end;
+
+// A root nested under an excluded prefix of another root is not reached by that root's walk, so it must stay a
+// root of its own: its own files are scanned (its subdirectories fall under the prefix too, as before).
+procedure CheckNestedRootUnderExclusion(const ABaseline: TStringList);
+var
+  LExcludedPrefix: string;
+  LExclusions: TFileScanExclusions;
+  LExpected: TStringList;
+  LList: TStringList;
+  LNestedRoot: string;
+  LScanner: TParallelFileScanner;
+begin
+  LExcludedPrefix := TPath.GetFullPath(TPath.Combine(GScanRoots[0], '3rdPartyLibraries'));
+  LNestedRoot := TPath.Combine(LExcludedPrefix, 'FastMM5');
+
+  // Expected: everything outside the excluded prefix, plus the nested root's own files.
+  LExpected := TStringList.Create;
+  try
+    LExpected.Sorted := True;
+    LExpected.Duplicates := dupIgnore;
+
+    for var LFile in ABaseline do
+      if not LFile.StartsWith(LExcludedPrefix.ToLower) then
+        LExpected.Add(LFile);
+
+    for var LFile in TDirectory.GetFiles(LNestedRoot, '*', TSearchOption.soTopDirectoryOnly) do
+      if MatchesAnyExtension(TPath.GetFileName(LFile)) then
+        LExpected.Add(TPath.GetFullPath(LFile).ToLower);
+
+    LScanner := TParallelFileScanner.Create(Extensions);
+    LList := TStringList.Create;
+    try
+      LScanner.ConvertRelativePathsToAbsolute := True;
+      LExclusions.PathPrefixes := [LExcludedPrefix];
+      LScanner.GetFileList([GScanRoots[0], LNestedRoot], LExclusions, LList);
+      CheckNoDuplicatesAndSameAsBaseline('nested excluded root', LList, LExpected);
+    finally
+      LList.Free;
+      LScanner.Free;
+    end;
+  finally
+    LExpected.Free;
+  end;
+end;
+
+// With SortResultList (the default) the result must come back in CompareText order.
+procedure CheckSortOrder(const ATestName: string; const AFiles: TArray<string>);
+var
+  LDisorders: Integer;
+begin
+  LDisorders := 0;
+
+  for var LIndex := 1 to High(AFiles) do
+    if CompareText(AFiles[LIndex - 1], AFiles[LIndex]) > 0 then
+      Inc(LDisorders);
+
+  if (LDisorders = 0) and (Length(AFiles) > 1) then
+    Writeln(Format('[PASS] %-22s %d files in CompareText order', [ATestName, Length(AFiles)]))
+  else
+  begin
+    Writeln(Format('[FAIL] %-22s %d of %d neighbours out of order', [ATestName, LDisorders, Length(AFiles)]));
+    Inc(GFailures);
+  end;
+end;
+
+procedure CheckResultOrder;
+var
+  LExclusions: TFileScanExclusions;
+  LList: TStringList;
+  LScanner: TParallelFileScanner;
+  {$IFDEF USE_SPRING4D}
+  LSpringList: IList<string>;
+  LSpringScanner: TParallelFileScannerSpring;
+  {$ENDIF}
+begin
+  LScanner := TParallelFileScanner.Create(Extensions);
+  LList := TStringList.Create;
+  try
+    LScanner.GetFileList(GScanRoots, LExclusions, LList);
+    CheckSortOrder('RTL sort order', LList.ToStringArray);
+  finally
+    LList.Free;
+    LScanner.Free;
+  end;
+
+  {$IFDEF USE_SPRING4D}
+  LSpringScanner := TParallelFileScannerSpring.Create(Extensions);
+  try
+    LSpringList := TCollections.CreateList<string>;
+    LSpringScanner.GetFileList(GScanRoots, LExclusions, LSpringList);
+    CheckSortOrder('Spring4D sort order', LSpringList.ToArray);
+  finally
+    LSpringScanner.Free;
+  end;
+  {$ENDIF}
+end;
+
 function RepoRoot: string;
 begin
   // The executable lives in <repo>\Tests\ScannerTests\Win32\Debug\.
@@ -352,11 +506,15 @@ begin
       finally
         LObjectCallback.Free;
       end;
+
+      CheckOverlappingRoots(LBaseline);
+      CheckNestedRootUnderExclusion(LBaseline);
     finally
       LBaseline.Free;
     end;
 
     CheckExclusion;
+    CheckResultOrder;
 
     Writeln('');
     if GFailures = 0 then

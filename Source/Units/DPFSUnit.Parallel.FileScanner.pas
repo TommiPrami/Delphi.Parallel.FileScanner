@@ -20,14 +20,6 @@ type
 
   TExclusionKind = (ekPathPrefixes, ekPathSuffixes);
 
-  // A single unit of parallel scanning work: one directory, walked recursively or not.
-  // A root is split into one non-recursive job for its own files plus one recursive job per
-  // immediate subdirectory, so even a single root can be scanned by several worker threads.
-  TScanJob = record
-    Directory: string;
-    Recursive: Boolean;
-  end;
-
   TFileScanExclusions = record
   strict private
     FPathPrefixes: TArray<string>;
@@ -47,11 +39,13 @@ type
     FSkippedDirectories: TStringList;
     FCachedSkippedDirectoriesFileCount: Integer;
     FConvertRelativePathsToAbsolute: Boolean;
+    FExcludedPrefixes: TArray<string>; // FExclusions.PathPrefixes without trailing delimiters (per scan)
+    FExcludedSuffixes: TArray<string>; // FExclusions.PathSuffixes (per scan)
     FFastExtensions: TArray<string>;  // extensions (with dot, e.g. '.pas') for simple "*.ext" patterns
     FComplexPatterns: TArray<string>; // patterns that still need full TPath.MatchesPattern
-    function GetThreadCount(const ATaskCount: Integer): Integer;
-    function GetSkippedFilesCount: Integer;
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
+    function GetSkippedFilesCount: Integer;
+    function GetWorkerCount: Integer;
     procedure AddSkippedDirectories(const APath: string);
   strict protected
     const
@@ -65,18 +59,35 @@ type
     FSkippedFilesCount: Integer;
     FSortResultList: Boolean;
     procedure ResetCounters;
+    procedure PrepareExclusions;
     procedure PrepareExtensions;
     function ExcludedFileNameBySuffix(const AFileName: string): Boolean;
     function ExcludedPathByPrefix(const APath: string): Boolean;
-    function MatchesAnyExtension(const AFileName: string): Boolean;
-    function BuildScanJobs(const ADirectories: TArray<string>): TArray<TScanJob>;
-    procedure WalkThroughDirectory(const APath: string; const APreCallback: TDirectoryWalkProc; const ARecursive: Boolean);
-    // Shared parallel walk: fills AResultLists with one TStringList per scan job (deduping/sorting
-    // is left to the caller, so each result-container flavour can merge in its own way).
-    procedure RunScanJobs(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AResultLists: TObjectList<TStringList>
+    function MatchesAnyExtension(const AFileName: PChar; const AFileNameLength: Integer): Boolean;
+    function PrepareRootDirectories(const ADirectories: TArray<string>): TArray<string>;
+    // Enumerates one directory (non-recursively) in a single pass: matching files go to AFileFound,
+    // non-excluded subdirectories are appended to ASubDirectories. APath and the subdirectories it adds
+    // end in a path delimiter.
+    procedure ScanDirectory(const APath: string; const AFileFound: TDirectoryWalkProc; const ASubDirectories: TList<string>);
+    // Load-balanced parallel walk. AWorkerCount workers each walk a subtree depth-first on a private stack
+    // and hand the shallowest pending directories (the biggest subtrees) to any worker that has run out of
+    // work, so a dominant subtree is spread across all cores instead of pinning one thread.
+    // AAcquireFileSink is called once per worker (argument = worker index 0..AWorkerCount-1) to obtain that
+    // worker's file callback; it fires on worker threads, so a shared sink must be thread-safe. AFinishWorker
+    // (optional) is called on each worker thread once the whole walk is done, with the same index, so per-worker
+    // results can be post-processed in parallel.
+    procedure RunParallelWalk(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const AWorkerCount: Integer; const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>;
+      const AFinishWorker: TProc<Integer>
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
       ; const APriority: TOTLThreadPriority = tpNormal
     {$ENDIF});
+    // Shared parallel walk behind the list results: returns every matching file, in CompareText order when
+    // ASort is set - each worker sorts its own share in parallel, then the shares are merged.
+    function CollectFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const ASort: Boolean
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      ; const APriority: TOTLThreadPriority = tpNormal
+    {$ENDIF}): TArray<string>;
     // RTL scan/merge core (TStringList result). Spring4D has its own native merge.
     procedure ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AResult: TStringList
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -101,9 +112,9 @@ type
     destructor Destroy; override;
 
     // Streaming scan: AFileFoundCallback fires for every matching file AS IT IS FOUND, from
-    // multiple worker threads concurrently - the callback MUST be thread-safe. Results are
-    // not deduplicated or sorted (delivery order is nondeterministic); SortResultList does
-    // not apply here. Available on both the RTL and Spring4D scanner classes.
+    // multiple worker threads concurrently - the callback MUST be thread-safe. Each file is
+    // delivered once (overlapping roots are merged before the walk), in nondeterministic order;
+    // SortResultList does not apply here. Available on both the RTL and Spring4D scanner classes.
     function ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
       const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer
     {$IFDEF USE_OMNI_THREAD_LIBRARY}
@@ -142,12 +153,219 @@ type
 implementation
 
 uses
-  System.Diagnostics, System.Math
+  Winapi.Windows, System.Diagnostics, System.Generics.Defaults, System.Math
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   , OtlCollections, OtlComm, OtlCommon, OtlParallel, OtlTask, GpStuff
 {$ELSE}
   , System.Threading
 {$ENDIF};
+
+const
+  // Not declared in Winapi.Windows: hint FindFirstFileEx to use a larger buffer (fewer kernel round-trips).
+  FIND_FIRST_EX_LARGE_FETCH = $00000002;
+
+// Opens ADirectory (which ends in a path delimiter) for enumeration via FindFirstFileEx. FindExInfoBasic
+// skips 8.3 short-name retrieval and FIND_FIRST_EX_LARGE_FETCH fetches in larger batches - both markedly
+// faster than System.SysUtils.FindFirst (which wraps FindFirstFile with short-name generation and small
+// buffers) on directory-heavy scans. Returns INVALID_HANDLE_VALUE if the directory cannot be opened
+// (AFindData is then undefined); otherwise iterate with FindNextFile and close with Winapi.Windows.FindClose.
+function OpenDirectoryEnumeration(const ADirectory: string; var AFindData: TWin32FindData): THandle;
+begin
+  Result := FindFirstFileEx(PChar(ADirectory + '*'), FindExInfoBasic, @AFindData, FindExSearchNameMatch, nil,
+    FIND_FIRST_EX_LARGE_FETCH);
+end;
+
+// True for the '.' and '..' entries every directory enumeration returns.
+function IsDotDirectory(const AName: PChar): Boolean; inline;
+begin
+  Result := (AName[0] = '.') and ((AName[1] = #0) or ((AName[1] = '.') and (AName[2] = #0)));
+end;
+
+// Ordinal, case-insensitive comparison of ALength characters - the way Windows compares file names. The RTL's
+// EndsWith/StartsWith(IgnoreCase) are locale-aware Win32 calls instead (slow per directory entry, and wrong for
+// e.g. "I"/"i" under a Turkish locale). ASCII is folded inline; a difference involving any other character is
+// settled by CompareStringOrdinal.
+function SameTextOrdinal(const AChars1, AChars2: PChar; const ALength: Integer): Boolean;
+var
+  LChar1: Char;
+  LChar2: Char;
+  LLower: Integer;
+begin
+  for var LIndex := 0 to ALength - 1 do
+  begin
+    LChar1 := AChars1[LIndex];
+    LChar2 := AChars2[LIndex];
+
+    if LChar1 = LChar2 then
+      Continue;
+
+    if (Ord(LChar1) > $7F) or (Ord(LChar2) > $7F) then
+      Exit(CompareStringOrdinal(@AChars1[LIndex], ALength - LIndex, @AChars2[LIndex], ALength - LIndex, 1) = CSTR_EQUAL);
+
+    // Two different ASCII characters are equal ignoring case only when they are the same letter.
+    LLower := Ord(LChar1) or $20;
+
+    if (LLower <> (Ord(LChar2) or $20)) or (LLower < Ord('a')) or (LLower > Ord('z')) then
+      Exit(False);
+  end;
+
+  Result := True;
+end;
+
+function StartsTextOrdinal(const APrefix, AText: string): Boolean;
+begin
+  Result := (Length(AText) >= Length(APrefix)) and SameTextOrdinal(PChar(AText), PChar(APrefix), Length(APrefix));
+end;
+
+function EndsTextOrdinal(const ASuffix, AText: string): Boolean;
+var
+  LOffset: Integer;
+begin
+  LOffset := Length(AText) - Length(ASuffix);
+  Result := (LOffset >= 0) and SameTextOrdinal(PChar(AText) + LOffset, PChar(ASuffix), Length(ASuffix));
+end;
+
+// APath (which ends in a path delimiter) + ANameLength characters of AName, optionally followed by a path
+// delimiter, in a single allocation.
+function JoinPath(const APath: string; const AName: PChar; const ANameLength: Integer; const AAddDelimiter: Boolean): string;
+var
+  LPathLength: Integer;
+begin
+  LPathLength := Length(APath);
+  SetLength(Result, LPathLength + ANameLength + Ord(AAddDelimiter));
+  Move(PChar(APath)^, PChar(Result)^, LPathLength * SizeOf(Char));
+  Move(AName^, PChar(Result)[LPathLength], ANameLength * SizeOf(Char));
+
+  if AAddDelimiter then
+    PChar(Result)[LPathLength + ANameLength] := PathDelim;
+end;
+
+type
+  // Shared state of one load-balanced walk. Each worker walks its own subtree depth-first on a private stack
+  // (no locking per directory); directories only pass through this pool when a worker has run out of work
+  // and another hands some over, so the lock is taken a few times per subtree rather than per directory.
+  // The walk is complete when nothing is queued and no worker still owns a subtree.
+  TDirectoryWorkPool = class(TObject)
+  strict private
+    FAborted: Boolean;
+    FActiveWorkers: Integer; // workers currently owning a subtree; their private stacks are pending work
+    FIdleWorkers: Integer;   // workers waiting in TakeWork; read unlocked by busy workers as a "hungry" hint
+    FQueue: TList<string>;
+  public
+    constructor Create(const ARoots: TArray<string>);
+    destructor Destroy; override;
+    function TakeWork(var ADirectory: string): Boolean;
+    procedure Abort;
+    procedure FinishSubtree;
+    procedure ShareWork(const ALocalStack: TList<string>);
+    property Aborted: Boolean read FAborted;
+  end;
+
+constructor TDirectoryWorkPool.Create(const ARoots: TArray<string>);
+begin
+  inherited Create;
+
+  FQueue := TList<string>.Create;
+  FQueue.AddRange(ARoots);
+end;
+
+destructor TDirectoryWorkPool.Destroy;
+begin
+  FQueue.Free;
+
+  inherited Destroy;
+end;
+
+// Blocks until a subtree is available (Result True, the caller now owns it and must call FinishSubtree when
+// its private stack runs dry) or the walk is complete / aborted (Result False).
+function TDirectoryWorkPool.TakeWork(var ADirectory: string): Boolean;
+begin
+  Result := False;
+  ADirectory := '';
+
+  TMonitor.Enter(Self);
+  try
+    while not FAborted do
+    begin
+      if FQueue.Count > 0 then
+      begin
+        ADirectory := FQueue.Last;
+        FQueue.Delete(FQueue.Count - 1);
+        Inc(FActiveWorkers);
+
+        Exit(True);
+      end;
+
+      // Nothing queued and nobody left who could hand over more: the whole tree has been walked.
+      if FActiveWorkers = 0 then
+        Exit;
+
+      Inc(FIdleWorkers);
+      try
+        TMonitor.Wait(Self, INFINITE);
+      finally
+        Dec(FIdleWorkers);
+      end;
+    end;
+  finally
+    TMonitor.Exit(Self);
+  end;
+end;
+
+procedure TDirectoryWorkPool.Abort;
+begin
+  TMonitor.Enter(Self);
+  try
+    FAborted := True;
+
+    TMonitor.PulseAll(Self);
+  finally
+    TMonitor.Exit(Self);
+  end;
+end;
+
+procedure TDirectoryWorkPool.FinishSubtree;
+begin
+  TMonitor.Enter(Self);
+  try
+    Dec(FActiveWorkers);
+
+    // The last active worker just ran dry with nothing queued: release every waiter so it can finish.
+    if (FActiveWorkers = 0) and (FQueue.Count = 0) then
+      TMonitor.PulseAll(Self);
+  finally
+    TMonitor.Exit(Self);
+  end;
+end;
+
+// Called after every directory a worker scans, so the common case (nobody idle) must not lock.
+procedure TDirectoryWorkPool.ShareWork(const ALocalStack: TList<string>);
+var
+  LCount: Integer;
+begin
+  if (FIdleWorkers = 0) or (ALocalStack.Count < 2) then
+    Exit;
+
+  TMonitor.Enter(Self);
+  try
+    // Hand over from the bottom of the stack: the shallowest pending directories, i.e. the biggest
+    // subtrees. Items already queued but not yet taken count against the idle workers they will feed.
+    LCount := Min(FIdleWorkers - FQueue.Count, ALocalStack.Count - 1);
+
+    if LCount <= 0 then
+      Exit;
+
+    for var LIndex := 0 to LCount - 1 do
+      FQueue.Add(ALocalStack[LIndex]);
+
+    ALocalStack.DeleteRange(0, LCount);
+
+    for var LIndex := 1 to LCount do
+      TMonitor.Pulse(Self);
+  finally
+    TMonitor.Exit(Self);
+  end;
+end;
 
 procedure InitArrayDataFromStrings(var AArray: TArray<string>; const AArrayData: TStrings);
 var
@@ -184,7 +402,7 @@ end;
 
 procedure TParallelFileScannerCustom.AddSkippedDirectories(const APath: string);
 begin
-  // Called from WalkThroughDirectory, which runs on multiple worker threads, so
+  // Called from ScanDirectory, which runs on multiple worker threads, so
   // access to the shared FSkippedDirectories list must be serialized.
   FLock.Enter(FSkippedDirectories);
   try
@@ -201,66 +419,70 @@ begin
   end;
 end;
 
-function TParallelFileScannerCustom.BuildScanJobs(const ADirectories: TArray<string>): TArray<TScanJob>;
+function TParallelFileScannerCustom.PrepareRootDirectories(const ADirectories: TArray<string>): TArray<string>;
 
-  procedure AddJob(const AJobs: TList<TScanJob>; const ADirectory: string; const ARecursive: Boolean);
-  var
-    LJob: TScanJob;
+  // True when another root already covers root AIndex: the same directory given again (the first spelling
+  // is kept), or an ancestor whose walk reaches it - i.e. unless it is under an excluded prefix, in which
+  // case the ancestor's walk skips it and it stays a root of its own, as before.
+  function IsCoveredRoot(const ARoots: TList<string>; const AIndex: Integer): Boolean;
   begin
-    LJob.Directory := ADirectory;
-    LJob.Recursive := ARecursive;
+    for var LOtherIndex := 0 to ARoots.Count - 1 do
+      if (LOtherIndex <> AIndex) and StartsTextOrdinal(ARoots[LOtherIndex], ARoots[AIndex]) then
+      begin
+        if Length(ARoots[LOtherIndex]) = Length(ARoots[AIndex]) then
+        begin
+          if LOtherIndex < AIndex then
+            Exit(True);
+        end
+        else if not ExcludedPathByPrefix(ARoots[AIndex]) then
+          Exit(True);
+      end;
 
-    AJobs.Add(LJob);
+    Result := False;
   end;
 
 var
-  LJobs: TList<TScanJob>;
-  LSearchRec: TSearchRec;
-  LRoot: string;
+  LRoots: TList<string>;
 begin
-  LJobs := TList<TScanJob>.Create;
+  LRoots := TList<string>.Create;
   try
     for var LRootPath in ADirectories do
     begin
       if not TDirectory.Exists(LRootPath) then
         Continue;
 
-      LRoot := LRootPath;
-
       // Resolve the root to an absolute path once, so every file produced from it is already
-      // absolute and no per-file conversion pass is needed afterwards.
+      // absolute and no per-file conversion pass is needed afterwards. The walk keeps directories with a
+      // trailing delimiter, so entry names can be appended directly.
       if FConvertRelativePathsToAbsolute then
-        LRoot := TPath.GetFullPath(LRoot);
-
-      // The root itself is scanned non-recursively for its own files; each immediate
-      // subdirectory becomes a recursive job of its own so a single root still parallelizes.
-      AddJob(LJobs, LRoot, False);
-
-      if FindFirst(TPath.Combine(LRoot, '*', False), faAnyFile, LSearchRec) = 0 then
-      try
-        repeat
-          if LSearchRec.Attr and System.SysUtils.faDirectory = 0 then
-            Continue; // only interested in subdirectories here
-
-          if (LSearchRec.Name = CURRENT_DIR) or (LSearchRec.Name = PARENT_DIR) then
-            Continue;
-
-          var LSubDirectory := TPath.Combine(LRoot, LSearchRec.Name, False);
-
-          if ExcludedPathByPrefix(LSubDirectory) then
-            AddSkippedDirectories(LSubDirectory)
-          else
-            AddJob(LJobs, LSubDirectory, True);
-        until FindNext(LSearchRec) <> 0;
-      finally
-        FindClose(LSearchRec);
-      end;
+        LRoots.Add(IncludeTrailingPathDelimiter(TPath.GetFullPath(LRootPath)))
+      else
+        LRoots.Add(IncludeTrailingPathDelimiter(LRootPath));
     end;
 
-    Result := LJobs.ToArray;
+    // Drop every root another root already covers, so no file is produced twice and the results need no
+    // de-duplication pass. Decided against the full list, so the outcome does not depend on the order in
+    // which covered roots are dropped, and the roots keep the caller's order.
+    SetLength(Result, 0);
+
+    for var LIndex := 0 to LRoots.Count - 1 do
+      if not IsCoveredRoot(LRoots, LIndex) then
+        Result := Result + [LRoots[LIndex]];
   finally
-    LJobs.Free;
+    LRoots.Free;
   end;
+end;
+
+procedure TParallelFileScannerCustom.PrepareExclusions;
+begin
+  // Normalised once per scan, so the per-directory checks neither allocate nor re-normalise. Prefixes are
+  // compared without a trailing delimiter, as before.
+  SetLength(FExcludedPrefixes, Length(FExclusions.PathPrefixes));
+
+  for var LIndex := 0 to High(FExcludedPrefixes) do
+    FExcludedPrefixes[LIndex] := ExcludeTrailingPathDelimiter(FExclusions.PathPrefixes[LIndex]);
+
+  FExcludedSuffixes := Copy(FExclusions.PathSuffixes);
 end;
 
 procedure TParallelFileScannerCustom.PrepareExtensions;
@@ -330,41 +552,52 @@ begin
   FCachedSkippedDirectoriesFileCount := 0;
 end;
 
+// Called once per subdirectory from every worker thread. The prefix arrays are indexed rather than walked
+// with for..in, which would copy each shared string and bump its reference count from all threads at once.
 function TParallelFileScannerCustom.ExcludedPathByPrefix(const APath: string): Boolean;
 begin
-  Result := False;
-
-  if Length(FExclusions.PathPrefixes) = 0 then
-    Exit; // no prefixes configured: skip the work entirely (called once per subdirectory)
-
-  var LPath := ExcludeTrailingPathDelimiter(APath);
-
-  for var LPrefix in FExclusions.PathPrefixes do
-    if LPath.StartsWith(ExcludeTrailingPathDelimiter(LPrefix), True) then // True => case-insensitive
+  for var LIndex := 0 to High(FExcludedPrefixes) do
+    if StartsTextOrdinal(FExcludedPrefixes[LIndex], APath) then
       Exit(True);
+
+  Result := False;
 end;
 
 function TParallelFileScannerCustom.ExcludedFileNameBySuffix(const AFileName: string): Boolean;
 begin
-  Result := False;
-
-  for var LSuffix in FExclusions.PathSuffixes do
-    if AFileName.EndsWith(LSuffix, True) then // True => case-insensitive
+  for var LIndex := 0 to High(FExcludedSuffixes) do
+    if EndsTextOrdinal(FExcludedSuffixes[LIndex], AFileName) then
       Exit(True);
+
+  Result := False;
 end;
 
-function TParallelFileScannerCustom.MatchesAnyExtension(const AFileName: string): Boolean;
+// Called for every file entry of every directory, on the raw name in the find-data buffer (no string yet).
+function TParallelFileScannerCustom.MatchesAnyExtension(const AFileName: PChar; const AFileNameLength: Integer): Boolean;
 begin
+  // Fast path: a plain "*.ext" pattern is an ordinal case-insensitive suffix test on the name buffer, no
+  // allocation. Indexed rather than for..in for the same reason as ExcludedPathByPrefix.
+  for var LIndex := 0 to High(FFastExtensions) do
+  begin
+    var LLength := Length(FFastExtensions[LIndex]);
+
+    if (AFileNameLength >= LLength)
+      and SameTextOrdinal(AFileName + (AFileNameLength - LLength), PChar(FFastExtensions[LIndex]), LLength) then
+      Exit(True);
+  end;
+
+  if Length(FComplexPatterns) > 0 then
+  begin
+    var LFileName: string;
+
+    SetString(LFileName, AFileName, AFileNameLength);
+
+    for var LIndex := 0 to High(FComplexPatterns) do
+      if TPath.MatchesPattern(LFileName, FComplexPatterns[LIndex], False) then
+        Exit(True);
+  end;
+
   Result := False;
-
-  // Fast path: a plain "*.ext" pattern is just a case-insensitive suffix test (no allocation).
-  for var LFast in FFastExtensions do
-    if AFileName.EndsWith(LFast, True) then
-      Exit(True);
-
-  for var LPattern in FComplexPatterns do
-    if TPath.MatchesPattern(AFileName, LPattern, False) then
-      Exit(True);
 end;
 
 function TParallelFileScannerCustom.GetFileCounts(const ASkippedDirectories: TStringList): Integer;
@@ -390,70 +623,173 @@ begin
   Result := CompareText(AList[AIndex1], AList[AIndex2]);
 end;
 
-procedure TParallelFileScannerCustom.RunScanJobs(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AResultLists: TObjectList<TStringList>
+type
+  // CompareText order - ordinal, ASCII case-insensitive - the order SortResultList has always produced.
+  // (TIStringComparer.Ordinal would allocate two lower-cased copies per comparison.)
+  TPathComparer = class(TComparer<string>)
+  public
+    function Compare(const ALeft, ARight: string): Integer; override;
+  end;
+
+function TPathComparer.Compare(const ALeft, ARight: string): Integer;
+begin
+  Result := CompareText(ALeft, ARight);
+end;
+
+function ConcatenateLists(const ALists: TArray<TList<string>>): TArray<string>;
+var
+  LCount: Integer;
+begin
+  LCount := 0;
+
+  for var LList in ALists do
+    Inc(LCount, LList.Count);
+
+  SetLength(Result, LCount);
+  LCount := 0;
+
+  for var LList in ALists do
+  begin
+    TArray.Copy<string>(LList.List, Result, 0, LCount, LList.Count);
+    Inc(LCount, LList.Count);
+  end;
+end;
+
+// k-way merge of lists that are each already sorted by AComparer, through a binary min-heap of list indexes
+// keyed by each list's next item: about log2(k) comparisons per item instead of a full re-sort.
+function MergeSortedLists(const ALists: TArray<TList<string>>; const AComparer: IComparer<string>): TArray<string>;
+var
+  LCounts: TArray<Integer>;
+  LHeap: TArray<Integer>;
+  LHeapSize: Integer;
+  LItems: TArray<TArray<string>>;
+  LPositions: TArray<Integer>;
+  LTotal: Integer;
+
+  function HeadIsLess(const AList1, AList2: Integer): Boolean;
+  begin
+    Result := AComparer.Compare(LItems[AList1][LPositions[AList1]], LItems[AList2][LPositions[AList2]]) < 0;
+  end;
+
+  procedure SiftDown(AHeapIndex: Integer);
+  var
+    LChild: Integer;
+    LList: Integer;
+  begin
+    LList := LHeap[AHeapIndex];
+
+    while True do
+    begin
+      LChild := 2 * AHeapIndex + 1;
+
+      if LChild >= LHeapSize then
+        Break;
+
+      if (LChild + 1 < LHeapSize) and HeadIsLess(LHeap[LChild + 1], LHeap[LChild]) then
+        Inc(LChild);
+
+      if not HeadIsLess(LHeap[LChild], LList) then
+        Break;
+
+      LHeap[AHeapIndex] := LHeap[LChild];
+      AHeapIndex := LChild;
+    end;
+
+    LHeap[AHeapIndex] := LList;
+  end;
+
+begin
+  SetLength(LCounts, Length(ALists));
+  SetLength(LHeap, Length(ALists));
+  SetLength(LItems, Length(ALists));
+  SetLength(LPositions, Length(ALists));
+  LHeapSize := 0;
+  LTotal := 0;
+
+  for var LIndex := 0 to High(ALists) do
+  begin
+    LItems[LIndex] := ALists[LIndex].List; // the backing arrays: compared in place, no copies
+    LCounts[LIndex] := ALists[LIndex].Count;
+    Inc(LTotal, LCounts[LIndex]);
+
+    if LCounts[LIndex] > 0 then
+    begin
+      LHeap[LHeapSize] := LIndex;
+      Inc(LHeapSize);
+    end;
+  end;
+
+  for var LHeapIndex := LHeapSize div 2 - 1 downto 0 do
+    SiftDown(LHeapIndex);
+
+  SetLength(Result, LTotal);
+
+  for var LResultIndex := 0 to LTotal - 1 do
+  begin
+    var LList := LHeap[0];
+
+    Result[LResultIndex] := LItems[LList][LPositions[LList]];
+    Inc(LPositions[LList]);
+
+    // That list is used up: its heap slot goes to the last heap entry.
+    if LPositions[LList] = LCounts[LList] then
+    begin
+      Dec(LHeapSize);
+      LHeap[0] := LHeap[LHeapSize];
+    end;
+
+    if LHeapSize > 0 then
+      SiftDown(0);
+  end;
+end;
+
+function TParallelFileScannerCustom.CollectFiles(const ADirectories: TArray<string>;
+  const AExclusions: TFileScanExclusions; const ASort: Boolean
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   ; const APriority: TOTLThreadPriority = tpNormal
-{$ENDIF});
+{$ENDIF}): TArray<string>;
 var
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  LTaskConfig: IOmniTaskConfig;
-{$ENDIF}
-  LScanJobs: TArray<TScanJob>;
+  LComparer: IComparer<string>;
+  LWorkerCount: Integer;
+  LWorkerFiles: TArray<TList<string>>;
 begin
-  FExclusions := AExclusions;
+  LComparer := TPathComparer.Create;
+  LWorkerCount := GetWorkerCount;
+  SetLength(LWorkerFiles, LWorkerCount);
+  try
+    for var LIndex := 0 to LWorkerCount - 1 do
+      LWorkerFiles[LIndex] := TList<string>.Create;
 
-  ResetCounters;
-  PrepareExtensions;
-
-  LScanJobs := BuildScanJobs(ADirectories);
-
-  if Length(LScanJobs) > 0 then
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  begin
-    LTaskConfig := Parallel.TaskConfig;
-    LTaskConfig.SetPriority(APriority);
-
-    Parallel
-      .&for(0, High(LScanJobs))
-      .TaskConfig(LTaskConfig)
-      .NumTasks(GetThreadCount(Length(LScanJobs)))
-      .Execute(
-{$ELSE}
-    TParallel
-      .&for(0, High(LScanJobs),
-{$ENDIF}
-      procedure(AIndex: Integer)
-      var
-        LTempFileNames: TStringList;
+    // Each worker appends to its own list, so collecting needs no locking at all. When sorting, each worker
+    // also sorts its own list as soon as the walk is done - in parallel - leaving only a merge for this thread.
+    RunParallelWalk(ADirectories, AExclusions, LWorkerCount,
+      function(AWorkerIndex: Integer): TDirectoryWalkProc
       begin
-        LTempFileNames := TStringList.Create;
-        try
-          WalkThroughDirectory(LScanJobs[AIndex].Directory,
-            procedure(const AFileName: string)
-            begin
-              LTempFileNames.Add(AFileName);
-            end,
-            LScanJobs[AIndex].Recursive);
+        var LFiles := LWorkerFiles[AWorkerIndex];
 
-          if LTempFileNames.Count > 0 then
+        Result :=
+          procedure(const AFileName: string)
           begin
-            FLock.Enter(AResultLists);
-            try
-              AResultLists.Add(LTempFileNames);
-              LTempFileNames := nil; // ownership transferred to the list
-            finally
-              FLock.Exit(AResultLists);
-            end;
+            LFiles.Add(AFileName);
           end;
-        finally
-          LTempFileNames.Free; // no-op if ownership was transferred above
-        end;
+      end,
+      procedure(AWorkerIndex: Integer)
+      begin
+        if ASort then
+          LWorkerFiles[AWorkerIndex].Sort(LComparer);
       end
-    );
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
+    {$IFDEF USE_OMNI_THREAD_LIBRARY}
+      , APriority
+    {$ENDIF});
+
+    if ASort then
+      Result := MergeSortedLists(LWorkerFiles, LComparer)
+    else
+      Result := ConcatenateLists(LWorkerFiles);
+  finally
+    for var LFiles in LWorkerFiles do
+      LFiles.Free;
   end;
-{$ENDIF}
 end;
 
 procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
@@ -461,44 +797,28 @@ procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   ; const APriority: TOTLThreadPriority = tpNormal
 {$ENDIF});
-const
-  MERGE_INITIAL_CAPACITY = 2000;
 var
-  LListOfFileLists: TObjectList<TStringList>;
+  LFiles: TArray<string>;
   LFileScanStopWatch: TStopwatch;
-  LUniqueFiles: TDictionary<string, Boolean>;
-  LUpperBound: Integer;
+  LMergeSorted: Boolean;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
 
-  LListOfFileLists := TObjectList<TStringList>.Create(True);
-  LUniqueFiles := TDictionary<string, Boolean>.Create(MERGE_INITIAL_CAPACITY);
-  try
-    RunScanJobs(ADirectories, AExclusions, LListOfFileLists
+  // The walk hands the files over already sorted when they go into an empty list; items the caller added
+  // earlier still need the full sort below, and a Sorted list keeps its own order anyway. No de-duplication
+  // pass: overlapping roots are merged before the walk (PrepareRootDirectories).
+  LMergeSorted := FSortResultList and (AResult.Count = 0) and not AResult.Sorted;
+
+  LFiles := CollectFiles(ADirectories, AExclusions, LMergeSorted
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      , APriority
+    , APriority
 {$ENDIF});
 
-    // Deduplicate across the per-job lists (only matters when scanned roots overlap),
-    // preserving first-seen order; sorting is applied only when SortResultList is set.
-    LUpperBound := 0;
+  AResult.Capacity := AResult.Count + Length(LFiles);
+  AResult.AddStrings(LFiles);
 
-    for var LList in LListOfFileLists do
-      Inc(LUpperBound, LList.Count);
-
-    AResult.Capacity := AResult.Count + LUpperBound;
-
-    for var LList in LListOfFileLists do
-      for var LFileName in LList do
-        if LUniqueFiles.TryAdd(LFileName, True) then
-          AResult.Add(LFileName);
-
-    if FSortResultList then
-      AResult.CustomSort(ComparePathsCI);
-  finally
-    LUniqueFiles.Free;
-    LListOfFileLists.Free;
-  end;
+  if FSortResultList and not LMergeSorted then
+    AResult.CustomSort(ComparePathsCI);
 
   LFileScanStopWatch.Stop;
   FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
@@ -510,53 +830,32 @@ function TParallelFileScannerCustom.ScanFiles(const ADirectories: TArray<string>
   ; const APriority: TOTLThreadPriority = tpNormal
 {$ENDIF}): Boolean;
 var
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  LTaskConfig: IOmniTaskConfig;
-{$ENDIF}
-  LScanJobs: TArray<TScanJob>;
   LFileScanStopWatch: TStopwatch;
   LFileCount: Integer;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
-  FExclusions := AExclusions;
 
-  ResetCounters;
-  PrepareExtensions;
-
-  LScanJobs := BuildScanJobs(ADirectories);
   LFileCount := 0; // local because anonymous methods cannot capture var parameters
 
-  if Length(LScanJobs) > 0 then
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  begin
-    LTaskConfig := Parallel.TaskConfig;
-    LTaskConfig.SetPriority(APriority);
-
-    Parallel
-      .&for(0, High(LScanJobs))
-      .TaskConfig(LTaskConfig)
-      .NumTasks(GetThreadCount(Length(LScanJobs)))
-      .Execute(
-{$ELSE}
-    TParallel
-      .&for(0, High(LScanJobs),
-{$ENDIF}
-      procedure(AIndex: Integer)
-      begin
-        WalkThroughDirectory(LScanJobs[AIndex].Directory,
-          procedure(const AFileName: string)
-          begin
-            // Fires on worker threads as files are found; the callback's own thread
-            // safety is the caller's responsibility.
-            AFileFoundCallback(AFileName);
-            AtomicIncrement(LFileCount);
-          end,
-          LScanJobs[AIndex].Recursive);
-      end
-    );
-{$IFDEF USE_OMNI_THREAD_LIBRARY}
-  end;
-{$ENDIF}
+  // The callback is created inside the factory rather than kept in a local: a local that holds an
+  // anonymous method and is itself captured by another one makes the shared closure frame reference
+  // itself, and it is never freed.
+  RunParallelWalk(ADirectories, AExclusions, GetWorkerCount,
+    function(AWorkerIndex: Integer): TDirectoryWalkProc
+    begin
+      Result :=
+        procedure(const AFileName: string)
+        begin
+          // Fires on worker threads as files are found; the callback's own thread
+          // safety is the caller's responsibility.
+          AFileFoundCallback(AFileName);
+          AtomicIncrement(LFileCount);
+        end;
+    end,
+    nil
+  {$IFDEF USE_OMNI_THREAD_LIBRARY}
+    , APriority
+  {$ENDIF});
 
   AFileCount := LFileCount;
   Result := AFileCount > 0;
@@ -614,48 +913,31 @@ end;
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
   const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer; const APriority: TOTLThreadPriority = tpNormal): Boolean;
 var
-  LTaskConfig: IOmniTaskConfig;
-  LScanJobs: TArray<TScanJob>;
   LFileScanStopWatch: TStopwatch;
   LFileCount: TGp4AlignedInt;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
-  FExclusions := AExclusions;
 
-  ResetCounters;
-  PrepareExtensions;
   AFileCount := 0;
   LFileCount.Value := 0;
 
-  LScanJobs := BuildScanJobs(ADirectories);
-
-  if Length(LScanJobs) > 0 then
-  begin
-    LTaskConfig := Parallel.TaskConfig;
-    LTaskConfig.SetPriority(APriority);
-
-    Parallel
-      .&for(0, High(LScanJobs))
-      .TaskConfig(LTaskConfig)
-      .NumTasks(GetThreadCount(Length(LScanJobs)))
-      .Execute(
-      procedure(AIndex: Integer)
-      begin
-        WalkThroughDirectory(LScanJobs[AIndex].Directory,
-          procedure(const AFileName: string)
-          var
-            LOmniValue: TOmniValue;
-          begin
-            // IOmniValueQueue is thread-safe and LOmniValue is local to this callback,
-            // so no external lock is needed around the enqueue.
-            LOmniValue.AsString := AFileName;
-            AFileNamesOmniValueQueue.Enqueue(LOmniValue);
-            LFileCount.Increment;
-          end,
-          LScanJobs[AIndex].Recursive);
-      end
-    );
-  end;
+  // Created inside the factory (not kept in a captured local) to avoid a self-referencing closure frame.
+  RunParallelWalk(ADirectories, AExclusions, GetWorkerCount,
+    function(AWorkerIndex: Integer): TDirectoryWalkProc
+    begin
+      Result :=
+        procedure(const AFileName: string)
+        var
+          LOmniValue: TOmniValue;
+        begin
+          // IOmniValueQueue is thread-safe and LOmniValue is local to this callback,
+          // so no external lock is needed around the enqueue.
+          LOmniValue.AsString := AFileName;
+          AFileNamesOmniValueQueue.Enqueue(LOmniValue);
+          LFileCount.Increment;
+        end;
+    end,
+    nil, APriority);
 
   AFileCount := LFileCount.Value;
   Result := AFileCount > 0;
@@ -665,9 +947,10 @@ begin
 end;
 {$ENDIF}
 
-function TParallelFileScannerCustom.GetThreadCount(const ATaskCount: Integer): Integer;
+function TParallelFileScannerCustom.GetWorkerCount: Integer;
 begin
-  Result := Min(ATaskCount, TTHread.ProcessorCount);
+  // Workers that find nothing to do just wait for a hand-off, so using every core costs little.
+  Result := Max(1, TThread.ProcessorCount);
 end;
 
 function TParallelFileScannerCustom.GetSkippedFilesCount: Integer;
@@ -678,51 +961,137 @@ begin
   Result := FSkippedFilesCount + FCachedSkippedDirectoriesFileCount;
 end;
 
-procedure TParallelFileScannerCustom.WalkThroughDirectory(const APath: string; const APreCallback: TDirectoryWalkProc;
-  const ARecursive: Boolean);
+procedure TParallelFileScannerCustom.ScanDirectory(const APath: string; const AFileFound: TDirectoryWalkProc;
+  const ASubDirectories: TList<string>);
 var
-  LSearchRec: TSearchRec;
-  LIsDirectory: Boolean;
-  LDirPrefix: string;
+  LFindData: TWin32FindData;
+  LFindHandle: THandle;
+  LName: PChar;
+  LNameLength: Integer;
 begin
-  // Build "APath\" once so each entry below is a single concatenation rather than a
-  // TPath.Combine call (which re-checks the trailing delimiter for every entry).
-  LDirPrefix := IncludeTrailingPathDelimiter(APath);
-
-  if FindFirst(LDirPrefix + '*', faAnyFile, LSearchRec) = 0 then
+  // Entries are examined in the find-data buffer; a string is only built - in one allocation, straight from
+  // APath and the name - for a matching file or a subdirectory to walk, never for a skipped entry.
+  LFindHandle := OpenDirectoryEnumeration(APath, LFindData);
+  if LFindHandle <> INVALID_HANDLE_VALUE then
   try
     repeat
-      if (LSearchRec.Name = CURRENT_DIR) or (LSearchRec.Name = PARENT_DIR) then
-        Continue;
+      LName := @LFindData.cFileName[0];
+      LNameLength := StrLen(LName);
 
-      LIsDirectory := LSearchRec.Attr and System.SysUtils.faDirectory <> 0;
-
-      if LIsDirectory then
+      if LFindData.dwFileAttributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
       begin
-        // go recursive into subdirectories
-        if ARecursive then
-        begin
-          var LNewPath := LDirPrefix + LSearchRec.Name;
+        if IsDotDirectory(LName) then
+          Continue;
 
-          if ExcludedPathByPrefix(LNewPath) then
-            AddSkippedDirectories(LNewPath)
-          else
-            WalkThroughDirectory(LNewPath, APreCallback, ARecursive);
-        end;
+        var LSubDirectory := JoinPath(APath, LName, LNameLength, True);
+
+        if ExcludedPathByPrefix(LSubDirectory) then
+          AddSkippedDirectories(ExcludeTrailingPathDelimiter(LSubDirectory))
+        else
+          ASubDirectories.Add(LSubDirectory);
       end
-      else if MatchesAnyExtension(LSearchRec.Name) then
+      else if MatchesAnyExtension(LName, LNameLength) then
       begin
-        var LFilename := LDirPrefix + LSearchRec.Name;
+        var LFileName := JoinPath(APath, LName, LNameLength, False);
 
         // Runs on multiple worker threads, so the skipped counter must be incremented atomically.
-        if ExcludedFileNameBySuffix(LFilename) then
+        if ExcludedFileNameBySuffix(LFileName) then
           AtomicIncrement(FSkippedFilesCount)
         else
-          APreCallback(LFilename);
+          AFileFound(LFileName);
       end;
-    until FindNext(LSearchRec) <> 0;
+    until not FindNextFile(LFindHandle, LFindData);
   finally
-    FindClose(LSearchRec);
+    Winapi.Windows.FindClose(LFindHandle);
+  end;
+end;
+
+procedure TParallelFileScannerCustom.RunParallelWalk(const ADirectories: TArray<string>;
+  const AExclusions: TFileScanExclusions; const AWorkerCount: Integer;
+  const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  ; const APriority: TOTLThreadPriority = tpNormal
+{$ENDIF});
+var
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+  LTaskConfig: IOmniTaskConfig;
+{$ENDIF}
+  LRoots: TArray<string>;
+  LWorkPool: TDirectoryWorkPool;
+begin
+  FExclusions := AExclusions;
+
+  ResetCounters;
+  PrepareExclusions;
+  PrepareExtensions;
+
+  LRoots := PrepareRootDirectories(ADirectories);
+
+  if Length(LRoots) = 0 then
+    Exit;
+
+  LWorkPool := TDirectoryWorkPool.Create(LRoots);
+  try
+{$IFDEF USE_OMNI_THREAD_LIBRARY}
+    LTaskConfig := Parallel.TaskConfig;
+    LTaskConfig.SetPriority(APriority);
+
+    // A range of AWorkerCount split over NumTasks(AWorkerCount) gives each pooled task exactly one
+    // index, which doubles as the worker's slot for its private file sink.
+    Parallel
+      .&for(0, AWorkerCount - 1)
+      .TaskConfig(LTaskConfig)
+      .NumTasks(AWorkerCount)
+      .Execute(
+{$ELSE}
+    TParallel
+      .&for(0, AWorkerCount - 1,
+{$ENDIF}
+      procedure(AWorkerIndex: Integer)
+      var
+        LDirectory: string;
+        LFileFound: TDirectoryWalkProc;
+        LLocalStack: TList<string>;
+      begin
+        LFileFound := AAcquireFileSink(AWorkerIndex);
+        LLocalStack := TList<string>.Create;
+        try
+          try
+            // Take a subtree, walk it depth-first on the private stack and, after each directory, hand
+            // the shallowest pending directories to workers that ran dry; repeat until the tree is done.
+            while LWorkPool.TakeWork(LDirectory) do
+            begin
+              LLocalStack.Add(LDirectory);
+
+              while (LLocalStack.Count > 0) and not LWorkPool.Aborted do
+              begin
+                LDirectory := LLocalStack.Last;
+                LLocalStack.Delete(LLocalStack.Count - 1);
+
+                ScanDirectory(LDirectory, LFileFound, LLocalStack);
+                LWorkPool.ShareWork(LLocalStack);
+              end;
+
+              LLocalStack.Clear; // only non-empty when another worker aborted the walk
+              LWorkPool.FinishSubtree;
+            end;
+
+            // The whole walk is done: let the caller post-process this worker's share, in parallel.
+            if Assigned(AFinishWorker) and not LWorkPool.Aborted then
+              AFinishWorker(AWorkerIndex);
+          except
+            // Without this the other workers would wait forever for this one to finish its subtree.
+            LWorkPool.Abort;
+
+            raise;
+          end;
+        finally
+          LLocalStack.Free;
+        end;
+      end
+    );
+  finally
+    LWorkPool.Free;
   end;
 end;
 

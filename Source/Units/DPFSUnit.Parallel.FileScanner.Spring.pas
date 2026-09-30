@@ -6,15 +6,15 @@ interface
 
 {$IFDEF USE_SPRING4D}
 uses
-  System.Classes, System.SysUtils, System.Diagnostics, System.Generics.Collections,
+  System.Classes, System.SysUtils, System.Diagnostics,
   DPFSUnit.Parallel.FileScanner, Spring.Collections
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   , OtlTaskControl
 {$ENDIF};
 
 type
-  // Spring4D-flavoured scanner: shares the parallel walk (RunScanJobs) with the base class,
-  // then dedups + sorts natively into an IList<string> using Spring4D collections.
+  // Spring4D-flavoured scanner: shares the parallel walk (CollectFiles) with the base class and
+  // fills an IList<string> directly.
   TParallelFileScannerSpring = class(TParallelFileScannerCustom)
   public
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const AFileNamesList: IList<string>
@@ -39,41 +39,27 @@ function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<strin
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
   ; const APriority: TOTLThreadPriority = tpNormal
 {$ENDIF}): Boolean;
-const
-  MERGE_INITIAL_CAPACITY = 2000;
 var
-  LListOfFileLists: TObjectList<TStringList>;
-  LUniqueFiles: ISet<string>;
   LFileScanStopWatch: TStopwatch;
+  LMergeSorted: Boolean;
 begin
   LFileScanStopWatch := TStopwatch.StartNew;
 
-  LListOfFileLists := TObjectList<TStringList>.Create(True);
-  try
-    // Shared parallel walk (same as the RTL path); merge natively into the Spring4D list below.
-    RunScanJobs(ADirectories, AExclusions, LListOfFileLists
+  // Shared parallel walk (same as the RTL path), filled straight into AFileNamesList. The files arrive already
+  // sorted when they go into an empty list; items the caller added earlier still need the full sort below.
+  LMergeSorted := FSortResultList and (AFileNamesList.Count = 0);
+
+  AFileNamesList.AddRange(CollectFiles(ADirectories, AExclusions, LMergeSorted
 {$IFDEF USE_OMNI_THREAD_LIBRARY}
-      , APriority
-{$ENDIF});
+    , APriority
+{$ENDIF}));
 
-    // Deduplicate with a Spring4D hash set and fill AFileNamesList directly (no RTL round-trip),
-    // preserving first-seen order; sorting is applied only when SortResultList is set.
-    LUniqueFiles := TCollections.CreateSet<string>(MERGE_INITIAL_CAPACITY);
-
-    for var LList in LListOfFileLists do
-      for var LFileName in LList do
-        if LUniqueFiles.Add(LFileName) then
-          AFileNamesList.Add(LFileName);
-
-    if FSortResultList then
-      AFileNamesList.Sort(
-        function(const ALeft, ARight: string): Integer
-        begin
-          Result := CompareText(ALeft, ARight); // case-insensitive, matching the RTL variant
-        end);
-  finally
-    LListOfFileLists.Free;
-  end;
+  if FSortResultList and not LMergeSorted then
+    AFileNamesList.Sort(
+      function(const ALeft, ARight: string): Integer
+      begin
+        Result := CompareText(ALeft, ARight); // case-insensitive, matching the RTL variant
+      end);
 
   LFileScanStopWatch.Stop;
   FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
