@@ -85,7 +85,7 @@ begin
 end;
 
 // Wraps worker AWorkerIndex as an OTL task body. A function of its own so that every task captures its own index:
-// closures created in one loop all share - and so all see the last value of - the loop variable.
+// closures/anonymous methods created in one loop all share - and so all see the last value of - the loop variable.
 function CreateWorkerTaskDelegate(const AWorker: TProc<Integer>; const AWorkerIndex: Integer): TOmniTaskDelegate;
 begin
   Result :=
@@ -158,8 +158,7 @@ begin
 end;
 
 function TParallelFileScannerOTL.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer;
-  const APriority: TThreadPriority = TThreadPriority.tpNormal): Boolean;
+  const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer; const APriority: TThreadPriority = TThreadPriority.tpNormal): Boolean;
 var
   LFileScanStopWatch: TStopwatch;
   LFileCount: TGp4AlignedInt;
@@ -169,7 +168,7 @@ begin
   AFileCount := 0;
   LFileCount.Value := 0;
 
-  // Created inside the factory (not kept in a captured local) to avoid a self-referencing closure frame.
+  // Created inside the factory (not kept in a captured local) to avoid a self-referencing closure/anonymous method frame.
   RunParallelWalk(ADirectories, AExclusions, GetWorkerCount,
     function(AWorkerIndex: Integer): TDirectoryWalkProc
     begin
