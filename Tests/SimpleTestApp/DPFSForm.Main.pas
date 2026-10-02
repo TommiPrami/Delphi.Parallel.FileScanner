@@ -361,9 +361,11 @@ begin
   {$ENDIF}
 end;
 
+// A wildcard pattern rather than a path prefix: it matches the relative and the absolute paths alike (see
+// CheckBoxConvertRelativePathsToAbsolute), and wherever the folder sits.
 function TDPFSMainForm.GetExcludes: TFileScanExclusions;
 begin
-  Result.PathPrefixes := ['..\..\..\..\Source\3rdPartyLibraries\OmniThreadLibrary\'];
+  Result.Patterns := ['*\3rdPartyLibraries\OmniThreadLibrary\*'];
 end;
 
 function TDPFSMainForm.GetExtensions: TArray<string>;

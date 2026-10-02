@@ -3,8 +3,8 @@
 Get a file list in parallel.
 
 Currently more or less a one-trick pony: it collects files matching a list of
-extensions from a list of root directories. You can exclude files by path prefix
-and by filename suffix.
+search patterns from a list of root directories. You can exclude folders and files by
+wildcard pattern, by folder path prefix and by filename suffix.
 
 It walks the roots with one worker per CPU core. Each worker walks a subtree depth-first
 on its own private stack, enumerating every directory exactly once (`FindFirstFileEx` with
@@ -21,14 +21,42 @@ full sort at the end.
 
 ## Matching rules
 
+Wildcards are [Delphi.WildCardMatcher](Source/3rdPartyLibraries/Delphi.WildCardMatcher/README.md)
+patterns (`*`, `?`, `#` for a digit, `[a-z]`, `["foo"|"bar"]`), case-insensitive, with `*`
+matching across folder boundaries (DOS style). `DPFSUnit.Parallel.FileScanner` needs that
+unit on the search path; it is pure RTL.
+
+- **Search patterns** (the list given to `Create`) match file **names**. A plain `*.ext` is a
+  fast, allocation-free extension test; anything else is a wildcard, e.g. `Unit?.pas` or
+  `*["Form"|"Frame"]*.pas`. A pattern containing a path delimiter, an empty one or a
+  malformed one raises `EInOutArgumentException` when the scan starts.
+- **Exclusions** (`TFileScanExclusions`) combine: anything any of them matches is left out.
+  - `Patterns` are wildcards matched against **full paths**, e.g. `*\__history\*`,
+    `*\.git\*` or `C:\MyCode\*["3rdParty"|"ThirdParty"]\*`. A pattern ending in `*` that
+    matches a folder (its path plus `\`) prunes the whole folder from the walk; every
+    pattern is also matched against each file's full path, so `*.inc` excludes files. A
+    pattern ending in `\` names folders, as in `.gitignore`: `*\__history\` means
+    `*\__history\*`. A malformed pattern raises `EInOutArgumentException`.
+  - `PathPrefixes` exclude a folder and everything under it, by path. Whole folder names
+    only: `C:\Code\Lib` does not exclude `C:\Code\Library`.
+  - `PathSuffixes` exclude files whose full path ends with one of them.
+  - Blank entries are ignored.
 - Roots are walked once each: a root that is the same as, or inside, another root is
   dropped before the walk (case-insensitively), so overlapping roots do not produce
-  duplicate results. A nested root inside an excluded prefix is still scanned, since it
+  duplicate results. A nested root inside an excluded folder is still scanned, since it
   was asked for explicitly.
-- Extensions, path prefixes and filename suffixes are compared ordinally and
+- Search patterns, path prefixes and filename suffixes are compared ordinally and
   case-insensitively, the way the file system compares names &mdash; not by the current
   locale's rules.
 - The sorted order is `CompareText` order.
+- `SkippedFilesCount` counts the excluded files: those excluded by a pattern or suffix,
+  plus the files the search patterns match inside pruned folders (counted on demand).
+
+Wildcard exclusions cost next to nothing: the folder and file paths they are matched
+against are built by the walk anyway. Scanning `C:\git_opensource` (49k folders, 250k files)
+with five patterns (`*\.git\*`, `*\__history\*`, `*\__recovery\*`, `*\3rdParty*\*`,
+`*\ThirdParty*\*`) takes as long as with the 284 absolute folder prefixes they replace; the
+matching itself is about 20 ms of CPU per scan, spread over all workers.
 
 ## Scanner classes
 

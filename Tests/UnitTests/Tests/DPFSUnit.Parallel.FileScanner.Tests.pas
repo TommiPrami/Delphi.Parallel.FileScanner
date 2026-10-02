@@ -17,10 +17,15 @@ type
     FBaseline: TFileSet;
     FScanRoots: TArray<string>;
   strict protected
+    // The baseline files AKeep returns True for (it gets each file's lower-case full path).
+    function BaselineWhere(const AKeep: TFunc<string, Boolean>): TFileSet;
     function CreateScanner(const ASortResultList: Boolean = True): TParallelFileScannerCustom;
     function ScannerClass: TParallelFileScannerClass; virtual; abstract;
     function ScanToStringList(const AScanner: TParallelFileScannerCustom; const ARoots: TArray<string>;
       const AExclusions: TFileScanExclusions): TArray<string>;
+    // Scans the tree with AExclusions and asserts the result is AExpected (freed here).
+    procedure AssertExclusionsLeave(const AExclusions: TFileScanExclusions; const AExpected: TFileSet;
+      const AWhat: string);
     property Baseline: TFileSet read FBaseline;
     property ScanRoots: TArray<string> read FScanRoots;
   public
@@ -39,6 +44,19 @@ type
     [Test] procedure ScanFromCallbackCompletes;
     [Test] procedure WorkersRunAtRequestedPriority;
     [Test] procedure BackToBackScansPileUpNothing;
+
+    [Test] procedure PatternExcludesFolderAnywhere;
+    [Test] procedure QuotedAlternationExcludesEveryListedFolder;
+    [Test] procedure PatternWithoutTrailingStarExcludesFilesOnly;
+    [Test] procedure PruningPatternExcludesFoldersAndFiles;
+    [Test] procedure PatternEndingInDelimiterExcludesFolders;
+    [Test] procedure FolderPathMatchAloneDoesNotPrune;
+    [Test] procedure MalformedExclusionPatternRaises;
+    [Test] procedure WildcardSearchPatternMatchesFileNames;
+    [Test] procedure SearchPatternWithPathDelimiterRaises;
+    [Test] procedure PrefixExcludesWholeFoldersOnly;
+    [Test] procedure SkippedFilesCountCountsPrunedFolders;
+    [Test] procedure BlankExclusionsAreIgnored;
   end;
 
   [TestFixture]
@@ -53,6 +71,32 @@ uses
   Winapi.Windows, System.IOUtils, FastMM5;
 
 { TParallelFileScannerTestsCustom }
+
+function TParallelFileScannerTestsCustom.BaselineWhere(const AKeep: TFunc<string, Boolean>): TFileSet;
+begin
+  Result := TFileSet.Create;
+
+  for var LIndex := 0 to FBaseline.Count - 1 do
+    if AKeep(FBaseline.Files[LIndex]) then
+      Result.Add(FBaseline.Files[LIndex]);
+end;
+
+procedure TParallelFileScannerTestsCustom.AssertExclusionsLeave(const AExclusions: TFileScanExclusions;
+  const AExpected: TFileSet; const AWhat: string);
+var
+  LScanner: TParallelFileScannerCustom;
+begin
+  try
+    LScanner := CreateScanner;
+    try
+      AssertSameFiles(AExpected, ScanToStringList(LScanner, FScanRoots, AExclusions), AWhat);
+    finally
+      LScanner.Free;
+    end;
+  finally
+    AExpected.Free;
+  end;
+end;
 
 function TParallelFileScannerTestsCustom.CreateScanner(const ASortResultList: Boolean = True): TParallelFileScannerCustom;
 begin
@@ -448,6 +492,239 @@ begin
     Format('%d scans: handle count grew by %d', [SCAN_COUNT, Integer(LHandlesAfter) - Integer(LHandlesBefore)]));
   Assert.IsTrue(LAllocatedGrowthMB <= MAX_ALLOCATED_GROWTH_MB,
     Format('%d scans: allocated memory grew by %.1f MB', [SCAN_COUNT, LAllocatedGrowthMB]));
+end;
+
+// A pattern ending in '*' prunes every folder it matches, wherever it is.
+procedure TParallelFileScannerTestsCustom.PatternExcludesFolderAnywhere;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.Patterns := ['*\3rdPartyLibraries\*'];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := not AFile.Contains('\3rdpartylibraries\');
+      end),
+    'GetFileList excluding *\3rdPartyLibraries\*');
+end;
+
+// Quoted alternation: one pattern excludes folders of either name, at any depth, case-insensitively.
+procedure TParallelFileScannerTestsCustom.QuotedAlternationExcludesEveryListedFolder;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.Patterns := ['*\["FastMM5"|"SPRING4D"]\*'];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := not (AFile.Contains('\fastmm5\') or AFile.Contains('\spring4d\'));
+      end),
+    'GetFileList excluding *\["FastMM5"|"SPRING4D"]\*');
+end;
+
+// A pattern that does not end in '*' cannot prune folders, but still excludes the files it matches.
+procedure TParallelFileScannerTestsCustom.PatternWithoutTrailingStarExcludesFilesOnly;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.Patterns := ['*.inc'];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := not AFile.EndsWith('.inc');
+      end),
+    'GetFileList excluding *.inc');
+end;
+
+// '*Spring*' prunes every folder whose path contains "spring" and excludes every other file whose path does - which
+// together must be exactly the files whose path contains it: pruning never drops more than the file check would.
+procedure TParallelFileScannerTestsCustom.PruningPatternExcludesFoldersAndFiles;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.Patterns := ['*Spring*'];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := not AFile.Contains('spring');
+      end),
+    'GetFileList excluding *Spring*');
+end;
+
+// A pattern ending in a path delimiter names folders, as in .gitignore: '*\FastMM5\' means '*\FastMM5\*'.
+procedure TParallelFileScannerTestsCustom.PatternEndingInDelimiterExcludesFolders;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.Patterns := ['*\FastMM5\'];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := not AFile.Contains('\fastmm5\');
+      end),
+    'GetFileList excluding *\FastMM5\');
+end;
+
+// '*\Units?' matches the folder path "...\Units\" ('?' matching the '\') but no file under it, so the folder must not
+// be pruned: only patterns ending in '*' may prune.
+procedure TParallelFileScannerTestsCustom.FolderPathMatchAloneDoesNotPrune;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.Patterns := ['*\Units?'];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := True;
+      end),
+    'GetFileList excluding *\Units?');
+end;
+
+// A malformed pattern would silently match nothing, so it must be rejected instead.
+procedure TParallelFileScannerTestsCustom.MalformedExclusionPatternRaises;
+var
+  LExclusions: TFileScanExclusions;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExclusions.Patterns := ['*\[3rdParty\*'];
+  LScanner := CreateScanner;
+  try
+    Assert.WillRaise(
+      procedure
+      begin
+        ScanToStringList(LScanner, FScanRoots, LExclusions);
+      end,
+      EInOutArgumentException, 'An unterminated [ in an exclusion pattern must raise');
+  finally
+    LScanner.Free;
+  end;
+end;
+
+// Search patterns other than '*.ext' are WildCardMatcher wildcards on the file name.
+procedure TParallelFileScannerTestsCustom.WildcardSearchPatternMatchesFileNames;
+var
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExpected := BaselineWhere(
+    function(AFile: string): Boolean
+    begin
+      var LName := ExtractFileName(AFile);
+
+      Result := LName.EndsWith('.pas') and (LName.Contains('scanner') or LName.Contains('matcher'));
+    end);
+  try
+    Assert.IsTrue(LExpected.Count > 0, 'The tree must hold files the pattern matches');
+
+    LScanner := ScannerClass.Create(['*["Scanner"|"Matcher"]*.pas']);
+    try
+      LScanner.ConvertRelativePathsToAbsolute := True;
+
+      AssertSameFiles(LExpected, ScanToStringList(LScanner, FScanRoots, LExclusions),
+        'GetFileList with *["Scanner"|"Matcher"]*.pas');
+    finally
+      LScanner.Free;
+    end;
+  finally
+    LExpected.Free;
+  end;
+end;
+
+// Search patterns match file names only; one with a path in it could never match, so it is rejected.
+procedure TParallelFileScannerTestsCustom.SearchPatternWithPathDelimiterRaises;
+var
+  LExclusions: TFileScanExclusions;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LScanner := ScannerClass.Create(['Units\*.pas']);
+  try
+    Assert.WillRaise(
+      procedure
+      begin
+        ScanToStringList(LScanner, FScanRoots, LExclusions);
+      end,
+      EInOutArgumentException, 'A search pattern with a path delimiter must raise');
+  finally
+    LScanner.Free;
+  end;
+end;
+
+// '...\3rdPartyLibraries\FastMM' names no folder (the folder is FastMM5), so it must exclude nothing - a prefix is a
+// whole folder, not the start of any folder name.
+procedure TParallelFileScannerTestsCustom.PrefixExcludesWholeFoldersOnly;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.PathPrefixes := [TPath.Combine(FScanRoots[0], '3rdPartyLibraries\FastMM')];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := True;
+      end),
+    'GetFileList excluding the prefix ...\3rdPartyLibraries\FastMM');
+end;
+
+// SkippedFilesCount covers the files the search patterns match inside pruned folders.
+procedure TParallelFileScannerTestsCustom.SkippedFilesCountCountsPrunedFolders;
+var
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExclusions.Patterns := ['*\FastMM5\*'];
+  LExpected := BaselineWhere(
+    function(AFile: string): Boolean
+    begin
+      Result := AFile.Contains('\fastmm5\');
+    end);
+  try
+    Assert.IsTrue(LExpected.Count > 0, 'The tree must hold files in FastMM5 folders');
+
+    LScanner := CreateScanner;
+    try
+      ScanToStringList(LScanner, FScanRoots, LExclusions);
+
+      Assert.AreEqual(LExpected.Count, LScanner.SkippedFilesCount, 'SkippedFilesCount');
+    finally
+      LScanner.Free;
+    end;
+  finally
+    LExpected.Free;
+  end;
+end;
+
+// Blank entries - e.g. empty lines of a settings memo - must exclude nothing. An empty prefix or suffix used to match,
+// and so exclude, everything.
+procedure TParallelFileScannerTestsCustom.BlankExclusionsAreIgnored;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  LExclusions.PathPrefixes := [''];
+  LExclusions.PathSuffixes := ['', ' '];
+  LExclusions.Patterns := ['', '  '];
+
+  AssertExclusionsLeave(LExclusions,
+    BaselineWhere(
+      function(AFile: string): Boolean
+      begin
+        Result := True;
+      end),
+    'GetFileList with blank exclusions');
 end;
 
 { TParallelFileScannerTests }

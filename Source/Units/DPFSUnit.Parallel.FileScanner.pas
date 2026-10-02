@@ -6,7 +6,7 @@
 interface
 
 uses
-  System.Classes, System.Generics.Collections, System.IOUtils, System.SyncObjs, System.SysUtils;
+  System.Classes, System.Generics.Collections, System.IOUtils, System.SyncObjs, System.SysUtils, Delphi.WildCardMatcher;
 
 type
   TDirectoryWalkProc = reference to procedure(const AFileName: string);
@@ -16,35 +16,60 @@ type
   TFileFoundCallbackProc = TDirectoryWalkProc;
   TFileFoundCallback = procedure(const AFileName: string) of object;
 
-  TExclusionKind = (ekPathPrefixes, ekPathSuffixes);
+  TExclusionKind = (ekPathPrefixes, ekPathSuffixes, ekPatterns);
 
+  // What a scan leaves out. The three kinds combine - anything any of them matches is excluded - and all compare
+  // case-insensitively; blank entries are ignored.
+  // - PathPrefixes: folders, as paths. A prefix excludes that folder and everything under it - whole folder names
+  //   only, so 'C:\Code\Lib' does not exclude 'C:\Code\Library'.
+  // - PathSuffixes: files whose full path ends with one of them, e.g. '_Generated.pas'.
+  // - Patterns: Delphi.WildCardMatcher wildcards matched against full paths, '*' crossing folder boundaries, e.g.
+  //   '*\__history\*' or 'C:\MyCode\*["3rdParty"|"ThirdParty"]\*'. A pattern ending in '*' that matches a folder
+  //   (its path plus '\') prunes that whole folder from the walk; every pattern is also matched against each file's
+  //   full path. A pattern ending in '\' names folders, as in .gitignore: '*\__history\' means '*\__history\*'. A
+  //   malformed pattern raises EInOutArgumentException when the scan starts.
   TFileScanExclusions = record
   strict private
     FPathPrefixes: TArray<string>;
     FPathSuffixes: TArray<string>;
+    FPatterns: TArray<string>;
     function GetPathPrefixesString: string;
     function GetPathSuffixesString: string;
+    function GetPatternsString: string;
   public
     procedure InitArrayFromStrings(const AKind: TExclusionKind; const AArrayData: TStrings);
     property PathPrefixes: TArray<string> read FPathPrefixes write FPathPrefixes;
     property PathPrefixesString: string read GetPathPrefixesString;
     property PathSuffixes: TArray<string> read FPathSuffixes write FPathSuffixes;
     property PathSuffixesString: string read GetPathSuffixesString;
+    property Patterns: TArray<string> read FPatterns write FPatterns;
+    property PatternsString: string read GetPatternsString;
   end;
 
   // Base class of the scanners: pattern matching, the load-balanced parallel walk and the results - everything but
   // running the walk's workers, which is left to a descendant's ExecuteWorkers, so this unit needs nothing outside
-  // the RTL. TParallelFileScanner (below) runs them on the RTL PPL, TParallelFileScannerOTL
-  // (DPFSUnit.Parallel.FileScanner.OTL) on OmniThreadLibrary. Priorities are the RTL's TThreadPriority throughout.
+  // the RTL and Delphi.WildCardMatcher. TParallelFileScanner (below) runs them on the RTL PPL,
+  // TParallelFileScannerOTL (DPFSUnit.Parallel.FileScanner.OTL) on OmniThreadLibrary. Priorities are the RTL's
+  // TThreadPriority throughout.
+  //
+  // The extensions given at Create are include patterns matched against file NAMES (not paths): a plain '*.ext' is a
+  // fast allocation-free suffix test, anything else is a Delphi.WildCardMatcher wildcard, e.g. 'Unit?.pas' or
+  // '*["Form"|"Frame"]*.pas'. Patterns with a path delimiter, empty ones and malformed ones raise
+  // EInOutArgumentException when the scan starts.
   TParallelFileScannerCustom = class(TObject)
   strict private
     FSkippedDirectories: TStringList;
     FCachedSkippedDirectoriesFileCount: Integer;
     FConvertRelativePathsToAbsolute: Boolean;
-    FExcludedPrefixes: TArray<string>; // FExclusions.PathPrefixes without trailing delimiters (per scan)
+    FExcludedPrefixes: TArray<string>; // FExclusions.PathPrefixes with trailing delimiters: whole folders (per scan)
     FExcludedSuffixes: TArray<string>; // FExclusions.PathSuffixes (per scan)
-    FFastExtensions: TArray<string>;  // extensions (with dot, e.g. '.pas') for simple "*.ext" patterns
-    FComplexPatterns: TArray<string>; // patterns that still need full TPath.MatchesPattern
+    FExcludeMatcher: TWildCard;        // every exclusion pattern, against full file paths (per scan)
+    FHasExcludePatterns: Boolean;
+    FHasPrunePatterns: Boolean;
+    FPruneMatcher: TWildCard;          // exclusion patterns ending in '*', against folder paths + '\' (per scan)
+    FFastExtensions: TArray<string>;   // extensions (with dot, e.g. '.pas') for simple "*.ext" patterns
+    FComplexPatterns: TArray<string>;  // include patterns WildCardMatcher matches against the file name
+    FComplexMatcher: TWildCard;        // FComplexPatterns, compiled (per scan)
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     function GetSkippedFilesCount: Integer;
     procedure AddSkippedDirectories(const APath: string);
@@ -59,8 +84,10 @@ type
     // ASort is set - each worker sorts its own share in parallel, then the shares are merged.
     function CollectFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const ASort: Boolean;
       const APriority: TThreadPriority): TArray<string>;
-    function ExcludedFileNameBySuffix(const AFileName: string): Boolean;
-    function ExcludedPathByPrefix(const APath: string): Boolean;
+    // True when the folder APath (ending in a path delimiter) is excluded by a prefix or a pruning pattern.
+    function ExcludedDirectory(const APath: string): Boolean;
+    // True when the file AFileName (a full path) is excluded by a suffix or a pattern.
+    function ExcludedFile(const AFileName: string): Boolean;
     // Workers per walk: one per core. Workers that find nothing to do just wait for a hand-off, so using every
     // core costs little.
     function GetWorkerCount: Integer; virtual;
@@ -370,16 +397,24 @@ begin
   Result := Result.Join(';', FPathSuffixes);
 end;
 
+function TFileScanExclusions.GetPatternsString: string;
+begin
+  Result := Result.Join(';', FPatterns);
+end;
+
 procedure TFileScanExclusions.InitArrayFromStrings(const AKind: TExclusionKind; const AArrayData: TStrings);
 begin
   case AKind of
     ekPathPrefixes: InitArrayDataFromStrings(FPathPrefixes, AArrayData);
     ekPathSuffixes: InitArrayDataFromStrings(FPathSuffixes, AArrayData);
+    ekPatterns: InitArrayDataFromStrings(FPatterns, AArrayData);
   end;
 end;
 
 { TParallelFileScannerCustom }
 
+// APath ends in a path delimiter, as do the folders already listed, so a folder is only ever found inside a whole
+// listed folder, never inside a sibling whose name merely starts the same.
 procedure TParallelFileScannerCustom.AddSkippedDirectories(const APath: string);
 begin
   // Called from ScanDirectory, which runs on multiple worker threads, so
@@ -388,7 +423,7 @@ begin
   try
     for var LIndex := 0 to FSkippedDirectories.Count - 1 do
     begin
-      if APath.StartsWith(FSkippedDirectories[LIndex]) then
+      if StartsTextOrdinal(FSkippedDirectories[LIndex], APath) then
         Exit;
     end;
 
@@ -402,7 +437,7 @@ end;
 function TParallelFileScannerCustom.PrepareRootDirectories(const ADirectories: TArray<string>): TArray<string>;
 
   // True when another root already covers root AIndex: the same directory given again (the first spelling
-  // is kept), or an ancestor whose walk reaches it - i.e. unless it is under an excluded prefix, in which
+  // is kept), or an ancestor whose walk reaches it - i.e. unless it lies in an excluded folder, in which
   // case the ancestor's walk skips it and it stays a root of its own, as before.
   function IsCoveredRoot(const ARoots: TList<string>; const AIndex: Integer): Boolean;
   begin
@@ -414,7 +449,7 @@ function TParallelFileScannerCustom.PrepareRootDirectories(const ADirectories: T
           if LOtherIndex < AIndex then
             Exit(True);
         end
-        else if not ExcludedPathByPrefix(ARoots[AIndex]) then
+        else if not ExcludedDirectory(ARoots[AIndex]) then
           Exit(True);
       end;
 
@@ -454,21 +489,62 @@ begin
 end;
 
 procedure TParallelFileScannerCustom.PrepareExclusions;
+
+  function NonBlank(const AValues: TArray<string>): TArray<string>;
+  begin
+    Result := [];
+
+    for var LIndex := 0 to High(AValues) do
+      if Trim(AValues[LIndex]) <> '' then
+        Result := Result + [AValues[LIndex]];
+  end;
+
+var
+  LErrorMessage: string;
+  LPatterns: TArray<string>;
+  LPrunePatterns: TArray<string>;
 begin
-  // Normalised once per scan, so the per-directory checks neither allocate nor re-normalise. Prefixes are
-  // compared without a trailing delimiter, as before.
-  SetLength(FExcludedPrefixes, Length(FExclusions.PathPrefixes));
+  // Normalised once per scan, so the per-directory checks neither allocate nor re-normalise. Blank entries are
+  // dropped: an empty prefix or suffix would otherwise match - and exclude - everything. Prefixes get a trailing
+  // delimiter, so they match whole folder names only, like the folder paths they are compared with.
+  FExcludedPrefixes := NonBlank(FExclusions.PathPrefixes);
 
   for var LIndex := 0 to High(FExcludedPrefixes) do
-    FExcludedPrefixes[LIndex] := ExcludeTrailingPathDelimiter(FExclusions.PathPrefixes[LIndex]);
+    FExcludedPrefixes[LIndex] := IncludeTrailingPathDelimiter(FExcludedPrefixes[LIndex]);
 
-  FExcludedSuffixes := Copy(FExclusions.PathSuffixes);
+  FExcludedSuffixes := NonBlank(FExclusions.PathSuffixes);
+
+  LPatterns := NonBlank(FExclusions.Patterns);
+  LPrunePatterns := [];
+
+  for var LIndex := 0 to High(LPatterns) do
+  begin
+    // A pattern ending in a path delimiter names folders, as in .gitignore: 'C:\Code\3rdParty\' is read as
+    // 'C:\Code\3rdParty\*'. Taken literally it could never match a file path, and would exclude nothing.
+    if LPatterns[LIndex].EndsWith('\') or LPatterns[LIndex].EndsWith('/') then
+      LPatterns[LIndex] := LPatterns[LIndex] + '*';
+
+    // A malformed pattern would silently match nothing - and so exclude nothing.
+    if not TWildCard.ValidatePattern(LPatterns[LIndex], LErrorMessage) then
+      raise EInOutArgumentException.CreateFmt('Exclusion pattern ''%s'': %s', [LPatterns[LIndex], LErrorMessage]);
+
+    // A pattern ending in '*' that matches "Folder\" matches every path under it as well, so it may prune the walk
+    // at that folder. Any other pattern only says something about files.
+    if LPatterns[LIndex].EndsWith('*') then
+      LPrunePatterns := LPrunePatterns + [LPatterns[LIndex]];
+  end;
+
+  FExcludeMatcher := TWildCard.Create(LPatterns);
+  FHasExcludePatterns := Length(LPatterns) > 0;
+  FPruneMatcher := TWildCard.Create(LPrunePatterns);
+  FHasPrunePatterns := Length(LPrunePatterns) > 0;
 end;
 
 procedure TParallelFileScannerCustom.PrepareExtensions;
 var
-  LFast: TList<string>;
   LComplex: TList<string>;
+  LErrorMessage: string;
+  LFast: TList<string>;
 begin
   LFast := TList<string>.Create;
   LComplex := TList<string>.Create;
@@ -479,16 +555,19 @@ begin
 
       if Trim(LPattern) = '' then
         raise EInOutArgumentException.Create('Empty search pattern')
-      else if not TPath.HasValidFileNameChars(LPattern, True) then
-        raise EInOutArgumentException.Create('Search pattern has invalid characters');
+      else if LPattern.IndexOfAny(['\', '/']) >= 0 then
+        raise EInOutArgumentException.CreateFmt('Search pattern ''%s'': search patterns match file names, so they '
+          + 'cannot contain a path delimiter - exclude by path with TFileScanExclusions', [LPattern])
+      else if not TWildCard.ValidatePattern(LPattern, LErrorMessage) then
+        raise EInOutArgumentException.CreateFmt('Search pattern ''%s'': %s', [LPattern, LErrorMessage]);
 
       // A plain "*.ext" pattern (no further wildcards) can be matched with a fast, allocation-free
-      // extension compare instead of TPath.MatchesPattern, which would run once per file scanned.
+      // extension compare instead of the wildcard matcher, which would need the name as a string.
       if LPattern.StartsWith('*.') then
       begin
         var LExtension := LPattern.Substring(1); // ".ext" from "*.ext"
 
-        if (Length(LExtension) > 1) and (LExtension.IndexOfAny(['*', '?']) < 0) then
+        if (Length(LExtension) > 1) and (LExtension.IndexOfAny(['*', '?', '#', '[']) < 0) then
           LFast.Add(LExtension)
         else
           LComplex.Add(LPattern);
@@ -499,6 +578,7 @@ begin
 
     FFastExtensions := LFast.ToArray;
     FComplexPatterns := LComplex.ToArray;
+    FComplexMatcher := TWildCard.Create(FComplexPatterns);
   finally
     LComplex.Free;
     LFast.Free;
@@ -532,31 +612,33 @@ begin
   FCachedSkippedDirectoriesFileCount := 0;
 end;
 
-// Called once per subdirectory from every worker thread. The prefix arrays are indexed rather than walked
-// with for..in, which would copy each shared string and bump its reference count from all threads at once.
-function TParallelFileScannerCustom.ExcludedPathByPrefix(const APath: string): Boolean;
+// Called once per subdirectory from every worker thread, on the path the walk builds anyway (ending in a path
+// delimiter) - no allocation. The prefix arrays are indexed rather than walked with for..in, which would copy each
+// shared string and bump its reference count from all threads at once.
+function TParallelFileScannerCustom.ExcludedDirectory(const APath: string): Boolean;
 begin
   for var LIndex := 0 to High(FExcludedPrefixes) do
     if StartsTextOrdinal(FExcludedPrefixes[LIndex], APath) then
       Exit(True);
 
-  Result := False;
+  Result := FHasPrunePatterns and FPruneMatcher.Match(APath);
 end;
 
-function TParallelFileScannerCustom.ExcludedFileNameBySuffix(const AFileName: string): Boolean;
+// Called for every file that passed the search patterns, on its full path, which is built for it anyway.
+function TParallelFileScannerCustom.ExcludedFile(const AFileName: string): Boolean;
 begin
   for var LIndex := 0 to High(FExcludedSuffixes) do
     if EndsTextOrdinal(FExcludedSuffixes[LIndex], AFileName) then
       Exit(True);
 
-  Result := False;
+  Result := FHasExcludePatterns and FExcludeMatcher.Match(AFileName);
 end;
 
 // Called for every file entry of every directory, on the raw name in the find-data buffer (no string yet).
 function TParallelFileScannerCustom.MatchesAnyExtension(const AFileName: PChar; const AFileNameLength: Integer): Boolean;
 begin
   // Fast path: a plain "*.ext" pattern is an ordinal case-insensitive suffix test on the name buffer, no
-  // allocation. Indexed rather than for..in for the same reason as ExcludedPathByPrefix.
+  // allocation. Indexed rather than for..in for the same reason as ExcludedDirectory.
   for var LIndex := 0 to High(FFastExtensions) do
   begin
     var LLength := Length(FFastExtensions[LIndex]);
@@ -572,28 +654,26 @@ begin
 
     SetString(LFileName, AFileName, AFileNameLength);
 
-    for var LIndex := 0 to High(FComplexPatterns) do
-      if TPath.MatchesPattern(LFileName, FComplexPatterns[LIndex], False) then
-        Exit(True);
+    if FComplexMatcher.Match(LFileName) then
+      Exit(True);
   end;
 
   Result := False;
 end;
 
+// Counts the files the search patterns match in the skipped folders - each file once, by the scan's own matching.
 function TParallelFileScannerCustom.GetFileCounts(const ASkippedDirectories: TStringList): Integer;
-var
-  LCurrentDir: string;
 begin
   Result := 0;
 
   for var LDirectoryIndex := 0 to ASkippedDirectories.Count - 1 do
-  begin
-    LCurrentDir := ASkippedDirectories[LDirectoryIndex];
+    for var LFile in TDirectory.GetFiles(ASkippedDirectories[LDirectoryIndex], '*', TSearchOption.soAllDirectories) do
+    begin
+      var LName := ExtractFileName(LFile);
 
-    if not LCurrentDir.Trim.IsEmpty then
-      for var LExtensionIndex := 0 to FExtensions.Count - 1 do
-        Inc(Result, Length(TDirectory.GetFiles(LCurrentDir, FExtensions[LExtensionIndex], TSearchOption.soAllDirectories)));
-  end;
+      if MatchesAnyExtension(PChar(LName), Length(LName)) then
+        Inc(Result);
+    end;
 end;
 
 function ComparePathsCI(AList: TStringList; AIndex1, AIndex2: Integer): Integer;
@@ -893,8 +973,8 @@ begin
 
         var LSubDirectory := JoinPath(APath, LName, LNameLength, True);
 
-        if ExcludedPathByPrefix(LSubDirectory) then
-          AddSkippedDirectories(ExcludeTrailingPathDelimiter(LSubDirectory))
+        if ExcludedDirectory(LSubDirectory) then
+          AddSkippedDirectories(LSubDirectory)
         else
           ASubDirectories.Add(LSubDirectory);
       end
@@ -903,7 +983,7 @@ begin
         var LFileName := JoinPath(APath, LName, LNameLength, False);
 
         // Runs on multiple worker threads, so the skipped counter must be incremented atomically.
-        if ExcludedFileNameBySuffix(LFileName) then
+        if ExcludedFile(LFileName) then
           AtomicIncrement(FSkippedFilesCount)
         else
           AFileFound(LFileName);
