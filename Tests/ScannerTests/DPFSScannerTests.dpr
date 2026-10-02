@@ -135,4 +135,12 @@ begin
   end;
 
   ExitCode := Ord(GFailures <> 0);
+
+  {$IF DEFINED(DEBUG)}
+  Writeln('Press [enter] to continue');
+
+  ReadLn;
+  {$IFEND}
+
+
 end.
