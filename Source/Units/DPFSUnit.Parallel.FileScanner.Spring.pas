@@ -1,8 +1,5 @@
 ﻿unit DPFSUnit.Parallel.FileScanner.Spring;
 
-// Windows only, like DPFSUnit.Parallel.FileScanner, so TThreadPriority being Windows-specific is fine.
-{$WARN SYMBOL_PLATFORM OFF}
-
 interface
 
 {$INCLUDE DPFSUnit.Parallel.FileScanner.inc}
@@ -18,9 +15,9 @@ type
   TParallelFileScannerSpring = class(TParallelFileScanner)
   public
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean; overload;
+      const AFileNamesList: IList<string>): Boolean; overload;
     function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-      const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean; overload;
+      const AFileNamesList: IList<string>): Boolean; overload;
   end;
 {$ENDIF}
 
@@ -31,7 +28,7 @@ implementation
 { TParallelFileScannerSpring }
 
 function TParallelFileScannerSpring.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean;
+  const AFileNamesList: IList<string>): Boolean;
 var
   LFileScanStopWatch: TStopwatch;
   LMergeSorted: Boolean;
@@ -42,7 +39,7 @@ begin
   // sorted when they go into an empty list; items the caller added earlier still need the full sort below.
   LMergeSorted := FSortResultList and (AFileNamesList.Count = 0);
 
-  AFileNamesList.AddRange(CollectFiles(ADirectories, AExclusions, LMergeSorted, APriority));
+  AFileNamesList.AddRange(CollectFiles(ADirectories, AExclusions, LMergeSorted));
 
   if FSortResultList and not LMergeSorted then
     AFileNamesList.Sort(
@@ -58,9 +55,9 @@ begin
 end;
 
 function TParallelFileScannerSpring.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: IList<string>; const APriority: TThreadPriority = tpNormal): Boolean;
+  const AFileNamesList: IList<string>): Boolean;
 begin
-  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList, APriority);
+  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList);
 end;
 
 {$ENDIF}

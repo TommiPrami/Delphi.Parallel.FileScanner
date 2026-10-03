@@ -26,7 +26,8 @@ uses
   DPFSUnit.Parallel.FileScanner.Tests.Common in 'Tests\DPFSUnit.Parallel.FileScanner.Tests.Common.pas',
   DPFSUnit.Parallel.FileScanner.Tests in 'Tests\DPFSUnit.Parallel.FileScanner.Tests.pas',
   DPFSUnit.Parallel.FileScanner.OTL.Tests in 'Tests\DPFSUnit.Parallel.FileScanner.OTL.Tests.pas',
-  DPFSUnit.Parallel.FileScanner.Spring.Tests in 'Tests\DPFSUnit.Parallel.FileScanner.Spring.Tests.pas';
+  DPFSUnit.Parallel.FileScanner.Spring.Tests in 'Tests\DPFSUnit.Parallel.FileScanner.Spring.Tests.pas',
+  DPFSUnit.Parallel.FileScanner.Workers.Tests in 'Tests\DPFSUnit.Parallel.FileScanner.Workers.Tests.pas';
 
 { keep comment here to protect the following conditional from being removed by the IDE when adding a unit }
 {$IFNDEF TESTINSIGHT}

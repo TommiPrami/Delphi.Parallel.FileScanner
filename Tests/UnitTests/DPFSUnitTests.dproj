@@ -105,6 +105,7 @@
         <DCCReference Include="Tests\DPFSUnit.Parallel.FileScanner.Tests.pas"/>
         <DCCReference Include="Tests\DPFSUnit.Parallel.FileScanner.OTL.Tests.pas"/>
         <DCCReference Include="Tests\DPFSUnit.Parallel.FileScanner.Spring.Tests.pas"/>
+        <DCCReference Include="Tests\DPFSUnit.Parallel.FileScanner.Workers.Tests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

@@ -43,6 +43,7 @@ type
     [Test] procedure WorkerExceptionReachesCaller;
     [Test] procedure ScanFromCallbackCompletes;
     [Test] procedure WorkersRunAtRequestedPriority;
+    [Test] procedure WorkersLeaveBorrowedThreadsAsFound;
     [Test] procedure BackToBackScansPileUpNothing;
 
     [Test] procedure PatternExcludesFolderAnywhere;
@@ -57,6 +58,9 @@ type
     [Test] procedure PrefixExcludesWholeFoldersOnly;
     [Test] procedure SkippedFilesCountCountsPrunedFolders;
     [Test] procedure BlankExclusionsAreIgnored;
+
+    [Test] procedure WorkersCountLimitsWorkerThreads;
+    [Test] procedure MoreWorkersThanCoresScanCorrectly;
   end;
 
   [TestFixture]
@@ -68,7 +72,7 @@ type
 implementation
 
 uses
-  Winapi.Windows, System.IOUtils, FastMM5;
+  Winapi.Windows, System.Generics.Collections, System.IOUtils, System.Threading, FastMM5;
 
 { TParallelFileScannerTestsCustom }
 
@@ -100,7 +104,7 @@ end;
 
 function TParallelFileScannerTestsCustom.CreateScanner(const ASortResultList: Boolean = True): TParallelFileScannerCustom;
 begin
-  Result := ScannerClass.Create(TScanTree.Extensions, ASortResultList);
+  Result := ScannerClass.Create(TScanTree.Extensions, nil, ASortResultList);
   Result.ConvertRelativePathsToAbsolute := True;
 end;
 
@@ -419,41 +423,104 @@ begin
   end;
 end;
 
-// The workers must run at the priority asked for - and at normal priority again in the next scan, as pool threads
-// are reused.
+// The workers must run at Workers.Priority. Pool threads are reused, so a scan after a tpLower one must run at normal
+// priority again: with Workers.Priority tpNormal, and without Workers.
 procedure TParallelFileScannerTestsCustom.WorkersRunAtRequestedPriority;
+
+  // Scans with AScanner and asserts every file was found on a thread at AExpectedPriority.
+  procedure AssertScanPriority(const AScanner: TParallelFileScannerCustom; const AExpectedPriority: Integer;
+    const AWhat: string);
+  var
+    LExclusions: TFileScanExclusions;
+    LFileCount: Integer;
+    LWrongPriorityCount: Integer;
+  begin
+    LFileCount := 0;
+    LWrongPriorityCount := 0;
+
+    AScanner.ScanFiles(FScanRoots, LExclusions,
+      procedure(const AFileName: string)
+      begin
+        if GetThreadPriority(GetCurrentThread) <> AExpectedPriority then
+          AtomicIncrement(LWrongPriorityCount);
+      end,
+      LFileCount);
+
+    Assert.IsTrue(LFileCount > 0, AWhat + ': the scan must find files');
+    Assert.AreEqual(0, LWrongPriorityCount, AWhat + ': files found on a thread at another priority');
+  end;
+
+var
+  LScanner: TParallelFileScannerCustom;
+  LUnsetScanner: TParallelFileScannerCustom;
+begin
+  LScanner := ScannerClass.Create(TScanTree.Extensions, TFileScanWorkers.Create);
+  LUnsetScanner := ScannerClass.Create(TScanTree.Extensions, nil);
+  try
+    LScanner.Workers.Priority := TThreadPriority.tpLower;
+    AssertScanPriority(LScanner, THREAD_PRIORITY_BELOW_NORMAL, 'Workers.Priority tpLower');
+
+    AssertScanPriority(LUnsetScanner, THREAD_PRIORITY_NORMAL, 'no Workers, after a tpLower scan');
+
+    AssertScanPriority(LScanner, THREAD_PRIORITY_BELOW_NORMAL, 'Workers.Priority tpLower again');
+
+    LScanner.Workers.Priority := TThreadPriority.tpNormal;
+    AssertScanPriority(LScanner, THREAD_PRIORITY_NORMAL, 'Workers.Priority tpNormal, after a tpLower scan');
+  finally
+    LUnsetScanner.Free;
+    LScanner.Free;
+  end;
+end;
+
+// A scan at another priority must leave the threads it borrows as it found them: TParallelFileScanner's workers run
+// on the process-wide RTL thread pool, so anyone's next TParallel.For must find those threads at their own priority.
+// (A scan resets the priority itself, so WorkersRunAtRequestedPriority cannot tell.)
+procedure TParallelFileScannerTestsCustom.WorkersLeaveBorrowedThreadsAsFound;
 const
-  PRIORITIES: array[0..1] of TThreadPriority = (TThreadPriority.tpLower, TThreadPriority.tpNormal);
-  PRIORITY_NAMES: array[0..1] of string = ('tpLower', 'tpNormal');
-  WINDOWS_PRIORITIES: array[0..1] of Integer = (THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_NORMAL);
+  // Enough short iterations that the pool spreads them over its threads - the ones the scan used among them.
+  ITERATIONS_PER_CORE = 8;
 var
   LExclusions: TFileScanExclusions;
-  LExpectedPriority: Integer;
   LFileCount: Integer;
   LScanner: TParallelFileScannerCustom;
+  LThreads: TDictionary<TThreadID, Boolean>;
   LWrongPriorityCount: Integer;
 begin
-  LScanner := CreateScanner;
+  LScanner := ScannerClass.Create(TScanTree.Extensions, TFileScanWorkers.Create);
   try
-    for var LIndex := 0 to High(PRIORITIES) do
-    begin
-      LExpectedPriority := WINDOWS_PRIORITIES[LIndex];
-      LFileCount := 0;
-      LWrongPriorityCount := 0;
-
-      LScanner.ScanFiles(FScanRoots, LExclusions,
-        procedure(const AFileName: string)
-        begin
-          if GetThreadPriority(GetCurrentThread) <> LExpectedPriority then
-            AtomicIncrement(LWrongPriorityCount);
-        end,
-        LFileCount, PRIORITIES[LIndex]);
-
-      Assert.IsTrue(LFileCount > 0, PRIORITY_NAMES[LIndex] + ': the scan must find files');
-      Assert.AreEqual(0, LWrongPriorityCount, PRIORITY_NAMES[LIndex] + ': files found on a thread at another priority');
-    end;
+    LScanner.Workers.Priority := TThreadPriority.tpLower;
+    LFileCount := 0;
+    LScanner.ScanFiles(FScanRoots, LExclusions, procedure(const AFileName: string) begin end, LFileCount);
+    Assert.IsTrue(LFileCount > 0, 'the scan must find files');
   finally
     LScanner.Free;
+  end;
+
+  Assert.AreEqual(THREAD_PRIORITY_NORMAL, GetThreadPriority(GetCurrentThread), 'the calling thread after the scan');
+
+  LWrongPriorityCount := 0;
+  LThreads := TDictionary<TThreadID, Boolean>.Create;
+  try
+    TParallel.&For(0, ITERATIONS_PER_CORE * TFileScanWorkers.CoreCount - 1,
+      procedure(AIndex: Integer)
+      begin
+        if GetThreadPriority(GetCurrentThread) <> THREAD_PRIORITY_NORMAL then
+          AtomicIncrement(LWrongPriorityCount);
+
+        TMonitor.Enter(LThreads);
+        try
+          LThreads.AddOrSetValue(TThread.Current.ThreadID, True);
+        finally
+          TMonitor.Exit(LThreads);
+        end;
+
+        Sleep(2);
+      end);
+
+    Assert.IsTrue((LThreads.Count > 1) or (TFileScanWorkers.CoreCount = 1), 'the iterations must spread over threads');
+    Assert.AreEqual(0, LWrongPriorityCount, 'TParallel.For iterations on a thread left at another priority');
+  finally
+    LThreads.Free;
   end;
 end;
 
@@ -629,7 +696,7 @@ begin
   try
     Assert.IsTrue(LExpected.Count > 0, 'The tree must hold files the pattern matches');
 
-    LScanner := ScannerClass.Create(['*["Scanner"|"Matcher"]*.pas']);
+    LScanner := ScannerClass.Create(['*["Scanner"|"Matcher"]*.pas'], nil);
     try
       LScanner.ConvertRelativePathsToAbsolute := True;
 
@@ -649,7 +716,7 @@ var
   LExclusions: TFileScanExclusions;
   LScanner: TParallelFileScannerCustom;
 begin
-  LScanner := ScannerClass.Create(['Units\*.pas']);
+  LScanner := ScannerClass.Create(['Units\*.pas'], nil);
   try
     Assert.WillRaise(
       procedure
@@ -725,6 +792,80 @@ begin
         Result := True;
       end),
     'GetFileList with blank exclusions');
+end;
+
+// With Workers.Count N a scan runs at most N workers - so its files arrive on at most N threads - and still finds every
+// file: with 1 worker and with 2.
+procedure TParallelFileScannerTestsCustom.WorkersCountLimitsWorkerThreads;
+var
+  LExclusions: TFileScanExclusions;
+  LFileCount: Integer;
+  LFiles: TStringList;
+  LScanner: TParallelFileScannerCustom;
+  LThreadIds: TList<Cardinal>;
+  LWorkers: TFileScanWorkers;
+begin
+  LFiles := TStringList.Create;
+  LThreadIds := TList<Cardinal>.Create;
+  try
+    for var LCount := 1 to 2 do
+    begin
+      LFiles.Clear;
+      LThreadIds.Clear;
+      LWorkers := TFileScanWorkers.Create;
+      LWorkers.Initialize(LCount, LCount);
+      LScanner := ScannerClass.Create(TScanTree.Extensions, LWorkers);
+      try
+        LScanner.ConvertRelativePathsToAbsolute := True;
+        LFileCount := 0;
+
+        LScanner.ScanFiles(FScanRoots, LExclusions,
+          procedure(const AFileName: string)
+          begin
+            TMonitor.Enter(LFiles);
+            try
+              LFiles.Add(AFileName);
+
+              if not LThreadIds.Contains(GetCurrentThreadId) then
+                LThreadIds.Add(GetCurrentThreadId);
+            finally
+              TMonitor.Exit(LFiles);
+            end;
+          end,
+          LFileCount);
+      finally
+        LScanner.Free;
+      end;
+
+      Assert.IsTrue(LThreadIds.Count <= LCount, Format('%d worker(s): files arrived on %d threads',
+        [LCount, LThreadIds.Count]));
+      AssertSameFiles(FBaseline, LFiles.ToStringArray, Format('ScanFiles with %d worker(s)', [LCount]));
+    end;
+  finally
+    LThreadIds.Free;
+    LFiles.Free;
+  end;
+end;
+
+// More workers than cores, e.g. for slow network drives: the scan must still find every file (TParallelFileScannerOTL
+// grows its pool for them).
+procedure TParallelFileScannerTestsCustom.MoreWorkersThanCoresScanCorrectly;
+var
+  LExclusions: TFileScanExclusions;
+  LScanner: TParallelFileScannerCustom;
+  LWorkers: TFileScanWorkers;
+begin
+  LWorkers := TFileScanWorkers.Create;
+  LWorkers.Initialize(TFileScanWorkers.CoreCount + 4, TFileScanWorkers.CoreCount + 4);
+  LScanner := ScannerClass.Create(TScanTree.Extensions, LWorkers);
+  try
+    LScanner.ConvertRelativePathsToAbsolute := True;
+
+    AssertSameFiles(FBaseline, ScanToStringList(LScanner, FScanRoots, LExclusions),
+      Format('GetFileList with %d workers', [LWorkers.Count]));
+  finally
+    LScanner.Free;
+  end;
 end;
 
 { TParallelFileScannerTests }

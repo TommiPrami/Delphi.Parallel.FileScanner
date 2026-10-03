@@ -64,8 +64,8 @@ All of them share `TParallelFileScannerCustom` (in `DPFSUnit.Parallel.FileScanne
 does all the work &mdash; matching, the walk, sorting &mdash; and has the common API:
 `GetFileList` into a `TStringList`, and the streaming `ScanFiles` callbacks. Only running
 the walk's workers is left to the descendant, so code can be written against
-`TParallelFileScannerCustom` whatever the threading library. Worker priorities are the
-RTL's `TThreadPriority`.
+`TParallelFileScannerCustom` whatever the threading library. The workers' priority
+(`TFileScanWorkers.Priority`, see below) is the RTL's `TThreadPriority`.
 
 | Class | Unit | Workers run on | Needs | Extra results |
 | --- | --- | --- | --- | --- |
@@ -82,13 +82,44 @@ With OmniThreadLibrary the workers are pooled tasks that each call owns and rele
 itself (not `Parallel.For`, whose Unobserved tasks are only released once the calling
 thread processes their termination messages), so scanning needs no message loop: a
 console app, a service, a worker thread or a loop of back-to-back scans is fine. They run
-in the scanner's own pool of at most one thread per core (at most 56), so back-to-back
-scans reuse the same threads, and a scan started from inside a `ScanFiles` callback runs
-on that callback's thread. `TParallelFileScannerOTL.ToOTLThreadPriority` converts the
+in the scanners' own pool, with as many threads as the largest scan so far has workers
+(one per core by default, never more than 56), so back-to-back scans reuse the same
+threads, and a scan started from inside a `ScanFiles` callback runs on that callback's
+thread. `TParallelFileScannerOTL.ToOTLThreadPriority` converts the
 priority; OTL has no time-critical level, so `tpTimeCritical` becomes OTL's `tpHighest`.
 
 With every scanner class an exception in a worker, e.g. one raised by a `ScanFiles`
 callback, is raised in the caller.
+
+## Workers: count and priority
+
+Every scanner's constructor takes a `TFileScanWorkers` &mdash; deliberately not a default
+parameter, so the choice is made at every `Create`. `nil` means one worker per core at
+normal priority; an instance sets `Count`, kept within `MinCount..MaxCount` (by default
+1..`CoreCount`), and `Priority` (by default `tpNormal`). The scanner owns the instance and
+frees it, so give every scanner its own. Changes made through the scanner's `Workers`
+property apply from the next scan on.
+
+```pascal
+LWorkers := TFileScanWorkers.Create;
+LWorkers.InitializePercentage(50, -1, 2); // half the cores, but at least 2
+LWorkers.Priority := TThreadPriority.tpLower; // a background scan
+LScanner := TParallelFileScannerOTL.Create(['*.pas'], LWorkers); // owns LWorkers from here on
+```
+
+- `Initialize(ADesiredCount, AMaxCount = -1, AMinCount = -1)` sets the limits (-1 = the
+  default: `CoreCount` / 1) and then `Count` within them: with limits 2..6, asking for 1 or
+  42 gives 2 or 6.
+- `InitializePercentage(APercentage, AMaxCount = -1, AMinCount = -1)` does the same with a
+  percentage of `CoreCount`, rounded. Over 100 is allowed &mdash; more workers than cores,
+  e.g. for slow network drives &mdash; when `AMaxCount` allows it.
+- An explicit limit beats a default one: `InitializePercentage(66.666, -1, 4)` allows 4
+  workers on a 2-core computer. Limits below 1, an explicit minimum above an explicit
+  maximum and a percentage of 0 or less raise.
+- `TParallelFileScannerOTL` never runs more than 56 workers (see above).
+- `Priority` is the workers' thread priority during a scan. Pool threads are reused, so
+  the RTL scanners set it on each worker for the scan and put the thread's own priority
+  back afterwards; OTL tasks get it through `ToOTLThreadPriority`.
 
 ## Memory manager
 
@@ -102,10 +133,12 @@ stalls to a scan; FastMM5 (used by the demo app, first unit in its `.dpr`) does 
 tests run on every scanner class (`TParallelFileScanner`, `TParallelFileScannerOTL`): every
 result API returns the same file set as a straightforward flat enumeration of this
 repository's `Source` tree, prefix exclusion keeps excluded subtrees out, overlapping roots
-give no duplicates, sorted results are in `CompareText` order, the workers run at the
-requested priority, a worker's exception reaches the caller, a scan from inside a callback
-works, and back-to-back scans pile up no handles or memory. Then the OTL value queue, the
-priority conversion and the Spring4D `IList<string>` are tested.
+give no duplicates, sorted results are in `CompareText` order, the workers run at
+`Workers.Priority` and never on more threads than the worker count, a worker's exception
+reaches the caller, a scan from inside a callback works, and back-to-back scans pile up no
+handles or memory. Then the OTL value queue, the priority conversion, the Spring4D
+`IList<string>` and `TFileScanWorkers` itself (defaults, limits, the `Initialize` helpers,
+the scanner owning it) are tested.
 
 | Configuration | Runs the tests with |
 | --- | --- |

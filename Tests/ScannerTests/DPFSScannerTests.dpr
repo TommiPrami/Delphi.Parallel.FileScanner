@@ -87,7 +87,7 @@ var
 begin
   LLimit := AThreadsAtStart + Min(TThread.ProcessorCount, 56) + THREAD_MARGIN;
   LMaxThreads := ThreadCount;
-  LScanner := TParallelFileScannerOTL.Create(['*.pas', '*.inc', '*.dfm', '*.dpr', '*.dproj'], False);
+  LScanner := TParallelFileScannerOTL.Create(['*.pas', '*.inc', '*.dfm', '*.dpr', '*.dproj'], nil, False);
   LList := TStringList.Create;
   try
     for var LIndex := 1 to SCAN_COUNT do

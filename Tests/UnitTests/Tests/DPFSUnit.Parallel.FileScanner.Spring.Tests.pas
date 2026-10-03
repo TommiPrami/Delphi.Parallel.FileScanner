@@ -40,7 +40,7 @@ var
   LList: IList<string>;
   LScanner: TParallelFileScannerSpring;
 begin
-  LScanner := TParallelFileScannerSpring.Create(TScanTree.Extensions);
+  LScanner := TParallelFileScannerSpring.Create(TScanTree.Extensions, nil);
   try
     LScanner.ConvertRelativePathsToAbsolute := True;
     LList := TCollections.CreateList<string>;

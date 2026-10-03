@@ -46,6 +46,42 @@ type
     property PatternsString: string read GetPatternsString;
   end;
 
+  // How a scan's workers - parallel tasks - run: how many (Count, always within MinCount..MaxCount) and at what
+  // thread priority. Given to a scanner's constructor, which owns and frees it, so give every scanner an instance of
+  // its own; nil means one worker per core at normal priority. Defaults: MinCount 1, MaxCount and Count CoreCount,
+  // Priority tpNormal. (TParallelFileScannerOTL never runs more than 56 workers.)
+  TFileScanWorkers = class(TObject)
+  strict private
+    FCount: Integer;
+    FMaxCount: Integer;
+    FMinCount: Integer;
+    FPriority: TThreadPriority;
+    procedure SetCount(const AValue: Integer);
+    procedure SetMaxCount(const AValue: Integer);
+    procedure SetMinCount(const AValue: Integer);
+  public
+    constructor Create;
+
+    // Logical processors of this computer: the default MaxCount, and what InitializePercentage takes a share of.
+    class function CoreCount: Integer; static;
+    // Sets the limits - -1 means the default: CoreCount for AMaxCount, 1 for AMinCount - and then Count to
+    // ADesiredCount within them. An explicit limit beats a default one: Initialize(8, -1, 4) on a 2-core computer
+    // allows 4. Limits below 1 (other than -1), or an explicit AMinCount above an explicit AMaxCount, raise.
+    procedure Initialize(const ADesiredCount: Integer; const AMaxCount: Integer = -1; const AMinCount: Integer = -1);
+    // As Initialize, with Count APercentage percent of CoreCount, rounded: InitializePercentage(66.666, -1, 4) uses
+    // two workers for every three cores, but at least 4. Over 100 is allowed (more workers than cores, e.g. for slow
+    // network drives); 0 or less raises. A name of its own, as Initialize(50) would quietly mean 50 workers.
+    procedure InitializePercentage(const APercentage: Double; const AMaxCount: Integer = -1; const AMinCount: Integer = -1);
+
+    // Setting it outside MinCount..MaxCount gives the nearest limit.
+    property Count: Integer read FCount write SetCount;
+    // At least 1. Setting MaxCount below MinCount lowers MinCount with it, and the other way round; Count follows.
+    property MaxCount: Integer read FMaxCount write SetMaxCount;
+    property MinCount: Integer read FMinCount write SetMinCount;
+    // The thread priority the workers run at during a scan.
+    property Priority: TThreadPriority read FPriority write FPriority;
+  end;
+
   // Base class of the scanners: pattern matching, the load-balanced parallel walk and the results - everything but
   // running the walk's workers, which is left to a descendant's ExecuteWorkers, so this unit needs nothing outside
   // the RTL and Delphi.WildCardMatcher. TParallelFileScanner (below) runs them on the RTL PPL,
@@ -70,6 +106,7 @@ type
     FFastExtensions: TArray<string>;   // extensions (with dot, e.g. '.pas') for simple "*.ext" patterns
     FComplexPatterns: TArray<string>;  // include patterns WildCardMatcher matches against the file name
     FComplexMatcher: TWildCard;        // FComplexPatterns, compiled (per scan)
+    FWorkers: TFileScanWorkers;        // owned; nil = one worker per core
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     function GetSkippedFilesCount: Integer;
     procedure AddSkippedDirectories(const APath: string);
@@ -82,15 +119,17 @@ type
     FSortResultList: Boolean;
     // Shared parallel walk behind the list results: returns every matching file, in CompareText order when
     // ASort is set - each worker sorts its own share in parallel, then the shares are merged.
-    function CollectFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions; const ASort: Boolean;
-      const APriority: TThreadPriority): TArray<string>;
+    function CollectFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
+      const ASort: Boolean): TArray<string>;
     // True when the folder APath (ending in a path delimiter) is excluded by a prefix or a pruning pattern.
     function ExcludedDirectory(const APath: string): Boolean;
     // True when the file AFileName (a full path) is excluded by a suffix or a pattern.
     function ExcludedFile(const AFileName: string): Boolean;
-    // Workers per walk: one per core. Workers that find nothing to do just wait for a hand-off, so using every
-    // core costs little.
+    // Workers per walk: Workers.Count, or one per core without Workers. Workers that find nothing to do just wait
+    // for a hand-off, so using every core costs little.
     function GetWorkerCount: Integer; virtual;
+    // The workers' thread priority: Workers.Priority, or tpNormal without Workers.
+    function GetWorkerPriority: TThreadPriority;
     function MatchesAnyExtension(const AFileName: PChar; const AFileNameLength: Integer): Boolean;
     function PrepareRootDirectories(const ADirectories: TArray<string>): TArray<string>;
     // The threading library's part: calls AWorker once for every worker index 0..AWorkerCount-1, in parallel at
@@ -108,43 +147,47 @@ type
     // AAcquireFileSink is called once per worker (argument = worker index 0..AWorkerCount-1) to obtain that
     // worker's file callback; it fires on worker threads, so a shared sink must be thread-safe. AFinishWorker
     // (optional) is called on each worker thread once the whole walk is done, with the same index, so per-worker
-    // results can be post-processed in parallel.
+    // results can be post-processed in parallel. The workers run at GetWorkerPriority.
     procedure RunParallelWalk(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
       const AWorkerCount: Integer; const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>;
-      const AFinishWorker: TProc<Integer>; const APriority: TThreadPriority);
+      const AFinishWorker: TProc<Integer>);
     // Enumerates one directory (non-recursively) in a single pass: matching files go to AFileFound,
     // non-excluded subdirectories are appended to ASubDirectories. APath and the subdirectories it adds
     // end in a path delimiter.
     procedure ScanDirectory(const APath: string; const AFileFound: TDirectoryWalkProc; const ASubDirectories: TList<string>);
     // TStringList scan core; the Spring4D scanner fills its IList<string> from CollectFiles itself.
     procedure ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AResult: TStringList; const APriority: TThreadPriority);
+      const AResult: TStringList);
   public
-    constructor Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True); overload; virtual;
-    constructor Create(const AExtensions: TStringList; const ASortResultList: Boolean = True); overload;
+    // AWorkers decides how many workers a scan uses and at what thread priority; the scanner owns and frees it, also
+    // when Create fails. nil means one worker per core at normal priority. Deliberately not a default parameter, so
+    // it is a choice made at every Create.
+    constructor Create(const AExtensions: TArray<string>; const AWorkers: TFileScanWorkers;
+      const ASortResultList: Boolean = True); overload; virtual;
+    constructor Create(const AExtensions: TStringList; const AWorkers: TFileScanWorkers;
+      const ASortResultList: Boolean = True); overload;
     destructor Destroy; override;
 
-    // Adds every matching file to AFileNamesList, in CompareText order when SortResultList is set. APriority is
-    // the priority of the worker threads during the scan.
+    // Adds every matching file to AFileNamesList, in CompareText order when SortResultList is set.
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean; overload;
+      const AFileNamesList: TStringList): Boolean; overload;
     function GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-      const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean; overload;
+      const AFileNamesList: TStringList): Boolean; overload;
     // Streaming scan: AFileFoundCallback fires for every matching file AS IT IS FOUND, from
     // multiple worker threads concurrently - the callback MUST be thread-safe. Each file is
     // delivered once (overlapping roots are merged before the walk), in nondeterministic order;
     // SortResultList does not apply here. Available on every scanner class.
     function ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer;
-      const APriority: TThreadPriority = tpNormal): Boolean; overload;
+      const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer): Boolean; overload;
     function ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer;
-      const APriority: TThreadPriority = tpNormal): Boolean; overload;
+      const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer): Boolean; overload;
 
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
     property SkippedFilesCount: Integer read GetSkippedFilesCount;
     property SortResultList: Boolean read FSortResultList write FSortResultList;
     property ConvertRelativePathsToAbsolute: Boolean read FConvertRelativePathsToAbsolute write FConvertRelativePathsToAbsolute;
+    // The AWorkers given to Create (nil when none was); its settings may be changed between scans.
+    property Workers: TFileScanWorkers read FWorkers;
   end;
 
   TParallelFileScannerClass = class of TParallelFileScannerCustom;
@@ -411,6 +454,92 @@ begin
   end;
 end;
 
+{ TFileScanWorkers }
+
+constructor TFileScanWorkers.Create;
+begin
+  inherited Create;
+
+  FMinCount := 1;
+  FMaxCount := CoreCount;
+  FCount := FMaxCount;
+  FPriority := TThreadPriority.tpNormal;
+end;
+
+class function TFileScanWorkers.CoreCount: Integer;
+begin
+  Result := Max(1, TThread.ProcessorCount);
+end;
+
+procedure TFileScanWorkers.Initialize(const ADesiredCount: Integer; const AMaxCount: Integer = -1;
+  const AMinCount: Integer = -1);
+var
+  LMaxCount: Integer;
+  LMinCount: Integer;
+begin
+  if (AMaxCount < 1) and (AMaxCount <> -1) then
+    raise EArgumentOutOfRangeException.CreateFmt('Maximum worker count %d: must be at least 1, or -1 for the default',
+      [AMaxCount]);
+
+  if (AMinCount < 1) and (AMinCount <> -1) then
+    raise EArgumentOutOfRangeException.CreateFmt('Minimum worker count %d: must be at least 1, or -1 for the default',
+      [AMinCount]);
+
+  if (AMaxCount <> -1) and (AMinCount > AMaxCount) then
+    raise EArgumentException.CreateFmt('Minimum worker count %d is above the maximum %d', [AMinCount, AMaxCount]);
+
+  if AMaxCount = -1 then
+    LMaxCount := CoreCount
+  else
+    LMaxCount := AMaxCount;
+
+  if AMinCount = -1 then
+    LMinCount := 1
+  else
+    LMinCount := AMinCount;
+
+  // An explicit limit beats a default one - the only way the minimum can be above the maximum here is a default
+  // maximum (CoreCount) below an explicit minimum.
+  FMinCount := LMinCount;
+  FMaxCount := Max(LMaxCount, LMinCount);
+  SetCount(ADesiredCount);
+end;
+
+procedure TFileScanWorkers.InitializePercentage(const APercentage: Double; const AMaxCount: Integer = -1;
+  const AMinCount: Integer = -1);
+begin
+  if IsNan(APercentage) or (APercentage <= 0) then
+    raise EArgumentOutOfRangeException.CreateFmt('Worker percentage %g: must be above 0', [APercentage]);
+
+  // Capped before rounding, so a huge percentage cannot overflow.
+  Initialize(Integer(Round(Min(CoreCount * APercentage / 100, MaxInt))), AMaxCount, AMinCount);
+end;
+
+procedure TFileScanWorkers.SetCount(const AValue: Integer);
+begin
+  FCount := EnsureRange(AValue, FMinCount, FMaxCount);
+end;
+
+procedure TFileScanWorkers.SetMaxCount(const AValue: Integer);
+begin
+  if AValue < 1 then
+    raise EArgumentOutOfRangeException.CreateFmt('Maximum worker count %d: must be at least 1', [AValue]);
+
+  FMaxCount := AValue;
+  FMinCount := Min(FMinCount, AValue);
+  SetCount(FCount);
+end;
+
+procedure TFileScanWorkers.SetMinCount(const AValue: Integer);
+begin
+  if AValue < 1 then
+    raise EArgumentOutOfRangeException.CreateFmt('Minimum worker count %d: must be at least 1', [AValue]);
+
+  FMinCount := AValue;
+  FMaxCount := Max(FMaxCount, AValue);
+  SetCount(FCount);
+end;
+
 { TParallelFileScannerCustom }
 
 // APath ends in a path delimiter, as do the folders already listed, so a folder is only ever found inside a whole
@@ -585,8 +714,12 @@ begin
   end;
 end;
 
-constructor TParallelFileScannerCustom.Create(const AExtensions: TArray<string>; const ASortResultList: Boolean = True);
+constructor TParallelFileScannerCustom.Create(const AExtensions: TArray<string>; const AWorkers: TFileScanWorkers;
+  const ASortResultList: Boolean = True);
 begin
+  // Owned from the first statement on, so the destructor frees it even if the rest of Create raises.
+  FWorkers := AWorkers;
+
   inherited Create;
 
   FCachedSkippedDirectoriesFileCount := 0;
@@ -601,6 +734,7 @@ destructor TParallelFileScannerCustom.Destroy;
 begin
   FSkippedDirectories.Free;
   FExtensions.Free;
+  FWorkers.Free;
 
   inherited Destroy;
 end;
@@ -804,7 +938,7 @@ begin
 end;
 
 function TParallelFileScannerCustom.CollectFiles(const ADirectories: TArray<string>;
-  const AExclusions: TFileScanExclusions; const ASort: Boolean; const APriority: TThreadPriority): TArray<string>;
+  const AExclusions: TFileScanExclusions; const ASort: Boolean): TArray<string>;
 var
   LComparer: IComparer<string>;
   LWorkerCount: Integer;
@@ -834,8 +968,7 @@ begin
       begin
         if ASort then
           LWorkerFiles[AWorkerIndex].Sort(LComparer);
-      end,
-      APriority);
+      end);
 
     if ASort then
       Result := MergeSortedLists(LWorkerFiles, LComparer)
@@ -848,7 +981,7 @@ begin
 end;
 
 procedure TParallelFileScannerCustom.ScanInto(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AResult: TStringList; const APriority: TThreadPriority);
+  const AResult: TStringList);
 var
   LFiles: TArray<string>;
   LFileScanStopWatch: TStopwatch;
@@ -861,7 +994,7 @@ begin
   // pass: overlapping roots are merged before the walk (PrepareRootDirectories).
   LMergeSorted := FSortResultList and (AResult.Count = 0) and not AResult.Sorted;
 
-  LFiles := CollectFiles(ADirectories, AExclusions, LMergeSorted, APriority);
+  LFiles := CollectFiles(ADirectories, AExclusions, LMergeSorted);
 
   AResult.Capacity := AResult.Count + Length(LFiles);
   AResult.AddStrings(LFiles);
@@ -874,8 +1007,7 @@ begin
 end;
 
 function TParallelFileScannerCustom.ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer;
-  const APriority: TThreadPriority = tpNormal): Boolean;
+  const AFileFoundCallback: TFileFoundCallbackProc; var AFileCount: Integer): Boolean;
 var
   LFileScanStopWatch: TStopwatch;
   LFileCount: Integer;
@@ -899,7 +1031,7 @@ begin
           AtomicIncrement(LFileCount);
         end;
     end,
-    nil, APriority);
+    nil);
 
   AFileCount := LFileCount;
   Result := AFileCount > 0;
@@ -909,8 +1041,7 @@ begin
 end;
 
 function TParallelFileScannerCustom.ScanFiles(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer;
-  const APriority: TThreadPriority = tpNormal): Boolean;
+  const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer): Boolean;
 var
   LCallbackProc: TFileFoundCallbackProc;
 begin
@@ -919,26 +1050,37 @@ begin
   // straight through would resolve right back into this overload).
   LCallbackProc := AFileFoundCallback;
 
-  Result := ScanFiles(ADirectories, AExclusions, LCallbackProc, AFileCount, APriority);
+  Result := ScanFiles(ADirectories, AExclusions, LCallbackProc, AFileCount);
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean;
+  const AFileNamesList: TStringList): Boolean;
 begin
-  ScanInto(ADirectories, AExclusions, AFileNamesList, APriority);
+  ScanInto(ADirectories, AExclusions, AFileNamesList);
 
   Result := AFileNamesList.Count > 0;
 end;
 
 function TParallelFileScannerCustom.GetFileList(const ADirectories: TStringList; const AExclusions: TFileScanExclusions;
-  const AFileNamesList: TStringList; const APriority: TThreadPriority = tpNormal): Boolean;
+  const AFileNamesList: TStringList): Boolean;
 begin
-  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList, APriority);
+  Result := GetFileList(ADirectories.ToStringArray, AExclusions, AFileNamesList);
 end;
 
 function TParallelFileScannerCustom.GetWorkerCount: Integer;
 begin
-  Result := Max(1, TThread.ProcessorCount);
+  if Assigned(FWorkers) then
+    Result := FWorkers.Count
+  else
+    Result := TFileScanWorkers.CoreCount;
+end;
+
+function TParallelFileScannerCustom.GetWorkerPriority: TThreadPriority;
+begin
+  if Assigned(FWorkers) then
+    Result := FWorkers.Priority
+  else
+    Result := TThreadPriority.tpNormal;
 end;
 
 function TParallelFileScannerCustom.GetSkippedFilesCount: Integer;
@@ -996,8 +1138,7 @@ end;
 
 procedure TParallelFileScannerCustom.RunParallelWalk(const ADirectories: TArray<string>;
   const AExclusions: TFileScanExclusions; const AWorkerCount: Integer;
-  const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>;
-  const APriority: TThreadPriority);
+  const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>);
 var
   LRoots: TArray<string>;
   LWorker: TProc<Integer>;
@@ -1061,15 +1202,19 @@ begin
         end;
       end;
 
-    ExecuteWorkers(AWorkerCount, LWorker, APriority);
+    ExecuteWorkers(AWorkerCount, LWorker, GetWorkerPriority);
   finally
     LWorkPool.Free;
   end;
 end;
 
-constructor TParallelFileScannerCustom.Create(const AExtensions: TStringList; const ASortResultList: Boolean = True);
+constructor TParallelFileScannerCustom.Create(const AExtensions: TStringList; const AWorkers: TFileScanWorkers;
+  const ASortResultList: Boolean = True);
 begin
-  Create(AExtensions.ToStringArray, ASortResultList);
+  // Owned before anything here can raise - AExtensions.ToStringArray included.
+  FWorkers := AWorkers;
+
+  Create(AExtensions.ToStringArray, AWorkers, ASortResultList);
 end;
 
 { TParallelFileScanner }

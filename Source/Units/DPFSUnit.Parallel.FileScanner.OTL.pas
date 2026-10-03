@@ -13,8 +13,10 @@ uses
 
 type
   // Scanner whose workers run on OmniThreadLibrary: pooled tasks that each scan owns and releases itself, in the
-  // scanner's own pool of at most one thread per core (at most 56), so scanning needs no message loop
-  // and back-to-back scans reuse the same threads. Adds a GetFileList that streams into an OTL value queue.
+  // scanners' own pool, so scanning needs no message loop and back-to-back scans reuse the same threads. The pool
+  // has as many threads as the largest scan so far has workers - one per core unless Workers says otherwise - and
+  // never more than 56, so a scan never uses more than 56 workers, whatever Workers.Count says. Adds a GetFileList
+  // that streams into an OTL value queue.
   TParallelFileScannerOTL = class(TParallelFileScannerCustom)
   strict protected
     function GetWorkerCount: Integer; override;
@@ -28,8 +30,7 @@ type
     // Streams every matching file into AFileNamesOmniValueQueue as it is found (the queue is thread-safe);
     // AFileCount is the number of files queued. SortResultList does not apply here.
     function GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-      const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer;
-      const APriority: TThreadPriority = TThreadPriority.tpNormal): Boolean; overload;
+      const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer): Boolean; overload;
   end;
 {$IFEND}
 
@@ -37,7 +38,7 @@ implementation
 
 {$IF DEFINED(USE_OMNI_THREAD_LIBRARY)}
 uses
-  Winapi.Windows, System.Diagnostics, System.Math, System.SyncObjs, GpStuff, OtlCommon, OtlTask, OtlThreadPool;
+  Winapi.Windows, System.Diagnostics, System.Math, GpStuff, OtlCommon, OtlTask, OtlThreadPool;
 
 const
   // Upper bound for workers - and so for the scanner pool's threads. The OTL pool's manager waits on one handle
@@ -53,35 +54,32 @@ threadvar
 
 var
   GScannerPool: IOmniThreadPool;
+  GScannerPoolLock: TObject;
 
-// Workers per scan, and the scanner pool's thread limit: one per core, at most MAX_OTL_WORKERS.
-function OtlWorkerCount: Integer;
+// The scanners' own OTL pool, with as many threads as the largest scan so far has workers (AWorkerCount, at most
+// MAX_OTL_WORKERS): never more. Not GlobalParallelPool: that one has no thread limit, and when scans run back to back
+// the next scan's tasks can arrive before the pool has put the previous scan's threads back on its idle list, so it
+// starts new threads - past ~60 of them the pool's manager waits on more than 64 handles, and OTL's wait for more
+// than 64 handles (TWaitFor in OtlSync.pas) can then crash the process. With MaxExecuting set, a task that finds no
+// idle thread waits for one instead. Locked, as concurrent scans may each raise the limit.
+function ScannerPool(const AWorkerCount: Integer): IOmniThreadPool;
 begin
-  Result := EnsureRange(TThread.ProcessorCount, 1, MAX_OTL_WORKERS);
-end;
+  TMonitor.Enter(GScannerPoolLock);
+  try
+    if not Assigned(GScannerPool) then
+    begin
+      GScannerPool := CreateThreadPool('Parallel.FileScanner pool');
+      GScannerPool.MaxExecuting := AWorkerCount;
+      GScannerPool.IdleWorkerThreadTimeout_sec := 60;
+      GScannerPool.MaxQueuedTime_sec := 0;
+    end
+    else if GScannerPool.MaxExecuting < AWorkerCount then
+      GScannerPool.MaxExecuting := AWorkerCount;
 
-// The scanner's own OTL pool: never more threads than one scan's workers (OtlWorkerCount). Not GlobalParallelPool:
-// that one has no thread limit, and when scans run back to back the next scan's tasks can arrive before the pool
-// has put the previous scan's threads back on its idle list, so it starts new threads - past ~60 of them the
-// pool's manager waits on more than 64 handles, and OTL's wait for more than 64 handles (TWaitFor in OtlSync.pas)
-// can then crash the process. With MaxExecuting set, a task that finds no idle thread waits for one instead.
-function ScannerPool: IOmniThreadPool;
-var
-  LNewPool: IOmniThreadPool;
-begin
-  if not Assigned(GScannerPool) then
-  begin
-    LNewPool := CreateThreadPool('Parallel.FileScanner pool');
-    LNewPool.MaxExecuting := OtlWorkerCount;
-    LNewPool.IdleWorkerThreadTimeout_sec := 60;
-    LNewPool.MaxQueuedTime_sec := 0;
-
-    // Same race-free lazy creation as OTL's GlobalParallelPool.
-    if TInterlocked.CompareExchange(PPointer(@GScannerPool)^, Pointer(LNewPool), nil) = nil then
-      LNewPool._AddRef; // GScannerPool took over this reference
+    Result := GScannerPool;
+  finally
+    TMonitor.Exit(GScannerPoolLock);
   end;
-
-  Result := GScannerPool;
 end;
 
 // Wraps worker AWorkerIndex as an OTL task body. A function of its own so that every task captures its own index:
@@ -109,12 +107,13 @@ end;
 
 function TParallelFileScannerOTL.GetWorkerCount: Integer;
 begin
-  Result := OtlWorkerCount;
+  Result := Min(inherited GetWorkerCount, MAX_OTL_WORKERS);
 end;
 
 procedure TParallelFileScannerOTL.ExecuteWorkers(const AWorkerCount: Integer; const AWorker: TProc<Integer>;
   const APriority: TThreadPriority);
 var
+  LPool: IOmniThreadPool;
   LTasks: TArray<IOmniTaskControl>;
 begin
   // Started from a scanner worker (a callback scanning too): run the workers on this thread, one after another -
@@ -133,13 +132,14 @@ begin
   // a caller that scans without pumping messages in between (a console app, a service, a worker thread, a GUI
   // loop of back-to-back scans) piled up ~0.6 MB and 7 handles per task - 28 tasks per scan - until it ran out
   // of memory.
+  LPool := ScannerPool(AWorkerCount);
   SetLength(LTasks, AWorkerCount);
   try
     for var LWorkerIndex := 0 to AWorkerCount - 1 do
       LTasks[LWorkerIndex] := CreateTask(CreateWorkerTaskDelegate(AWorker, LWorkerIndex),
         'Parallel.FileScanner worker #' + LWorkerIndex.ToString)
         .SetPriority(ToOTLThreadPriority(APriority))
-        .Schedule(ScannerPool);
+        .Schedule(LPool);
   finally
     // Every started worker must be done before the walk's state is freed - also when starting one of them failed.
     for var LTask in LTasks do
@@ -158,7 +158,7 @@ begin
 end;
 
 function TParallelFileScannerOTL.GetFileList(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
-  const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer; const APriority: TThreadPriority = TThreadPriority.tpNormal): Boolean;
+  const AFileNamesOmniValueQueue: TOmniQueue; var AFileCount: Integer): Boolean;
 var
   LFileScanStopWatch: TStopwatch;
   LFileCount: TGp4AlignedInt;
@@ -184,7 +184,7 @@ begin
           LFileCount.Increment;
         end;
     end,
-    nil, APriority);
+    nil);
 
   AFileCount := LFileCount.Value;
   Result := AFileCount > 0;
@@ -192,6 +192,13 @@ begin
   LFileScanStopWatch.Stop;
   FDiskScanTimeForFiles := LFileScanStopWatch.Elapsed.TotalMilliseconds;
 end;
+
+initialization
+  GScannerPoolLock := TObject.Create;
+
+finalization
+  GScannerPool := nil; // stops the pool's threads while OTL itself is still alive
+  GScannerPoolLock.Free;
 {$IFEND}
 
 end.

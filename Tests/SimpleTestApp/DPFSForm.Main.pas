@@ -83,7 +83,7 @@ begin
   try
     LOTLValueQueue := TOmniQueue.Create;
     try
-      LParallelScanner := TParallelFileScannerOTL.Create(GetExtensions);
+      LParallelScanner := TParallelFileScannerOTL.Create(GetExtensions, nil);
       try
         LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
         LExcludes := GetExcludes;
@@ -142,7 +142,7 @@ begin
   UpdateGUIState(ASender as TControl, False);
   try
     LFilesList := TCollections.CreateList<string>;
-    LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions);
+    LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions, nil);
     try
       LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
       LExcludes := GetExcludes;
@@ -212,8 +212,9 @@ const
 var
   LFileCount: Integer;
   LTimes: TList<Double>;
-  LBest, LSum, LElapsed: Double;
+  LBest, LSum, LElapsed, LWorst: Double;
   LIndex: Integer;
+  LWorstRun: Integer;
 begin
   // Warm-up runs prime the filesystem cache and code paths; their times are discarded.
   for LIndex := 1 to WARMUP_RUNS do
@@ -223,6 +224,8 @@ begin
   try
     LBest := 0;
     LSum := 0;
+    LWorst := 0;
+    LWorstRun := 0;
 
     for LIndex := 1 to ALoopCount do
     begin
@@ -232,12 +235,19 @@ begin
 
       if (LIndex = 1) or (LElapsed < LBest) then
         LBest := LElapsed;
+
+      if (LIndex = 1) or (LElapsed > LWorst) then
+      begin
+        LWorst := LElapsed;
+        LWorstRun := LIndex;
+      end;
     end;
 
     LTimes.Sort; // for the median
 
-    MemoLog.Lines.Add(Format('%-26s files=%-5d best=%7.2f ms   avg=%7.2f ms   median=%7.2f ms',
-      [ACaption, LFileCount, LBest, LSum / ALoopCount, LTimes[LTimes.Count div 2]]));
+    // The worst run's number shows whether it is always the same one, e.g. the first timed run.
+    MemoLog.Lines.Add(Format('%-26s files=%-5d best=%7.2f ms   avg=%7.2f ms   median=%7.2f ms   worst=%7.2f ms (run %d)',
+      [ACaption, LFileCount, LBest, LSum / ALoopCount, LTimes[LTimes.Count div 2], LWorst, LWorstRun]));
   finally
     LTimes.Free;
   end;
@@ -256,7 +266,7 @@ var
   LExcludes: TFileScanExclusions;
   LStopwatch: TStopwatch;
 begin
-  LParallelScanner := AScannerClass.Create(GetExtensions);
+  LParallelScanner := AScannerClass.Create(GetExtensions, nil);
   LFilesList := TStringList.Create;
   try
     LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
@@ -283,7 +293,7 @@ var
   LStopwatch: TStopwatch;
   LFileCount: Integer;
 begin
-  LParallelScanner := TParallelFileScannerOTL.Create(GetExtensions);
+  LParallelScanner := TParallelFileScannerOTL.Create(GetExtensions, nil);
   try
     LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
     LExcludes := GetExcludes;
@@ -325,7 +335,7 @@ var
   LExcludes: TFileScanExclusions;
   LStopwatch: TStopwatch;
 begin
-  LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions);
+  LParallelScanner := TParallelFileScannerSpring.Create(GetExtensions, nil);
   try
     LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
     LExcludes := GetExcludes;
@@ -412,7 +422,7 @@ begin
   UpdateGUIState(ASender as TControl, False);
   try
     LFilesList := TStringList.Create;
-    LParallelScanner := AScannerClass.Create(GetExtensions);
+    LParallelScanner := AScannerClass.Create(GetExtensions, nil);
     try
       LParallelScanner.ConvertRelativePathsToAbsolute := CheckBoxConvertRelativePathsToAbsolute.Checked;
       LExcludes := GetExcludes;
