@@ -633,7 +633,7 @@ var
   LPatterns: TArray<string>;
   LPrunePatterns: TArray<string>;
 begin
-  // Normalised once per scan, so the per-directory checks neither allocate nor re-normalise. Blank entries are
+  // Normalized once per scan, so the per-directory checks neither allocate nor re-normalize. Blank entries are
   // dropped: an empty prefix or suffix would otherwise match - and exclude - everything. Prefixes get a trailing
   // delimiter, so they match whole folder names only, like the folder paths they are compared with.
   FExcludedPrefixes := NonBlank(FExclusions.PathPrefixes);
