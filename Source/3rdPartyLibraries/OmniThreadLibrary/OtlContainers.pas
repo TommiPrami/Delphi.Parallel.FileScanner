@@ -36,10 +36,19 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Sean B. Durkin
 ///   Creation date     : 2008-07-13
-///   Last modification : 2026-04-15
-///   Version           : 3.02d
+///   Last modification : 2026-10-08
+///   Version           : 3.02f
 ///</para><para>
 ///   History:
+///     3.02f: 2026-10-08
+///       - Fixed: TOmniBaseQueue.Initialize relied on the memory manager to return blocks
+///         aligned to the CAS requirement (16 bytes on x64) for the head/tail pointers;
+///         this is not guaranteed (for example with madExcept's leak tracking) and made
+///         the alignment assertions fail (#177). The memory is now aligned explicitly.
+///     3.02e: 2026-10-08
+///       - Fixed: Destroying a TOmniValueQueue that still contained items raised an
+///         access violation (#201). TQueue<T>.Destroy notifies about every removed item
+///         and CollectionNotifyEvent accessed the already nil-ed FInnerQueue.
 ///     3.02d: 2026-04-15
 ///       - Fixed: TOmniValueQueue.PropagateNotifications loop used Low..Low instead
 ///         of Low..High, silently dropping all observer notifications except inserts.
@@ -342,6 +351,7 @@ type
     obcHeadPointer: POmniTaggedPointer;
     obcMemStack   : TOmniBaseBoundedStack;
     obcNumSlots   : integer;
+    obcPointerMem : pointer; // unaligned memory that holds obcTailPointer^ and obcHeadPointer^
     obcTailPointer: POmniTaggedPointer;
     {$IFNDEF OTL_HaveCmpx16b}
     obcLock       : IOmniCriticalSection;
@@ -1381,8 +1391,8 @@ begin
   end;
   if assigned(obcCachedBlock) then
     FreeMem(obcCachedBlock);
-  FreeMem(obcTailPointer);
-  FreeMem(obcHeadPointer);
+  FreeMem(obcPointerMem);
+  obcPointerMem := nil;
 end; { TOmniBaseQueue.Cleanup }
 
 procedure TOmniBaseQueue.Enqueue(const value: TOmniValue);
@@ -1440,14 +1450,15 @@ end; { TOmniBaseQueue.Enqueue }
 
 procedure TOmniBaseQueue.Initialize;
 begin
-  if assigned(obcTailPointer) then
-    FreeMem(obcTailPointer);
-  obcTailPointer := AllocMem(SizeOf(TOmniTaggedPointer));
-  if assigned(obcHeadPointer) then
-    FreeMem(obcHeadPointer);
-  obcHeadPointer := AllocMem(SizeOf(TOmniTaggedPointer));
-  Assert(NativeInt(obcTailPointer) mod (2*SizeOf(pointer)) = 0);
-  Assert(NativeInt(obcHeadPointer) mod (2*SizeOf(pointer)) = 0);
+  if assigned(obcPointerMem) then
+    FreeMem(obcPointerMem);
+  // The CAS operations on head/tail require CASAlignment-aligned memory (16 bytes on x64).
+  // Memory managers don't have to guarantee that, so align it explicitly.
+  obcPointerMem := AllocMem(2 * SizeOf(TOmniTaggedPointer) + CASAlignment);
+  obcTailPointer := RoundUpTo(obcPointerMem, CASAlignment);
+  obcHeadPointer := POmniTaggedPointer(PByte(obcTailPointer) + SizeOf(TOmniTaggedPointer));
+  Assert(NativeInt(obcTailPointer) mod CASAlignment = 0);
+  Assert(NativeInt(obcHeadPointer) mod CASAlignment = 0);
   Assert(NativeInt(@obcCachedBlock) mod SizeOf(pointer) = 0);
   obcTailPointer.Slot := NextSlot(AllocateBlock); // point to the sentinel
   obcTailPointer.Tag := obcTailPointer.Slot.Tag;
@@ -1735,6 +1746,9 @@ end; { TOmniValueQueue.Create }
 destructor TOmniValueQueue.Destroy;
 begin
   FreeAndNil(FContainerSubject);
+  // TQueue<T>.Destroy clears the queue and fires OnNotify for every item left in it,
+  // but FreeAndNil nils FInnerQueue before the destructor runs and the handler uses it.
+  FInnerQueue.OnNotify := nil;
   FreeAndNil(FInnerQueue);
   inherited
 end; { TOmniValueQueue.Destroy }

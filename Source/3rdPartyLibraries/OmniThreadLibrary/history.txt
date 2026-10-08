@@ -35,6 +35,12 @@
     - TOmniBaseBoundedStack.Empty was not protected by Acquire/Release.
     - TOmniValueQueue.IsEmpty was missing try/finally around the
       critical section.
+    - Destroying a TOmniValueQueue that still contained items raised an
+      access violation (issue #201).
+    - TOmniBaseQueue relied on the memory manager for the alignment of its
+      head/tail pointers; alignment assertions failed with memory managers
+      that don't return 16-byte aligned blocks, e.g. madExcept's leak
+      tracking on x64 (issue #177).
   - OtlCommon:
     - _ReleaseAndClear did not check assigned(ovIntf) before _Release.
     - TOmniValueContainer.Grow off-by-one skipped the last element.
@@ -44,6 +50,10 @@
       has.
     - TOmniProcessorGroups.FindGroup assumed group number equals list
       index.
+  - OtlComm: ReceiveWait lost a message (and SendWait sent it twice) if an
+    empty wake-up was followed by a successful dequeue/enqueue in the same
+    call; this could hang thread pool workers and Parallel.For (issue #228,
+    PR #230 by Oleksiy Penkov).
   - OtlParallel:
     - Fixed PInteger used instead of PNativeInt in pipeline stage
       dispatch (only low 32 bits checked on 64-bit).
@@ -76,6 +86,32 @@
       spin-lock block (use-after-free).
     - TOmniLockManager.Lock no longer passes a negative wait_ms as
       cardinal to WaitForSingleObject.
+    - TWaitFor with 64 or more handles crashed the process: callbacks could
+      still run after UnregisterWait and read a cleared list, and a wait
+      could fire while the list was still being filled. Now uses
+      UnregisterWaitEx and builds the list under FAwaitedLock (issue #227,
+      PR #229 by Oleksiy Penkov).
+  - OtlTaskControl: Unobserved raised 'Task can be only monitored with a
+    single monitor' when the task was already monitored with MonitorWith.
+    This made Parallel.Join, For, ForEach, Future and Pipeline fail (or
+    hang) when their task config used MonitorWith (issue #154).
+    Parallel.Async still cannot be combined with MonitorWith.
+  - OtlCommon: TOmniValue.CastTo<TOmniValue> raised 'TOmniValue cannot be
+    converted to record', which broke Parallel.ForEach<TOmniValue> (issue
+    #49).
+  - OtlParallel: exceptions raised in the body of Parallel.For and
+    Parallel.ForEach (including the Into and Aggregate variants) hung
+    ForEach and were silently lost in For. They are now collected and
+    raised in the calling thread as EJoinException after all tasks have
+    stopped (not when NoWait is used), the same way Parallel.Join works.
+    ForEach tasks stop taking new elements after a failure (issue #57).
+  - OtlEventMonitor: TOmniEventMonitor.Destroy raised an access violation,
+    hiding the original error, when the constructor failed to allocate
+    its window (issue #24).
+  - OtlParallel: Parallel.For/ForEach waited forever in the loop destructor
+    if a task could not be created or started (e.g. no window handles were
+    left for the internal task monitor); the error is now raised to the
+    caller of Execute (issue #213).
   - OtlSync.Utils: TObjectDictionary in TOmniSynchronizer<T> now created
     with [doOwnsValues], fixing a TEvent leak.
   - OtlThreadPool: GlobalOmniThreadPool lazy initialization is now
@@ -98,6 +134,10 @@
       holding MonitorLock, so a task controller being destroyed on another
       thread cannot close (and let the OS recycle) the handle in the window
       before SetEvent. Reported by NoAnyName.
+  - DSiWin32: DSiTimeGetTime64 and DSiAllocateHwnd crashed when called from
+    a thread that outlived the unit finalization (typically the thread pool
+    maintenance timer at application shutdown), because the global critical
+    sections were already deleted (issue #224).
   - OtlCommon.Utils: SetThreadDescription (Windows 10+ thread naming) was
     dead code behind an obsolete IFDEF; also removed an incorrect
     FreeLibrary on a GetModuleHandle handle.
