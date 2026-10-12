@@ -1,5 +1,5 @@
 ///<summary>Microlocking containers. Part of the OmniThreadLibrary project.</summary>
-///<remarks>TOmni[Base]Queue requires Pentium 4 processor (or newer) unless OTL_OLDCPU is defined.</remarks>
+///<remarks>TOmni[Base]Queue requires Pentium 4 processor (or newer) in 32-bit mode unless OTL_OLDCPU is defined.</remarks>
 ///<author>Primoz Gabrijelcic, GJ</author>
 ///<license>
 ///This software is distributed under the BSD license.
@@ -36,10 +36,21 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Sean B. Durkin
 ///   Creation date     : 2008-07-13
-///   Last modification : 2026-10-08
-///   Version           : 3.02f
+///   Last modification : 2026-10-09
+///   Version           : 3.02g
 ///</para><para>
 ///   History:
+///     3.02g: 2026-10-09
+///       - OTL_OLDCPU is no longer defined by default for 32-bit: every CPU that can run a
+///         supported version of Windows has SSE2, so the queues now use the SSE2 atomic
+///         move (MoveDPtr) in 32-bit builds too. Define OTL_OLDCPU in the project options to
+///         get the old behaviour. Without OTL_OLDCPU, the unit initialization checks for SSE2
+///         support in 32-bit builds and raises an exception if it is not available (#118).
+///       - IOmniValueQueue, TOmniValueQueue and CreateOmniValueQueue are only available when
+///         OTL_GoodGenerics is defined (Delphi XE and newer), as they depend on
+///         Generics.Collections. This fixes compilation with Delphi 2009-2010 (#226).
+///       - Fixed: TOmniBaseQueue.Initialize used PByte arithmetic, which does not compile
+///         in Delphi 2007.
 ///     3.02f: 2026-10-08
 ///       - Fixed: TOmniBaseQueue.Initialize relied on the memory manager to return blocks
 ///         aligned to the CAS requirement (16 bytes on x64) for the head/tail pointers;
@@ -128,9 +139,11 @@ unit OtlContainers;
 
 {$OPTIMIZATION ON}
 {$WARN SYMBOL_PLATFORM OFF}
-{$IFNDEF CPUX64}
-  {$DEFINE OTL_OLDCPU} // undefine if you're sure your code will only run on a CPU that supports SSE2 instruction set (more specifically, Move64 instruction)
-{$ENDIF ~CPUX64}
+// Define OTL_OLDCPU (project options) if the 32-bit code must run on a CPU without SSE2
+// (more specifically, the Move64 instruction). Every CPU that can run a supported version
+// of Windows has SSE2, so it is not defined by default. When it is not defined, the
+// initialization section verifies SSE2 support in 32-bit builds and raises an exception
+// if it is missing (#118).
 //DEFINE DEBUG_OMNI_QUEUE to enable assertions in TOmniBaseQueue
 
 //We don't have a platform-independent way of using cmpx8b/cmpx16b
@@ -175,6 +188,7 @@ type
     function  IsFull: boolean;
   end; { IOmniQueue }
 
+  {$IFDEF OTL_GoodGenerics}
   IOmniValueQueue = interface ['{3399B817-0502-4837-B1D7-BA167E8E03A7}']
     function  GetContainerSubject: TOmniContainerSubject;
     function  IsEmpty: boolean;
@@ -183,6 +197,7 @@ type
     function  TryDequeue(var value: TOmniValue): boolean;
     property  ContainerSubject: TOmniContainerSubject read GetContainerSubject;
   end; { IOmniValueQueue }
+  {$ENDIF OTL_GoodGenerics}
 
   PReferencedPtr = ^TReferencedPtr;
   TReferencedPtr = record
@@ -393,17 +408,28 @@ type
     property ContainerSubject: TOmniContainerSubject read ocContainerSubject;
   end; { TOmniQueue }
 
+{$IFDEF OTL_GoodGenerics}
 /// <param name="UseBusLocking">Set to true to use a spinlock. Otherwise synchronisation is achieved by a critical section.</param>
 /// <param name="ThresholdForFull">The count of OmniValues to which if the queue reaches or exceeds, it is considered full.
 ///   Use a a value of -1 to indicate there is no threshold (and hence events like coiNotifyOnAlmostFull will never fire).</param>
 function CreateOmniValueQueue(UseBusLocking: boolean; ThresholdForFull: integer = -1): IOmniValueQueue;
+{$ENDIF OTL_GoodGenerics}
 
 implementation
 
 uses
   Windows,
+  {$IFDEF OTL_GoodGenerics}
   Generics.Collections,
+  {$ENDIF OTL_GoodGenerics}
   SysUtils;
+
+{$IFNDEF CPUX64}
+const
+  PF_XMMI64_INSTRUCTIONS_AVAILABLE = 10; // not declared in the Windows unit of older Delphis
+{$ENDIF}
+
+{$IFDEF OTL_GoodGenerics}
 
 type
   TInterestSet = set of TOmniContainerObserverInterest;
@@ -461,6 +487,8 @@ begin
   else
     Result := TOmniValueQueueCS.Create(ThresholdForFull)
 end; { CreateOmniValueQueue }
+
+{$ENDIF OTL_GoodGenerics}
 
 
 {$IFDEF CPUX64}
@@ -1456,7 +1484,7 @@ begin
   // Memory managers don't have to guarantee that, so align it explicitly.
   obcPointerMem := AllocMem(2 * SizeOf(TOmniTaggedPointer) + CASAlignment);
   obcTailPointer := RoundUpTo(obcPointerMem, CASAlignment);
-  obcHeadPointer := POmniTaggedPointer(PByte(obcTailPointer) + SizeOf(TOmniTaggedPointer));
+  obcHeadPointer := POmniTaggedPointer(NativeInt(obcTailPointer) + SizeOf(TOmniTaggedPointer));
   Assert(NativeInt(obcTailPointer) mod CASAlignment = 0);
   Assert(NativeInt(obcHeadPointer) mod CASAlignment = 0);
   Assert(NativeInt(@obcCachedBlock) mod SizeOf(pointer) = 0);
@@ -1722,6 +1750,8 @@ begin
     ContainerSubject.Notify(coiNotifyOnAllRemoves);
 end; { TOmniQueue.TryDequeue }
 
+{$IFDEF OTL_GoodGenerics}
+
 { TOmniValueQueue }
 
 constructor TOmniValueQueue.Create(AThresholdForFull: integer);
@@ -1899,8 +1929,16 @@ begin
   FCritSect.Leave;
 end; { TOmniValueQueueCS.LeaveCriticalSection }
 
+{$ENDIF OTL_GoodGenerics}
+
 
 initialization
+  {$IFDEF USE_MOVEDPTR}{$IFNDEF CPUX64}
+  // MoveDPtr uses SSE2 (movq); on 64-bit targets SSE2 is part of the base instruction set.
+  if not IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE) then
+    raise Exception.Create('OtlContainers: This CPU does not support the SSE2 instruction set, ' +
+      'which is required by OmniThreadLibrary queues. Define OTL_OLDCPU and rebuild the application.');
+  {$ENDIF}{$ENDIF}
   Assert(SizeOf(pointer) = SizeOf(NativeInt));
   {$IFDEF OTL_HaveCmpx16b}
   Assert(SizeOf(TOmniTaggedValue) = {$IFDEF CPUX64}3{$ELSE}4{$ENDIF}*SizeOf(pointer));

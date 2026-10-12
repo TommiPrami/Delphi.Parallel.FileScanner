@@ -1,6 +1,15 @@
 3.09: <<unreleased>>
 
 - Changes:
+  - C++Builder (issue #72): the C++ headers generated for DSiWin32, GpLists,
+    OtlCommon, OtlSync and OtlParallel (and so all the others) compile in
+    C++Builder (Win32 and Win64) when BCB is defined, which the C++Builder
+    build does. In that case the overloaded indexed properties are renamed
+    (TOmniValue.AsArrayItemByName/AsArrayItemOV,
+    TOmniValueContainer.ItemByName/ItemOV) and the C++ header declares
+    IOmniCriticalSection.Release and IOmniResourceCount.Release as Leave.
+    The Delphi API does not change. DSiWin32 constants that clashed with
+    Windows SDK macros are not exported to the header.
   - DSiWin32: new define DSiNoTimerResolution prevents DSiWin32 (and so
     every program using OmniThreadLibrary) from raising the Windows timer
     resolution to 1 ms with timeBeginPeriod(1) for the whole lifetime of the
@@ -17,8 +26,28 @@
   - Restored IOmniValueQueue/TOmniValueQueue and CreateOmniValueQueue in
     OtlContainers, previously only available under OTL_MobileSupport, as
     plain unconditional (Windows) code.
+  - OtlContainers: OTL_OLDCPU is no longer defined by default in 32-bit
+    builds (issue #118). Every CPU that can run a supported version of
+    Windows has SSE2, so the queues now use the SSE2 atomic move in 32-bit
+    builds too, as OmniThreadLibrary-NG already does. Define OTL_OLDCPU in
+    the project options to get the old behaviour on a CPU without SSE2.
+    When OTL_OLDCPU is not defined, the initialization of OtlContainers
+    checks for SSE2 in 32-bit builds and raises an exception (telling the
+    user to define OTL_OLDCPU) if the CPU does not support it.
 
 - New features:
+  - Parallel.For supports Int64 (issue #180): new overload
+    Parallel.For(first, last, step: Int64), Int64 loop bodies
+    (procedure(value: Int64) and the taskIndex/task variants) and Int64 task
+    initializers/finalizers. The loop range can be larger than the integer
+    range. The integer overloads are unchanged; an integer
+    initializer/finalizer used on a range that does not fit into an integer
+    raises an exception.
+  - IOmniBlockingCollection.DeThrottle switches throttling off at run time
+    and wakes up writers blocked on a full collection; IsThrottling tells
+    whether throttling is active. IOmniPipeline.DeThrottle does the same for
+    all stages of a running pipeline (issue #61). Pipeline.NoThrottling
+    (before Run) was already available.
   - Backported CSP-style abstractions from OmniThreadLibrary-NG
     (Delphi XE and newer):
     - Parallel.Channel<T> - typed bounded channel.
@@ -29,6 +58,15 @@
     - ESelectTimeout exception, raised by Race on timeout.
 
 - Bug fixes:
+  - OtlParallel: IOmniChannelSender<T>.Send blocked on a full channel was
+    not woken up by Close; it stayed blocked until a consumer made room (and
+    then only one blocked sender per received value) or forever if nobody
+    received from the channel. Close now wakes up all blocked senders, Send
+    raises ECollectionCompleted and TrySend returns False.
+  - OtlSync: the 32-bit MoveDPtr(newData, newReference, Destination)
+    contained a stray load from newData + $24 that raised an access
+    violation when newData was nil (reachable only when OTL_OLDCPU is not
+    defined, issue #118).
   - OtlHooks: procedure-type Register/Unregister stored the address of
     the stack parameter instead of the procedure pointer, causing
     dangling access on Notify and preventing Unregister from matching.
@@ -194,15 +232,19 @@
   - Implemented Locked<T>.IsInitialized.
   - On Windows, SetThreadName from OtlCommon.Utils also calls 
     SetThreadDescription Windows API.
+  - Improved TOmniValue.LogValue.
 
 - Bug fixes:
   - Fixed bad 64-bit pointer casts in OtlTaskControl. Now works with Delph 13.1.
+  - Fixed TOmniEnvironment.LoadNUMAInfo and DSiGetLogicalProcessorInformationEx
+    (NUMA and processor group information).
 
 3.07.11: 2025-10-22
 
 - New features:
   - Added Delphi 13 packages supporting 64-bit IDE.
   - Implemented TOmniValue.AsUInt64.
+  - Added TOmniValueContainer.Name property.
   
 - Bug fixes:
   - [SMelnyk64] Fix: AV in TOmniParallelLoopBase.InternalExecute when taskFinalizer is not provided.
@@ -210,18 +252,24 @@
   - Use correct time-measurement functions in OtlEventMonitor.
   - [Anton Alisov] Fixed critical section handling in TOmniValueQueue.DoWithCritSec. 
   - Avoid range check in OtlThreadPool on 64 CPU systems.
+  - TOmniValue.TryCastToInt64 was casting Variant into integer insted of int64.
+  - IOmniTaskGroup.WaitForAll/.TerminateAll no longer crashes if the group is empty.
 
 3.07.10: 2023-11-27
 
 - New features:
-  - Implemented TOmniValue.AsUInt64.
+  - Thread name can be set for Parallel.TimedTask.
+  - Added Delphi 12 packages.
+  - Added DSiEnumProcesses to DSiWin32.
 
 - Bug fixes:
-  - Fixed TOmniGroupAffinity.Create with 64 processors on 64-bit.
-  - TOmniValue.TryCastToInt64 was casting Variant into integer insted of int64.
-  - TOmniEventMonitor uses correct time-measurement functions.
-  - IOmniTaskGroup.WaitForAll/.TerminateAll no longer crashes if the group is empty.
-  - [SMelnyk64] Prevent potential AV in TOmniParallelLoopBase.InternalExecute.
+  - If a negative NumTasks (number of cores to leave free) would result in
+    less than 1 task, OtlParallel now uses 1 task. This
+    applies to Parallel.Join, ParallelTask, For, ForEach, ForkJoin, Map,
+    Pipeline and BackgroundWorker.
+  - Locked<T>.Initialize without the 'factory' parameter could return
+    uninitialized value.
+  - Fixed Delphi 12 hints and warnings.
 
 3.07.9: 2021-10-25
 
@@ -234,6 +282,8 @@
   - [HHasenack] Added Cancel and IsCancelled to IOmniParallelTask.
   - Implemented IOmniParallelJoin.Terminate and IOmniParallelTask.Terminate.
   - Added optional timeout parameter to IOmniThreadPool.Cancel.
+  - Implemented IOmniWorker.EventInfo.
+  - IOmniTaskControl.Terminate cancels thread pool tasks with timeout 0.
   - Added Delphi 11 Alexandria packages.
 
 - Bug fixes:
@@ -249,6 +299,9 @@
 
 - New features:
   - Implemented IOmniTask.RegisterWaitObject with an anonymous method callback.
+  - TOmniWaitableValue constructor and CreateWaitableValue optionally accept
+    an initial value for the Value property.
+  - Added TOmniValue.FromArray<T> overload accepting 'array of T'.
   - [Jacek Laskowski] donated a new OTL icon (res\OTL.ico).
   - Added Delphi 10.4 Sydney packages.
   

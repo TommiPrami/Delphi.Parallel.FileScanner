@@ -36,10 +36,19 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, dottor_jeckill, Sean B. Durkin, VyPu
 ///   Creation date     : 2009-03-30
-///   Last modification : 2026-07-24
-///   Version           : 2.2
+///   Last modification : 2026-10-09
+///   Version           : 2.3a
 ///</para><para>
 ///   History:
+///     2.3a: 2026-10-09
+///       - Removed a stray 'mov eax, [eax + $24]' from the 32-bit MoveDPtr(newData, newReference,
+///         Destination); it loaded from newData + $24, had no effect, and raised an access
+///         violation when newData was nil (reachable only when OTL_OLDCPU is not defined).
+///     2.3: 2026-10-09
+///       - When compiled for C++Builder (BCB is defined), the generated header declares
+///         IOmniCriticalSection.Release and IOmniResourceCount.Release as Leave, because
+///         Release conflicts with IUnknown::Release in C++ (issue #72). The Delphi API is
+///         unchanged.
 ///     2.2: 2026-07-24
 ///       - TLightweightMREWEx.BeginRead/TryBeginRead while owning the write
 ///         lock now raise BY DEFAULT - with strict TLightweightMREW semantics
@@ -234,6 +243,11 @@ type
     function  GetLockCount: integer;
     //
     procedure Acquire;
+    {$IFDEF BCB}
+    // IInterface is IUnknown in C++, and a Release method conflicts with IUnknown::Release.
+    // In the generated header, C++ code sees the method as Leave.
+    [HPPGEN('virtual void __fastcall Leave() = 0')]
+    {$ENDIF BCB}
     procedure Release;
     function  GetSyncObj: TSynchroObject;
     property LockCount: integer read GetLockCount;
@@ -284,6 +298,10 @@ type
   IOmniResourceCount = interface(IOmniHandleObject)
   ['{F5281539-1DA4-45E9-8565-4BEA689A23AD}']
     function  Allocate: cardinal;
+    {$IFDEF BCB}
+    // see IOmniCriticalSection.Release
+    [HPPGEN('virtual unsigned __fastcall Leave() = 0')]
+    {$ENDIF BCB}
     function  Release: cardinal;
     function  TryAllocate(var resourceCount: cardinal; timeout_ms: cardinal = 0): boolean;
   end; { IOmniResourceCount }
@@ -890,7 +908,6 @@ asm
   movd  xmm1, edx
   punpckldq xmm0, xmm1
   movq  qword [Destination], xmm0
-  mov   eax, [eax + $24]
 {$ELSE CPUX64}
 //Move 16 bytes atomically into 16-byte Destination!
   push  rbx
