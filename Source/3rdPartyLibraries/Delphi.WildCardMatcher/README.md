@@ -1,7 +1,8 @@
 # Delphi.WildCardMatcher
 
 Simple Windows / DOS style wildcard matcher for Delphi, with a couple of
-useful extensions (`#` for digits, quoted-string alternation inside `[...]`).
+useful extensions (digit runs `<###>`, quoted-string alternation inside
+`<...>`).
 
 Pure Pascal, single unit, no dependencies beyond the RTL.
 
@@ -11,47 +12,87 @@ Pure Pascal, single unit, no dependencies beyond the RTL.
 | ------------------ | -------------------------------------------------------- | --------------------------- | ------------------------ | ----------------- |
 | `*`                | Zero or more characters                                  | `wh*`                       | `what`, `why`            | `awhile`, `watch` |
 | `?`                | Exactly one character                                    | `b?ll`                      | `ball`, `bell`           | `bll`, `baal`     |
-| `#`                | Exactly one decimal digit (0-9)                          | `1#3`                       | `103`, `113`             | `1a3`, `13`       |
-| `[abc]`            | Any one character in the set                             | `b[ae]ll`                   | `ball`, `bell`           | `bill`            |
-| `[!abc]`           | Any one character NOT in the set                         | `b[!ae]ll`                  | `bill`, `bull`           | `ball`, `bell`    |
-| `[a-z]`            | Any one character in the range (low..high, ascending)    | `b[a-c]d`                   | `bad`, `bbd`             | `bdd`, `b0d`      |
-| `["foo"\|"bar"]`   | Any ONE of the listed literal strings at this position   | `*["3rdparty"\|"ThirdParty"]*.md` | `docs/3rdparty/x.md`, `src/ThirdPartyReadme.md` | `docs/internal/x.md` |
-| `[!"foo"\|"bar"]`  | A slice of length `max(altLen)` that is NEITHER prefix   | `[!"foo"\|"bar"]*`          | `quxyz`                  | `fooxyz`, `barxyz`|
+| `<#>`              | Exactly one decimal digit (0-9)                          | `1<#>3`                     | `103`, `113`             | `1a3`, `13`       |
+| `<###>`            | Exactly that many decimal digits (one per `#`)           | `Test_<###>.log`            | `Test_001.log`           | `Test_01.log`, `Test_0A1.log` |
+| `<abc>`            | Any one character in the set                             | `b<ae>ll`                   | `ball`, `bell`           | `bill`            |
+| `<!abc>`           | Any one character NOT in the set                         | `b<!ae>ll`                  | `bill`, `bull`           | `ball`, `bell`    |
+| `<a-z>`            | Any one character in the range (low..high, ascending)    | `b<a-c>d`                   | `bad`, `bbd`             | `bdd`, `b0d`      |
+| `<"foo"\|"bar">`   | Any ONE of the listed literal strings at this position   | `*<"3rdparty"\|"ThirdParty">*.md` | `docs/3rdparty/x.md`, `src/ThirdPartyReadme.md` | `docs/internal/x.md` |
+| `<!"foo"\|"bar">`  | A slice of length `max(altLen)` that is NEITHER prefix   | `<!"foo"\|"bar">*`          | `quxyz`                  | `fooxyz`, `barxyz`|
 
-Sets may combine literals and ranges, e.g. `[a-zA-Z0-9_]`.
-A literal `]` inside a single-char class must be the first content character:
-`[]abc]` matches `]`, `a`, `b` or `c`.
+**Every metacharacter is one Windows forbids in file names** (`*`, `?`,
+`<`, `>`, `"`, `|`). So any valid Windows path is a literal pattern that
+matches itself, including names with `[`, `]` or `#` in them:
+`C:\Temp\Foo[ab].txt` matches only `C:\Temp\Foo[ab].txt`, and
+`Track #01.mp3` matches only `Track #01.mp3`. `TWildCard.IsWildCard` tells
+the two apart by exactly this rule (see below).
+
+Sets may combine literals and ranges, e.g. `<a-zA-Z0-9_>`.
+A literal `>` inside a single-char class must be the first content character:
+`<>abc>` matches `>`, `a`, `b` or `c`.
 A `-` that is the first or last content character is treated as a literal,
-e.g. `[-x]` matches `-` or `x`; `[a-]` matches `a` or `-`.
+e.g. `<-x>` matches `-` or `x`; `<a->` matches `a` or `-`.
 
 `**` collapses to `*`.
 
-### Two flavours of `[...]`
+### Three flavours of `<...>`
 
-`[...]` is **auto-detected**:
+`<...>` is **auto-detected**:
 
+- If the content is only `#` characters, it is a **digit run**: `<#>` is
+  one digit, `<####>` four. A `#` mixed with other members (`<#a>`) is an
+  ordinary class member, and a bare `#` outside brackets is a literal.
 - If the first content character (after an optional `!`) is `"`, the class
-  is parsed as **quoted-string alternation**: `["foo"|"bar"|"baz"]`. The
+  is parsed as **quoted-string alternation**: `<"foo"|"bar"|"baz">`. The
   `|` separates alternatives. The class matches the FIRST alternative that
   succeeds at the current position and consumes its length.
-- Otherwise the class follows the **legacy single-character** rules
-  (`[abc]`, `[a-z]`, `[!xyz]`) and consumes exactly one character.
+- Otherwise the class follows the **single-character** rules
+  (`<abc>`, `<a-z>`, `<!xyz>`) and consumes exactly one character.
 
 An empty alternative `""` is allowed and matches zero characters
-(`[""|"foo"]` will match either nothing or `foo`).
+(`<""|"foo">` will match either nothing or `foo`).
 
 Quoted alternation is intended for file-mask use. Backslash escapes are
 NOT supported - none are needed because Windows file names cannot contain
-the characters `[`, `]`, `|` or `"` to begin with, so the syntax stays
-safe to embed in literal masks.
+`"`.
 
-Negated alternation `[!"foo"|"bar"]` succeeds when NONE of the listed
+Negated alternation `<!"foo"|"bar">` succeeds when NONE of the listed
 alternatives is a prefix at the current position; it then consumes the
 length of the LONGEST alternative. When the input has fewer characters
 left than the longest alternative, the match fails.
 
-`|` OUTSIDE of `[...]` has no special meaning and is treated as a literal
-character.
+`|`, `"` and `>` OUTSIDE of `<...>` have no special meaning and are
+treated as literal characters (`Lint` warns about them, since no Windows
+path can contain them).
+
+### Plain path or pattern? (`IsWildCard`)
+
+```pascal
+TWildCard.IsWildCard('C:\Temp\Foo.txt');      // False
+TWildCard.IsWildCard('C:\Temp\Foo[ab].txt');  // False - '[' ']' are legal file name characters
+TWildCard.IsWildCard('C:\Temp\*oo.txt');      // True
+TWildCard.IsWildCard('Test_<###>.log');       // True
+```
+
+`IsWildCard` returns True when the text contains `*`, `?` or `<`, the only
+characters the engines do not take literally. It does not check syntax:
+`Foo<abc` is True (and malformed - use `ValidatePattern` for that). Text
+for which it returns False always matches itself, in every mode.
+
+### Migrating from the `[...]` syntax
+
+Earlier versions used `[...]` for classes and a bare `#` for a digit.
+Those characters are legal in file names, so a path like `Foo[ab].txt`
+could not be matched literally. Rewrite old masks as:
+
+| Old               | New               |
+| ----------------- | ----------------- |
+| `[abc]`, `[!a-z]` | `<abc>`, `<!a-z>` |
+| `["a"\|"b"]`      | `<"a"\|"b">`      |
+| `#`, `###`        | `<#>`, `<###>`    |
+
+`Lint` flags old alternations: a `"` or `|` outside `<...>` is reported as a
+warning, because such a pattern can never match a Windows path.
 
 Matching is **case-insensitive by default** (Windows convention).
 Pass `ACaseSensitive = True` (or `wcoCaseSensitive`) for ordinal
@@ -79,20 +120,6 @@ Separator characters in the pattern itself are literals; only the
 crossing rule treats both `\` and `/` as separators. Note that the
 separators around `**` are literal too - `src\**\x` requires at least
 one directory level between `src` and `x`.
-
-### Matching literal metacharacters
-
-Windows file names may legally contain `#`, `[` and `]`. They are
-matchable through single-char classes:
-
-| To match a literal | Write |
-| ------------------ | ----- |
-| `#`                | `[#]` |
-| `[`                | `[[]` |
-| `]`                | `[]]` |
-
-e.g. `Track [#][0-9][0-9].mp3` matches `Track #01.mp3`. (`*` and `?`
-cannot appear in Windows file names, so they need no escape.)
 
 ## Usage
 
@@ -177,7 +204,7 @@ file, reject them at input time instead:
 
 ```pascal
 if not TWildCard.ValidatePattern(LUserMask, LError) then
-  ShowMessage('Bad mask: ' + LError);   // e.g. 'Unterminated character class (''['' at position 5)'
+  ShowMessage('Bad mask: ' + LError);   // e.g. 'Unterminated character class (''<'' at position 5)'
 ```
 
 ### Which pattern matched?
@@ -219,10 +246,11 @@ What gets flagged:
 | Warning | Include pattern that is also an exclude pattern |
 | Warning | Match-everything exclude (`*`) - the filter accepts nothing |
 | Warning | Duplicate pattern in a set / pattern shadowed by an earlier `*` |
-| Warning | `[!""]` - never matches |
+| Warning | `<!"">` - never matches |
+| Warning | `"`, `\|` or `>` outside `<...>` - matched literally, impossible in a Windows path (typically the old `["a"\|"b"]` syntax) |
 | Hint | `**` without `wcoPathMode` (collapses to `*`) |
 | Hint | Match-everything include making other includes redundant |
-| Hint | Empty range `[z-a]`, duplicate alternatives `["a"\|"a"]`, lone `[""]`, empty pattern |
+| Hint | Empty range `<z-a>`, duplicate alternatives `<"a"\|"a">`, lone `<"">`, empty pattern |
 
 `TWildCard.LintPattern(pattern, options)` checks a single pattern;
 `TWildCard.Lint` a registered set; `TWildCardFilter.Lint` both lists plus
@@ -277,14 +305,14 @@ LMask := TWildCard.Create(['*3rdparty*.md', '*ThirdParty*.md']);
 you can write:
 
 ```pascal
-LMask := TWildCard.Create('*["3rdparty"|"ThirdParty"]*.md');
+LMask := TWildCard.Create('*<"3rdparty"|"ThirdParty">*.md');
 ```
 
 The negated form is handy for "skip files whose name contains any of
 these tokens":
 
 ```pascal
-if TWildCard.Create.Match(LFile, '*[!"backup"|"draft"|"old"]*.docx') then
+if TWildCard.Create.Match(LFile, '*<!"backup"|"draft"|"old">*.docx') then
   ProcessOfficialDocument(LFile);
 ```
 
@@ -315,6 +343,9 @@ type
     class function Create(const ACaseSensitive: Boolean = False): TWildCard; overload; static;
     // ... (string / TArray / TStrings ACaseSensitive variants)
 
+    // True when the text contains '*', '?' or '<' - False for any plain
+    // path, which then matches only itself.
+    class function IsWildCard(const APattern: string): Boolean; static;
     // Syntax check with a human-readable reason + 1-based position.
     class function ValidatePattern(const APattern: string;
       out AErrorMessage: string): Boolean; static;

@@ -20,6 +20,36 @@ cost.
 call over the whole pattern set.**  1 ns = one billionth of a second;
 100 ns/op = 10 million Match calls per second.
 
+Pattern syntax: since 2026-10-13 the suite is written in the `<...>`
+syntax (`<abc>`, `<"a"|"b">`, digit runs `<###>`).  The frozen baseline
+engine predates it, so the suite detects the legacy engine at runtime
+and translates each pattern to the old `[...]` / `#` form - both
+programs still time identical work (the per-round match-count check
+proves it).  Older entries below quote patterns in the old syntax.
+
+## 2026-10-13: '<...>' syntax change + IsWildCard (ns/op)
+
+Classes moved from `[...]` to `<...>`, the digit wildcard from bare `#` to
+`<#>` / `<###>`, and `IsWildCard` was added - so every valid Windows path
+(including `[`, `]` and `#` in names) is a literal that matches itself.
+Match-path change: the tokenizer and interpreter dispatch on `<` instead
+of `[` / `#`, with a digit-run check in front of the class parser.  The
+baseline program now also runs under FastMM5 with P-core affinity, like
+the main one.  Suite: 129 DUnitX tests.
+
+| Scenario | registered CI | ad-hoc CI | registered CS | ad-hoc CS |
+| --- | ---: | ---: | ---: | ---: |
+| S1 single mask `*.pas` | 8.2 | 43.7 | 6.7 | 24.2 |
+| S2 8-mask ignore set | 52.4 | 218.1 | 45.1 | 101.9 |
+| S3 worst-case backtracking | 582 | 952 | 453 | 520 |
+| S4 quoted-alt mask | 163 | 989 | 111 | 847 |
+
+Within run-to-run noise of the 2026-07-15 (b) entry - no regression.
+Same-day baseline (frozen `0e83678`, patterns translated): S1 115.3 /
+164.8 / 84.6 / 76.5, S2 877.9 / 1059.4 / 472.6 / 463.1, S3 6720 / 6925 /
+3075 / 3048, S4 1193 / 1282 / 942 / 929 - registered CI is 14x (S1),
+17x (S2), 12x (S3) and 7x (S4) faster than the baseline.
+
 ## 2026-07-15 (b): lint round - diagnostics API, no match-path changes (ns/op)
 
 Added the Lint/diagnostics system (TWildCard.LintPattern/Lint,

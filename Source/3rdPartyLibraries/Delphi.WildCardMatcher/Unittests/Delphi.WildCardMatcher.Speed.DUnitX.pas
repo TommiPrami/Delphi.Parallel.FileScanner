@@ -52,10 +52,10 @@ const
   // so the only thing that differs between the two runs is the engine.
   WORST_CASE_LONG_PATH = 'C:\Users\developer\source\repos\MyApp\src\main\delphi\modules\data_access\repositories\implementations\sqlserver\'
     + 'concrete\OrderRepositoryImplementation_2024_03_15_v3_revised_final.pas';
-  // Every '*' segment finds something in the path; '#' matches the '3' in
+  // Every '*' segment finds something in the path; '<#>' matches the '3' in
   // '_v3_'.  Only the final '.xyz' anchor fails - forcing the matcher to
   // unwind through every '*' alternative before reporting no-match.
-  WORST_CASE_COMPLEX_PATTERN = '*\Users\*\source\*\MyApp\*\modules\*\repositories\*\sqlserver\*\*Repository*_v#_*.xyz';
+  WORST_CASE_COMPLEX_PATTERN = '*\Users\*\source\*\MyApp\*\modules\*\repositories\*\sqlserver\*\*Repository*_v<#>_*.xyz';
 
 procedure TWildCardSpeedDUnitX.Setup;
 var

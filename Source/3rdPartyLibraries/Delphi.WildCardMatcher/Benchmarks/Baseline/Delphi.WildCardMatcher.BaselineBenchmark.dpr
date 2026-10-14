@@ -4,12 +4,14 @@
 // (shared Delphi.WildCardMatcher.Benchmarks.pas) against the FROZEN
 // pre-optimization matcher from commit 0e83678 ('New Syntax, EOL stuff
 // met its End Of Life') that lives next to this file.  That commit has
-// the full current syntax (quoted alternation included) but none of the
-// engine optimizations, so it is the reference point for all speedup
-// claims in RESULTS.md.
+// none of the engine optimizations, so it is the reference point for all
+// speedup claims in RESULTS.md.  It also predates the '<...>' class
+// syntax ('[...]' classes, bare '#' digit); the shared suite detects that
+// and translates its patterns, so both programs time the same work.
 //
 // The 'in' path below binds Delphi.WildCardMatcher to the frozen copy;
-// the shared benchmark units are recompiled against it.
+// the shared benchmark units are recompiled against it.  Memory manager
+// and core affinity mirror the main benchmark so the numbers compare.
 //
 // Do NOT edit Baseline\Delphi.WildCardMatcher.pas - it is a historical
 // snapshot.
@@ -22,7 +24,9 @@
 {$APPTYPE CONSOLE}
 
 uses
+  FastMM5 in '..\..\Source\3rdPArty\FastMM5\FastMM5.pas',
   System.SysUtils,
+  Delphi.ProcessAffinity.Utils in '..\..\Source\3rdPArty\Delphi.ProcessAffinity.Utils\Delphi.ProcessAffinity.Utils.pas',
   Delphi.WildCardMatcher in 'Delphi.WildCardMatcher.pas',
   Delphi.WildCardMatcher.Benchmark.Types in '..\Delphi.WildCardMatcher.Benchmark.Types.pas',
   Delphi.WildCardMatcher.Benchmark.Utils in '..\Delphi.WildCardMatcher.Benchmark.Utils.pas',
@@ -30,8 +34,14 @@ uses
 
 begin
   try
+    SetPerformanceCoreAffinity;
+
     RunParitySuite;
     RunBenchmarkScenarios;
+
+    Log('');
+    Log('Benchmark complete.');
+    Log('Results saved to: %s', [LogFileName]);
   except
     on E: Exception do
     begin

@@ -30,17 +30,17 @@ type
     [Test]
     procedure QuestionMarkRequiresACharacterTest;
 
-    { Spec example 3: '[abc]' }
+    { Spec example 3: '<abc>' }
     [Test]
     procedure CharClassPositiveSetTest;
 
-    { Spec example 4: '[!abc]' }
+    { Spec example 4: '<!abc>' }
     [Test]
     procedure CharClassNegatedSetTest;
     [Test]
     procedure NegatedSetAtStartSpecExampleTest;
 
-    { Spec example 5: '[a-c]' }
+    { Spec example 5: '<a-c>' }
     [Test]
     procedure CharClassRangeTest;
     [Test]
@@ -48,11 +48,15 @@ type
     [Test]
     procedure NegatedRangeTest;
 
-    { Spec example 6: '#' }
+    { Spec example 6: digit runs '<#>', '<###>' }
     [Test]
     procedure HashMatchesSingleDigitTest;
     [Test]
     procedure HashRejectsNonDigitTest;
+    [Test]
+    procedure DigitRunMatchesSeveralDigitsTest;
+    [Test]
+    procedure DigitRunEdgeCasesTest;
 
     { Edge cases }
     [Test]
@@ -74,7 +78,7 @@ type
     [Test]
     procedure DashAsLiteralAtStartOrEndOfClassTest;
 
-    { Quoted-string alternation: '["foo"|"bar"]' }
+    { Quoted-string alternation: '<"foo"|"bar">' }
     [Test]
     procedure QuotedAltSingleAlternativeMatchesLiteralTest;
     [Test]
@@ -266,6 +270,14 @@ type
     procedure FilterLintMatchAllTest;
     [Test]
     procedure FilterLintCleanFilterTest;
+    [Test]
+    procedure LintPreAngleBracketSyntaxTest;
+
+    { IsWildCard and plain paths }
+    [Test]
+    procedure IsWildCardTest;
+    [Test]
+    procedure IsWildCardFalseMeansPatternMatchesItselfTest;
 
     { API additions }
     [Test]
@@ -277,7 +289,7 @@ type
 
     { Additional matcher coverage }
     [Test]
-    procedure LiteralMetacharacterTricksTest;
+    procedure FileNameCharactersAreLiteralTest;
     [Test]
     procedure UnicodeNonAsciiSimdCandidateTest;
     [Test]
@@ -362,86 +374,126 @@ begin
   Assert.IsFalse(TWildCard.Create.Match('baal', 'b?ll'), '"baal" has two middle chars');
 end;
 
-{ Spec example 3: '[abc]' }
+{ Spec example 3: '<abc>' }
 
 procedure TWildCardMatcherDUnitX.CharClassPositiveSetTest;
 begin
-  // b[ae]ll finds ball and bell, but not bill (from the spec)
-  Assert.IsTrue (TWildCard.Create.Match('ball', 'b[ae]ll'));
-  Assert.IsTrue (TWildCard.Create.Match('bell', 'b[ae]ll'));
-  Assert.IsFalse(TWildCard.Create.Match('bill', 'b[ae]ll'));
+  // b<ae>ll finds ball and bell, but not bill (from the spec)
+  Assert.IsTrue (TWildCard.Create.Match('ball', 'b<ae>ll'));
+  Assert.IsTrue (TWildCard.Create.Match('bell', 'b<ae>ll'));
+  Assert.IsFalse(TWildCard.Create.Match('bill', 'b<ae>ll'));
 end;
 
-{ Spec example 4: '[!abc]' }
+{ Spec example 4: '<!abc>' }
 
 procedure TWildCardMatcherDUnitX.CharClassNegatedSetTest;
 begin
-  // b[!ae]ll finds bill and bull, but not ball or bell (from the spec)
-  Assert.IsTrue (TWildCard.Create.Match('bill', 'b[!ae]ll'));
-  Assert.IsTrue (TWildCard.Create.Match('bull', 'b[!ae]ll'));
-  Assert.IsFalse(TWildCard.Create.Match('ball', 'b[!ae]ll'));
-  Assert.IsFalse(TWildCard.Create.Match('bell', 'b[!ae]ll'));
+  // b<!ae>ll finds bill and bull, but not ball or bell (from the spec)
+  Assert.IsTrue (TWildCard.Create.Match('bill', 'b<!ae>ll'));
+  Assert.IsTrue (TWildCard.Create.Match('bull', 'b<!ae>ll'));
+  Assert.IsFalse(TWildCard.Create.Match('ball', 'b<!ae>ll'));
+  Assert.IsFalse(TWildCard.Create.Match('bell', 'b<!ae>ll'));
 end;
 
 procedure TWildCardMatcherDUnitX.NegatedSetAtStartSpecExampleTest;
 begin
-  // From the spec: "[!a]*" finds all items that do not begin with 'a'.
-  Assert.IsTrue (TWildCard.Create.Match('banana', '[!a]*'));
-  Assert.IsTrue (TWildCard.Create.Match('zebra',  '[!a]*'));
-  Assert.IsTrue (TWildCard.Create.Match('x',      '[!a]*'));
-  Assert.IsFalse(TWildCard.Create.Match('apple',  '[!a]*'));
-  Assert.IsFalse(TWildCard.Create.Match('a',      '[!a]*'));
+  // From the spec: "<!a>*" finds all items that do not begin with 'a'.
+  Assert.IsTrue (TWildCard.Create.Match('banana', '<!a>*'));
+  Assert.IsTrue (TWildCard.Create.Match('zebra',  '<!a>*'));
+  Assert.IsTrue (TWildCard.Create.Match('x',      '<!a>*'));
+  Assert.IsFalse(TWildCard.Create.Match('apple',  '<!a>*'));
+  Assert.IsFalse(TWildCard.Create.Match('a',      '<!a>*'));
 end;
 
-{ Spec example 5: '[a-c]' }
+{ Spec example 5: '<a-c>' }
 
 procedure TWildCardMatcherDUnitX.CharClassRangeTest;
 begin
-  // b[a-c]d finds bad, bbd, bcd (from the spec)
-  Assert.IsTrue (TWildCard.Create.Match('bad', 'b[a-c]d'));
-  Assert.IsTrue (TWildCard.Create.Match('bbd', 'b[a-c]d'));
-  Assert.IsTrue (TWildCard.Create.Match('bcd', 'b[a-c]d'));
-  Assert.IsFalse(TWildCard.Create.Match('bdd', 'b[a-c]d'));
-  Assert.IsFalse(TWildCard.Create.Match('b0d', 'b[a-c]d'));
+  // b<a-c>d finds bad, bbd, bcd (from the spec)
+  Assert.IsTrue (TWildCard.Create.Match('bad', 'b<a-c>d'));
+  Assert.IsTrue (TWildCard.Create.Match('bbd', 'b<a-c>d'));
+  Assert.IsTrue (TWildCard.Create.Match('bcd', 'b<a-c>d'));
+  Assert.IsFalse(TWildCard.Create.Match('bdd', 'b<a-c>d'));
+  Assert.IsFalse(TWildCard.Create.Match('b0d', 'b<a-c>d'));
 end;
 
 procedure TWildCardMatcherDUnitX.CombinedRangesTest;
 begin
   // Multiple ranges in one class
-  Assert.IsTrue (TWildCard.Create.Match('X', '[a-zA-Z]'));
-  Assert.IsTrue (TWildCard.Create.Match('x', '[a-zA-Z]'));
-  Assert.IsFalse(TWildCard.Create.Match('5', '[a-zA-Z]'));
+  Assert.IsTrue (TWildCard.Create.Match('X', '<a-zA-Z>'));
+  Assert.IsTrue (TWildCard.Create.Match('x', '<a-zA-Z>'));
+  Assert.IsFalse(TWildCard.Create.Match('5', '<a-zA-Z>'));
 
   // Range + literals + digits
-  Assert.IsTrue (TWildCard.Create.Match('q',  '[a-cq0-9]'));
-  Assert.IsTrue (TWildCard.Create.Match('b',  '[a-cq0-9]'));
-  Assert.IsTrue (TWildCard.Create.Match('7',  '[a-cq0-9]'));
-  Assert.IsFalse(TWildCard.Create.Match('z',  '[a-cq0-9]'));
+  Assert.IsTrue (TWildCard.Create.Match('q',  '<a-cq0-9>'));
+  Assert.IsTrue (TWildCard.Create.Match('b',  '<a-cq0-9>'));
+  Assert.IsTrue (TWildCard.Create.Match('7',  '<a-cq0-9>'));
+  Assert.IsFalse(TWildCard.Create.Match('z',  '<a-cq0-9>'));
 end;
 
 procedure TWildCardMatcherDUnitX.NegatedRangeTest;
 begin
-  Assert.IsTrue (TWildCard.Create.Match('1', '[!a-z]'));
-  Assert.IsTrue (TWildCard.Create.Match('!', '[!a-z]'));
-  Assert.IsFalse(TWildCard.Create.Match('m', '[!a-z]'));
+  Assert.IsTrue (TWildCard.Create.Match('1', '<!a-z>'));
+  Assert.IsTrue (TWildCard.Create.Match('!', '<!a-z>'));
+  Assert.IsFalse(TWildCard.Create.Match('m', '<!a-z>'));
 end;
 
-{ Spec example 6: '#' }
+{ Spec example 6: digit runs '<#>', '<###>' }
 
 procedure TWildCardMatcherDUnitX.HashMatchesSingleDigitTest;
 begin
-  // 1#3 finds 103, 113, 123 (from the spec)
-  Assert.IsTrue(TWildCard.Create.Match('103', '1#3'));
-  Assert.IsTrue(TWildCard.Create.Match('113', '1#3'));
-  Assert.IsTrue(TWildCard.Create.Match('123', '1#3'));
-  Assert.IsTrue(TWildCard.Create.Match('193', '1#3'));
+  // 1<#>3 finds 103, 113, 123 (from the spec)
+  Assert.IsTrue(TWildCard.Create.Match('103', '1<#>3'));
+  Assert.IsTrue(TWildCard.Create.Match('113', '1<#>3'));
+  Assert.IsTrue(TWildCard.Create.Match('123', '1<#>3'));
+  Assert.IsTrue(TWildCard.Create.Match('193', '1<#>3'));
 end;
 
 procedure TWildCardMatcherDUnitX.HashRejectsNonDigitTest;
 begin
-  Assert.IsFalse(TWildCard.Create.Match('1a3', '1#3'), '"a" is not a digit');
-  Assert.IsFalse(TWildCard.Create.Match('1 3', '1#3'), 'space is not a digit');
-  Assert.IsFalse(TWildCard.Create.Match('13',  '1#3'), '"#" must consume exactly one digit');
+  Assert.IsFalse(TWildCard.Create.Match('1a3', '1<#>3'), '"a" is not a digit');
+  Assert.IsFalse(TWildCard.Create.Match('1 3', '1<#>3'), 'space is not a digit');
+  Assert.IsFalse(TWildCard.Create.Match('13',  '1<#>3'), '"<#>" must consume exactly one digit');
+end;
+
+procedure TWildCardMatcherDUnitX.DigitRunMatchesSeveralDigitsTest;
+begin
+  // '<###>' is shorthand for three digits.
+  Assert.IsTrue (TWildCard.Create.Match('Test_001.log', 'Test_<###>.log'));
+  Assert.IsTrue (TWildCard.Create('Test_<###>.log').Match('Test_999.log'), 'registered engine');
+  Assert.IsFalse(TWildCard.Create.Match('Test_01.log',   'Test_<###>.log'), 'too few digits');
+  Assert.IsFalse(TWildCard.Create.Match('Test_0001.log', 'Test_<###>.log'), 'too many digits');
+  Assert.IsFalse(TWildCard.Create.Match('Test_0A1.log',  'Test_<###>.log'), 'non-digit in the middle');
+
+  // Runs compose with each other and with '*'.
+  Assert.IsTrue (TWildCard.Create.Match('2026-10-13.log', '<####>-<##>-<##>.log'));
+  Assert.IsTrue (TWildCard.Create('*_<##>.txt').Match('report_v2_07.txt'));
+  Assert.IsFalse(TWildCard.Create('*_<##>.txt').Match('report_v2_7.txt'));
+end;
+
+procedure TWildCardMatcherDUnitX.DigitRunEdgeCasesTest;
+begin
+  // A bare '#' is an ordinary literal character now.
+  Assert.IsTrue (TWildCard.Create.Match('#', '#'));
+  Assert.IsFalse(TWildCard.Create.Match('5', '#'), 'bare # is a literal, not a digit');
+
+  // '#' mixed with other members is a plain class member.
+  Assert.IsTrue (TWildCard.Create.Match('#', '<#a>'));
+  Assert.IsTrue (TWildCard.Create.Match('a', '<#a>'));
+  Assert.IsFalse(TWildCard.Create.Match('5', '<#a>'), '<#a> is the set {#, a}, not a digit run');
+
+  // Negation is a class, not a negated digit run: '<!#>' = anything but '#'.
+  Assert.IsTrue (TWildCard.Create.Match('5', '<!#>'));
+  Assert.IsFalse(TWildCard.Create.Match('#', '<!#>'));
+
+  // Leading '>' is a literal member, so '<>#>' is the set {>, #}.
+  Assert.IsTrue (TWildCard.Create.Match('>', '<>#>'));
+  Assert.IsTrue (TWildCard.Create.Match('#', '<>#>'));
+  Assert.IsFalse(TWildCard.Create.Match('5', '<>#>'));
+
+  // Unterminated digit run is a malformed class - never matches.
+  Assert.IsFalse(TWildCard.Create.Match('12', '<##'));
+  Assert.IsFalse(TWildCard.Create('<##').Match('12'));
 end;
 
 { Edge cases }
@@ -458,9 +510,9 @@ begin
   Assert.IsTrue (TWildCard.Create.Match('', '*'));
   Assert.IsTrue (TWildCard.Create.Match('', '***'));
   Assert.IsFalse(TWildCard.Create.Match('', '?'));
-  Assert.IsFalse(TWildCard.Create.Match('', '#'));
+  Assert.IsFalse(TWildCard.Create.Match('', '<#>'));
   Assert.IsFalse(TWildCard.Create.Match('', 'a'));
-  Assert.IsFalse(TWildCard.Create.Match('', '[a-z]'));
+  Assert.IsFalse(TWildCard.Create.Match('', '<a-z>'));
 end;
 
 procedure TWildCardMatcherDUnitX.ExactLiteralMatchTest;
@@ -476,48 +528,48 @@ begin
   // Default is case-insensitive (Windows convention)
   Assert.IsTrue(TWildCard.Create.Match('README.TXT', 'readme.txt'));
   Assert.IsTrue(TWildCard.Create.Match('ReadMe.Txt', '*.TXT'));
-  Assert.IsTrue(TWildCard.Create.Match('FOO', '[a-z]??'));
+  Assert.IsTrue(TWildCard.Create.Match('FOO', '<a-z>??'));
 end;
 
 procedure TWildCardMatcherDUnitX.CaseSensitiveFlagTest;
 begin
   Assert.IsFalse(TWildCard.Create(True).Match('README.TXT', 'readme.txt'));
   Assert.IsTrue (TWildCard.Create(True).Match('readme.txt', 'readme.txt'));
-  Assert.IsFalse(TWildCard.Create(True).Match('FOO',        '[a-z]??'));
-  Assert.IsTrue (TWildCard.Create(True).Match('foo',        '[a-z]??'));
+  Assert.IsFalse(TWildCard.Create(True).Match('FOO',        '<a-z>??'));
+  Assert.IsTrue (TWildCard.Create(True).Match('foo',        '<a-z>??'));
 end;
 
 procedure TWildCardMatcherDUnitX.UnterminatedClassReturnsFalseTest;
 begin
-  // Patterns with an unterminated '[' are malformed - never match
-  Assert.IsFalse(TWildCard.Create.Match('a',  '[abc'));
-  Assert.IsFalse(TWildCard.Create.Match('ab', 'a[bc'));
+  // Patterns with an unterminated '<' are malformed - never match
+  Assert.IsFalse(TWildCard.Create.Match('a',  '<abc'));
+  Assert.IsFalse(TWildCard.Create.Match('ab', 'a<bc'));
 end;
 
 procedure TWildCardMatcherDUnitX.EmptyClassReturnsFalseTest;
 begin
-  // '[]' is treated as an unterminated class with ']' as literal content;
-  // the next ']' would close it. Bare '[]' on its own is malformed.
-  Assert.IsFalse(TWildCard.Create.Match('a', '[]'));
+  // '<>' is treated as an unterminated class with '>' as literal content;
+  // the next '>' would close it. Bare '<>' on its own is malformed.
+  Assert.IsFalse(TWildCard.Create.Match('a', '<>'));
 end;
 
 procedure TWildCardMatcherDUnitX.LiteralCloseBracketAsFirstClassCharTest;
 begin
-  // First content char ']' is a literal - '[]abc]' matches ']', 'a', 'b' or 'c'
-  Assert.IsTrue (TWildCard.Create.Match(']', '[]abc]'));
-  Assert.IsTrue (TWildCard.Create.Match('a', '[]abc]'));
-  Assert.IsTrue (TWildCard.Create.Match('c', '[]abc]'));
-  Assert.IsFalse(TWildCard.Create.Match('x', '[]abc]'));
+  // First content char '>' is a literal - '<>abc>' matches '>', 'a', 'b' or 'c'
+  Assert.IsTrue (TWildCard.Create.Match('>', '<>abc>'));
+  Assert.IsTrue (TWildCard.Create.Match('a', '<>abc>'));
+  Assert.IsTrue (TWildCard.Create.Match('c', '<>abc>'));
+  Assert.IsFalse(TWildCard.Create.Match('x', '<>abc>'));
 end;
 
 procedure TWildCardMatcherDUnitX.DashAsLiteralAtStartOrEndOfClassTest;
 begin
   // '-' at the start/end of a class is a literal, not part of a range
-  Assert.IsTrue (TWildCard.Create.Match('-', '[-x]'));
-  Assert.IsTrue (TWildCard.Create.Match('x', '[-x]'));
-  Assert.IsTrue (TWildCard.Create.Match('-', '[a-]'));
-  Assert.IsTrue (TWildCard.Create.Match('a', '[a-]'));
-  Assert.IsFalse(TWildCard.Create.Match('b', '[a-]'));
+  Assert.IsTrue (TWildCard.Create.Match('-', '<-x>'));
+  Assert.IsTrue (TWildCard.Create.Match('x', '<-x>'));
+  Assert.IsTrue (TWildCard.Create.Match('-', '<a->'));
+  Assert.IsTrue (TWildCard.Create.Match('a', '<a->'));
+  Assert.IsFalse(TWildCard.Create.Match('b', '<a->'));
 end;
 
 { Combinations }
@@ -527,18 +579,18 @@ begin
   // Realistic file-mask style patterns
   Assert.IsTrue (TWildCard.Create.Match('Foo1.pas',  '*.pas'));
   Assert.IsTrue (TWildCard.Create.Match('Foo1.pas',  'Foo?.pas'));
-  Assert.IsTrue (TWildCard.Create.Match('Foo7.pas',  'Foo#.pas'));
-  Assert.IsFalse(TWildCard.Create.Match('FooA.pas',  'Foo#.pas'));
-  Assert.IsTrue (TWildCard.Create.Match('Test_001.log', 'Test_###.log'));
-  Assert.IsFalse(TWildCard.Create.Match('Test_00A.log', 'Test_###.log'));
+  Assert.IsTrue (TWildCard.Create.Match('Foo7.pas',  'Foo<#>.pas'));
+  Assert.IsFalse(TWildCard.Create.Match('FooA.pas',  'Foo<#>.pas'));
+  Assert.IsTrue (TWildCard.Create.Match('Test_001.log', 'Test_<###>.log'));
+  Assert.IsFalse(TWildCard.Create.Match('Test_00A.log', 'Test_<###>.log'));
 end;
 
 procedure TWildCardMatcherDUnitX.MixedSpecialCharsInClassTest;
 begin
-  // Class combining range + literal digit + literal letter
-  Assert.IsTrue (TWildCard.Create.Match('Foo_5.pas', 'Foo[_-]#.pas'));
-  Assert.IsTrue (TWildCard.Create.Match('Foo-5.pas', 'Foo[_-]#.pas'));
-  Assert.IsFalse(TWildCard.Create.Match('Foo.5.pas', 'Foo[_-]#.pas'));
+  // Class combining a literal '_' and '-', followed by a digit run
+  Assert.IsTrue (TWildCard.Create.Match('Foo_5.pas', 'Foo<_-><#>.pas'));
+  Assert.IsTrue (TWildCard.Create.Match('Foo-5.pas', 'Foo<_-><#>.pas'));
+  Assert.IsFalse(TWildCard.Create.Match('Foo.5.pas', 'Foo<_-><#>.pas'));
 end;
 
 procedure TWildCardMatcherDUnitX.ManyAsterisksDoNotExplodeTest;
@@ -551,64 +603,64 @@ begin
     '*a*b*c*d*e*f*g*h*i*j*k*l*m*n*o*z*'));
 end;
 
-{ Quoted-string alternation: '["foo"|"bar"]' }
+{ Quoted-string alternation: '<"foo"|"bar">' }
 
 procedure TWildCardMatcherDUnitX.QuotedAltSingleAlternativeMatchesLiteralTest;
 begin
   // A class with a single quoted alternative matches just that literal at
   // the current position, consuming its length.
-  Assert.IsTrue (TWildCard.Create.Match('foo',    '["foo"]'));
-  Assert.IsTrue (TWildCard.Create.Match('foobar', '["foo"]*'));
-  Assert.IsFalse(TWildCard.Create.Match('fo',     '["foo"]'), 'not enough input to span the alt');
-  Assert.IsFalse(TWildCard.Create.Match('bar',    '["foo"]'));
+  Assert.IsTrue (TWildCard.Create.Match('foo',    '<"foo">'));
+  Assert.IsTrue (TWildCard.Create.Match('foobar', '<"foo">*'));
+  Assert.IsFalse(TWildCard.Create.Match('fo',     '<"foo">'), 'not enough input to span the alt');
+  Assert.IsFalse(TWildCard.Create.Match('bar',    '<"foo">'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltMultipleAlternativesAnyMatchesTest;
 begin
   // The class succeeds when ANY of the listed alternatives matches at the
   // current position.
-  Assert.IsTrue (TWildCard.Create.Match('foo', '["foo"|"bar"|"baz"]'));
-  Assert.IsTrue (TWildCard.Create.Match('bar', '["foo"|"bar"|"baz"]'));
-  Assert.IsTrue (TWildCard.Create.Match('baz', '["foo"|"bar"|"baz"]'));
+  Assert.IsTrue (TWildCard.Create.Match('foo', '<"foo"|"bar"|"baz">'));
+  Assert.IsTrue (TWildCard.Create.Match('bar', '<"foo"|"bar"|"baz">'));
+  Assert.IsTrue (TWildCard.Create.Match('baz', '<"foo"|"bar"|"baz">'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltNoneOfTheAlternativesMatchesFailsTest;
 begin
-  Assert.IsFalse(TWildCard.Create.Match('qux', '["foo"|"bar"|"baz"]'));
+  Assert.IsFalse(TWildCard.Create.Match('qux', '<"foo"|"bar"|"baz">'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltCaseInsensitiveByDefaultTest;
 begin
-  Assert.IsTrue(TWildCard.Create.Match('FOO', '["foo"|"bar"]'));
-  Assert.IsTrue(TWildCard.Create.Match('Bar', '["foo"|"bar"]'));
+  Assert.IsTrue(TWildCard.Create.Match('FOO', '<"foo"|"bar">'));
+  Assert.IsTrue(TWildCard.Create.Match('Bar', '<"foo"|"bar">'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltCaseSensitiveFlagTest;
 begin
-  Assert.IsTrue (TWildCard.Create(True).Match('foo', '["foo"|"bar"]'));
-  Assert.IsFalse(TWildCard.Create(True).Match('FOO', '["foo"|"bar"]'));
-  Assert.IsFalse(TWildCard.Create(True).Match('Bar', '["foo"|"bar"]'));
+  Assert.IsTrue (TWildCard.Create(True).Match('foo', '<"foo"|"bar">'));
+  Assert.IsFalse(TWildCard.Create(True).Match('FOO', '<"foo"|"bar">'));
+  Assert.IsFalse(TWildCard.Create(True).Match('Bar', '<"foo"|"bar">'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltCombinedWithAsteriskTest;
 begin
-  // Embedded in a larger pattern: '*["foo"|"bar"]*' = the input must
+  // Embedded in a larger pattern: '*<"foo"|"bar">*' = the input must
   // contain either 'foo' or 'bar' somewhere.
-  Assert.IsTrue (TWildCard.Create.Match('xxfooyy', '*["foo"|"bar"]*'));
-  Assert.IsTrue (TWildCard.Create.Match('xxbaryy', '*["foo"|"bar"]*'));
-  Assert.IsFalse(TWildCard.Create.Match('xxxxxxx',  '*["foo"|"bar"]*'));
+  Assert.IsTrue (TWildCard.Create.Match('xxfooyy', '*<"foo"|"bar">*'));
+  Assert.IsTrue (TWildCard.Create.Match('xxbaryy', '*<"foo"|"bar">*'));
+  Assert.IsFalse(TWildCard.Create.Match('xxxxxxx',  '*<"foo"|"bar">*'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltReadmeExamplePatternTest;
 begin
-  // README example: '*["3rdparty"|"ThirdParty"]*.md' matches Markdown files
+  // README example: '*<"3rdparty"|"ThirdParty">*.md' matches Markdown files
   // anywhere on the path that mention either name.
-  Assert.IsTrue (TWildCard.Create.Match('docs/3rdparty/notes.md',    '*["3rdparty"|"ThirdParty"]*.md'));
-  Assert.IsTrue (TWildCard.Create.Match('src/ThirdPartyReadme.md',   '*["3rdparty"|"ThirdParty"]*.md'));
-  Assert.IsTrue (TWildCard.Create.Match('3RDPARTY-overview.md',      '*["3rdparty"|"ThirdParty"]*.md'),
+  Assert.IsTrue (TWildCard.Create.Match('docs/3rdparty/notes.md',    '*<"3rdparty"|"ThirdParty">*.md'));
+  Assert.IsTrue (TWildCard.Create.Match('src/ThirdPartyReadme.md',   '*<"3rdparty"|"ThirdParty">*.md'));
+  Assert.IsTrue (TWildCard.Create.Match('3RDPARTY-overview.md',      '*<"3rdparty"|"ThirdParty">*.md'),
     'CI default: case difference in the alt content still matches');
-  Assert.IsFalse(TWildCard.Create.Match('docs/internal/notes.md',    '*["3rdparty"|"ThirdParty"]*.md'));
-  Assert.IsFalse(TWildCard.Create.Match('docs/ThirdParty/notes.txt', '*["3rdparty"|"ThirdParty"]*.md'),
+  Assert.IsFalse(TWildCard.Create.Match('docs/internal/notes.md',    '*<"3rdparty"|"ThirdParty">*.md'));
+  Assert.IsFalse(TWildCard.Create.Match('docs/ThirdParty/notes.txt', '*<"3rdparty"|"ThirdParty">*.md'),
     'extension mismatch');
 end;
 
@@ -617,41 +669,41 @@ begin
   // 'a' and 'ab' are both candidates at position 1.  With trailing 'b' in
   // the pattern, the engine must try the longer alt first or backtrack so
   // that input 'ab' followed by 'b' = 'abb' succeeds.
-  Assert.IsTrue(TWildCard.Create.Match('abb', '["a"|"ab"]b'),
+  Assert.IsTrue(TWildCard.Create.Match('abb', '<"a"|"ab">b'),
     'engine must explore both alternatives to find the one that lets the tail match');
   // Input 'ab' - first alt 'a' matches and leaves 'b' for the trailing 'b'.
-  Assert.IsTrue(TWildCard.Create.Match('ab',  '["a"|"ab"]b'));
+  Assert.IsTrue(TWildCard.Create.Match('ab',  '<"a"|"ab">b'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltEmptyStringAlternativeMatchesZeroCharsTest;
 begin
   // An empty alternative '""' matches zero characters - always succeeds at
   // the current position, consumes nothing.
-  Assert.IsTrue (TWildCard.Create.Match('foo',    '[""]foo'));
-  Assert.IsTrue (TWildCard.Create.Match('foobar', '[""|"foo"]bar'),
+  Assert.IsTrue (TWildCard.Create.Match('foo',    '<"">foo'));
+  Assert.IsTrue (TWildCard.Create.Match('foobar', '<""|"foo">bar'),
     'empty alt matches first, leaves the whole input for the tail');
   // Single empty alt at end - matches when nothing else is left.
-  Assert.IsTrue (TWildCard.Create.Match('foo', 'foo[""]'));
+  Assert.IsTrue (TWildCard.Create.Match('foo', 'foo<"">'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltNegatedSameLengthAlternativesTest;
 begin
   // Negation: NONE of the alts may be a prefix at the current position;
   // consume max(altLen) chars on success.  All alts here are length 3.
-  Assert.IsTrue (TWildCard.Create.Match('quxsuffix', '[!"foo"|"bar"]*'));
-  Assert.IsFalse(TWildCard.Create.Match('foosuffix', '[!"foo"|"bar"]*'));
-  Assert.IsFalse(TWildCard.Create.Match('barsuffix', '[!"foo"|"bar"]*'));
+  Assert.IsTrue (TWildCard.Create.Match('quxsuffix', '<!"foo"|"bar">*'));
+  Assert.IsFalse(TWildCard.Create.Match('foosuffix', '<!"foo"|"bar">*'));
+  Assert.IsFalse(TWildCard.Create.Match('barsuffix', '<!"foo"|"bar">*'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltNegatedConsumesLongestAlternativeLengthTest;
 begin
   // Alternatives have different lengths (3 and 6).  Longest = 6 so the
   // class consumes 6 chars on success.
-  Assert.IsTrue (TWildCard.Create.Match('abcdef-tail', '[!"foo"|"barbaz"]-tail'),
+  Assert.IsTrue (TWildCard.Create.Match('abcdef-tail', '<!"foo"|"barbaz">-tail'),
     'six chars consumed, then "-tail" matches the rest');
-  Assert.IsFalse(TWildCard.Create.Match('foo-something', '[!"foo"|"barbaz"]-tail'),
+  Assert.IsFalse(TWildCard.Create.Match('foo-something', '<!"foo"|"barbaz">-tail'),
     'first three chars match the short alt as a prefix -> negation fails');
-  Assert.IsFalse(TWildCard.Create.Match('barbaz-tail', '[!"foo"|"barbaz"]-tail'),
+  Assert.IsFalse(TWildCard.Create.Match('barbaz-tail', '<!"foo"|"barbaz">-tail'),
     'first six chars match the long alt as a prefix -> negation fails');
 end;
 
@@ -659,9 +711,9 @@ procedure TWildCardMatcherDUnitX.QuotedAltNegatedRequiresEnoughInputTest;
 begin
   // Input must have at least max(altLen) chars remaining; otherwise the
   // class cannot consume its slice and the match fails.
-  Assert.IsFalse(TWildCard.Create.Match('ab', '[!"foo"|"bar"]'),
+  Assert.IsFalse(TWildCard.Create.Match('ab', '<!"foo"|"bar">'),
     'only 2 chars left but the class needs to consume 3');
-  Assert.IsFalse(TWildCard.Create.Match('',   '[!"foo"]'),
+  Assert.IsFalse(TWildCard.Create.Match('',   '<!"foo">'),
     'no input left, cannot consume the slice');
 end;
 
@@ -669,26 +721,28 @@ procedure TWildCardMatcherDUnitX.QuotedAltMalformedReturnsFalseTest;
 begin
   // Unterminated quote - the class never closes, FindClassEnd returns 0,
   // engine returns False.
-  Assert.IsFalse(TWildCard.Create.Match('foo', '["foo'));
-  Assert.IsFalse(TWildCard.Create.Match('foo', '["foo"|"bar'));
+  Assert.IsFalse(TWildCard.Create.Match('foo', '<"foo'));
+  Assert.IsFalse(TWildCard.Create.Match('foo', '<"foo"|"bar'));
   // Missing '|' between alternatives.
-  Assert.IsFalse(TWildCard.Create.Match('foo', '["foo""bar"]'));
+  Assert.IsFalse(TWildCard.Create.Match('foo', '<"foo""bar">'));
   // Garbage between alternatives.
-  Assert.IsFalse(TWildCard.Create.Match('foo', '["foo"x"bar"]'));
+  Assert.IsFalse(TWildCard.Create.Match('foo', '<"foo"x"bar">'));
 end;
 
 procedure TWildCardMatcherDUnitX.QuotedAltCloseBracketInsideQuotedAlternativeIsLiteralTest;
 begin
-  // A ']' inside '"..."' is part of the alternative literal, not the
+  // A '>' inside '"..."' is part of the alternative literal, not the
   // class terminator.  This is the whole point of being quote-aware.
-  Assert.IsTrue (TWildCard.Create.Match('a]b', '["a]b"]'));
-  Assert.IsTrue (TWildCard.Create.Match('[x]', '["[x]"]'));
+  Assert.IsTrue (TWildCard.Create.Match('a>b', '<"a>b">'));
+  Assert.IsTrue (TWildCard.Create.Match('<x>', '<"<x>">'));
+  // '[' and ']' are ordinary characters everywhere, quoted or not.
+  Assert.IsTrue (TWildCard.Create.Match('[x]', '<"[x]">'));
 end;
 
 procedure TWildCardMatcherDUnitX.PipeOutsideClassIsLiteralTest;
 begin
-  // '|' has no special meaning outside '[...]' anymore - it is just a
-  // literal character.
+  // '|' has no special meaning outside '<...>' - it is just a literal
+  // character.
   Assert.IsTrue (TWildCard.Create.Match('a|b',  'a|b'));
   Assert.IsTrue (TWildCard.Create.Match('a|b',  'a?b'),  '? matches the literal |');
   Assert.IsFalse(TWildCard.Create.Match('ab',   'a|b'),  'no | in input -> no match');
@@ -720,8 +774,8 @@ var
   LPatterns: TArray<string>;
 begin
   // First pattern matches; later malformed pattern must not be evaluated.
-  // If short-circuiting works, the unterminated '[' never gets visited.
-  LPatterns := TArray<string>.Create('*.pas', '[unterminated');
+  // If short-circuiting works, the unterminated '<' never gets visited.
+  LPatterns := TArray<string>.Create('*.pas', '<unterminated');
   Assert.IsTrue(TWildCard.Create.Match('Unit1.pas', LPatterns));
 end;
 
@@ -822,15 +876,15 @@ end;
 procedure TWildCardMatcherDUnitX.NonAsciiFinnishInsideCharClassTest;
 begin
   // Character class with non-ASCII members.
-  Assert.IsTrue (TWildCard.Create.Match(#$00E4, '[' + #$00E4 + #$00F6 + #$00E5 + ']'));
-  Assert.IsTrue (TWildCard.Create.Match(#$00C4, '[' + #$00E4 + #$00F6 + #$00E5 + ']'),
+  Assert.IsTrue (TWildCard.Create.Match(#$00E4, '<' + #$00E4 + #$00F6 + #$00E5 + '>'));
+  Assert.IsTrue (TWildCard.Create.Match(#$00C4, '<' + #$00E4 + #$00F6 + #$00E5 + '>'),
     'uppercase input should match lowercase class members CI');
-  Assert.IsFalse(TWildCard.Create.Match(#$00FC, '[' + #$00E4 + #$00F6 + #$00E5 + ']'),
+  Assert.IsFalse(TWildCard.Create.Match(#$00FC, '<' + #$00E4 + #$00F6 + #$00E5 + '>'),
     'German u-umlaut is NOT in the Finnish set');
 
   // Negation with non-ASCII
-  Assert.IsFalse(TWildCard.Create.Match(#$00E4, '[!' + #$00E4 + #$00F6 + #$00E5 + ']'));
-  Assert.IsTrue (TWildCard.Create.Match('a',    '[!' + #$00E4 + #$00F6 + #$00E5 + ']'));
+  Assert.IsFalse(TWildCard.Create.Match(#$00E4, '<!' + #$00E4 + #$00F6 + #$00E5 + '>'));
+  Assert.IsTrue (TWildCard.Create.Match('a',    '<!' + #$00E4 + #$00F6 + #$00E5 + '>'));
 end;
 
 procedure TWildCardMatcherDUnitX.NonAsciiFinnishInsidePatternBacktrackingTest;
@@ -877,12 +931,12 @@ end;
 
 procedure TWildCardMatcherDUnitX.NonAsciiMixedAsciiAndUnicodeTest;
 begin
-  // ASCII and non-ASCII intermixed; '?', '#', class all combine fine.
-  Assert.IsTrue (TWildCard.Create.Match('Raportti_2024_' + #$00E4 + '.log', 'raportti_####_?.log'));
+  // ASCII and non-ASCII intermixed; '?', digit runs, class all combine fine.
+  Assert.IsTrue (TWildCard.Create.Match('Raportti_2024_' + #$00E4 + '.log', 'raportti_<####>_?.log'));
   Assert.IsTrue (TWildCard.Create.Match('P' + #$00E4 + 'iv' + #$00E4 + 'kirja_03.pas',
-                                 'P[' + #$00E4 + #$00F6 + ']iv[' + #$00E4 + #$00F6 + ']kirja_##.pas'));
+                                 'P<' + #$00E4 + #$00F6 + '>iv<' + #$00E4 + #$00F6 + '>kirja_<##>.pas'));
   Assert.IsFalse(TWildCard.Create.Match('P' + #$00FC + 'iv' + #$00FC + 'kirja_03.pas',
-                                 'P[' + #$00E4 + #$00F6 + ']iv[' + #$00E4 + #$00F6 + ']kirja_##.pas'),
+                                 'P<' + #$00E4 + #$00F6 + '>iv<' + #$00E4 + #$00F6 + '>kirja_<##>.pas'),
     'u-umlaut input must not satisfy a-umlaut/o-umlaut class');
 end;
 
@@ -1154,49 +1208,49 @@ end;
 
 procedure TWildCardMatcherDUnitX.CompiledCharClassEdgeCasesTest;
 begin
-  // Literal ']' as first content char
-  Assert.IsTrue (TWildCard.Create('[]abc]').Match(']'));
-  Assert.IsTrue (TWildCard.Create('[]abc]').Match('a'));
-  Assert.IsFalse(TWildCard.Create('[]abc]').Match('x'));
+  // Literal '>' as first content char
+  Assert.IsTrue (TWildCard.Create('<>abc>').Match('>'));
+  Assert.IsTrue (TWildCard.Create('<>abc>').Match('a'));
+  Assert.IsFalse(TWildCard.Create('<>abc>').Match('x'));
 
   // Literal '-' at start / end of class
-  Assert.IsTrue (TWildCard.Create('[-x]').Match('-'));
-  Assert.IsTrue (TWildCard.Create('[a-]').Match('-'));
-  Assert.IsFalse(TWildCard.Create('[a-]').Match('b'));
+  Assert.IsTrue (TWildCard.Create('<-x>').Match('-'));
+  Assert.IsTrue (TWildCard.Create('<a->').Match('-'));
+  Assert.IsFalse(TWildCard.Create('<a->').Match('b'));
 
   // Ranges + negation
-  Assert.IsTrue (TWildCard.Create('b[a-c]d').Match('bbd'));
-  Assert.IsFalse(TWildCard.Create('b[a-c]d').Match('bdd'));
-  Assert.IsTrue (TWildCard.Create('b[!ae]ll').Match('bull'));
-  Assert.IsFalse(TWildCard.Create('b[!ae]ll').Match('ball'));
-  Assert.IsTrue (TWildCard.Create('[a-cq0-9]').Match('7'));
-  Assert.IsFalse(TWildCard.Create('[a-cq0-9]').Match('z'));
+  Assert.IsTrue (TWildCard.Create('b<a-c>d').Match('bbd'));
+  Assert.IsFalse(TWildCard.Create('b<a-c>d').Match('bdd'));
+  Assert.IsTrue (TWildCard.Create('b<!ae>ll').Match('bull'));
+  Assert.IsFalse(TWildCard.Create('b<!ae>ll').Match('ball'));
+  Assert.IsTrue (TWildCard.Create('<a-cq0-9>').Match('7'));
+  Assert.IsFalse(TWildCard.Create('<a-cq0-9>').Match('z'));
 end;
 
 procedure TWildCardMatcherDUnitX.CompiledQuotedAltTest;
 begin
-  Assert.IsTrue (TWildCard.Create('["foo"|"bar"]').Match('bar'));
-  Assert.IsFalse(TWildCard.Create('["foo"|"bar"]').Match('qux'));
-  Assert.IsTrue (TWildCard.Create('*["3rdparty"|"ThirdParty"]*.md').Match('docs\3rdparty\notes.md'));
-  Assert.IsFalse(TWildCard.Create('*["3rdparty"|"ThirdParty"]*.md').Match('docs\internal\notes.md'));
+  Assert.IsTrue (TWildCard.Create('<"foo"|"bar">').Match('bar'));
+  Assert.IsFalse(TWildCard.Create('<"foo"|"bar">').Match('qux'));
+  Assert.IsTrue (TWildCard.Create('*<"3rdparty"|"ThirdParty">*.md').Match('docs\3rdparty\notes.md'));
+  Assert.IsFalse(TWildCard.Create('*<"3rdparty"|"ThirdParty">*.md').Match('docs\internal\notes.md'));
 
   // Different-length alternatives require backtracking across alts
-  Assert.IsTrue (TWildCard.Create('["a"|"ab"]b').Match('abb'));
-  Assert.IsTrue (TWildCard.Create('["a"|"ab"]b').Match('ab'));
+  Assert.IsTrue (TWildCard.Create('<"a"|"ab">b').Match('abb'));
+  Assert.IsTrue (TWildCard.Create('<"a"|"ab">b').Match('ab'));
 
   // Empty alternative matches zero chars
-  Assert.IsTrue (TWildCard.Create('[""|"foo"]bar').Match('foobar'));
-  Assert.IsTrue (TWildCard.Create('foo[""]').Match('foo'));
+  Assert.IsTrue (TWildCard.Create('<""|"foo">bar').Match('foobar'));
+  Assert.IsTrue (TWildCard.Create('foo<"">').Match('foo'));
 
   // Negation consumes the longest alternative's length
-  Assert.IsTrue (TWildCard.Create('[!"foo"|"bar"]*').Match('quxsuffix'));
-  Assert.IsFalse(TWildCard.Create('[!"foo"|"bar"]*').Match('foosuffix'));
-  Assert.IsTrue (TWildCard.Create('[!"foo"|"barbaz"]-tail').Match('abcdef-tail'));
-  Assert.IsFalse(TWildCard.Create('[!"foo"|"barbaz"]-tail').Match('barbaz-tail'));
+  Assert.IsTrue (TWildCard.Create('<!"foo"|"bar">*').Match('quxsuffix'));
+  Assert.IsFalse(TWildCard.Create('<!"foo"|"bar">*').Match('foosuffix'));
+  Assert.IsTrue (TWildCard.Create('<!"foo"|"barbaz">-tail').Match('abcdef-tail'));
+  Assert.IsFalse(TWildCard.Create('<!"foo"|"barbaz">-tail').Match('barbaz-tail'));
 
-  // ']' inside a quoted alternative is a literal
-  Assert.IsTrue (TWildCard.Create('["a]b"]').Match('a]b'));
-  Assert.IsTrue (TWildCard.Create('["[x]"]').Match('[x]'));
+  // '>' inside a quoted alternative is a literal
+  Assert.IsTrue (TWildCard.Create('<"a>b">').Match('a>b'));
+  Assert.IsTrue (TWildCard.Create('<"<x>">').Match('<x>'));
 end;
 
 procedure TWildCardMatcherDUnitX.CompiledStarFastPathsTest;
@@ -1215,21 +1269,23 @@ begin
   Assert.IsTrue (TWildCard.Create('wh*').Match('what'));
   Assert.IsFalse(TWildCard.Create('wh*').Match('awhile'));
 
-  // Star followed by '#' (digit skip) and by a class
-  Assert.IsTrue (TWildCard.Create('*Repository*_v#_*.xyz').Match('OrderRepository_v3_final.xyz'));
-  Assert.IsFalse(TWildCard.Create('*Repository*_v#_*.xyz').Match('OrderRepository_vX_final.xyz'));
-  Assert.IsTrue (TWildCard.Create('*[abc]end').Match('xxxaend'));
-  Assert.IsFalse(TWildCard.Create('*[abc]end').Match('xxxdend'));
+  // Star followed by a digit run (digit skip) and by a class
+  Assert.IsTrue (TWildCard.Create('*Repository*_v<#>_*.xyz').Match('OrderRepository_v3_final.xyz'));
+  Assert.IsFalse(TWildCard.Create('*Repository*_v<#>_*.xyz').Match('OrderRepository_vX_final.xyz'));
+  Assert.IsTrue (TWildCard.Create('*<##>.log').Match('trace_42.log'));
+  Assert.IsFalse(TWildCard.Create('*<##>.log').Match('trace_4.log'));
+  Assert.IsTrue (TWildCard.Create('*<abc>end').Match('xxxaend'));
+  Assert.IsFalse(TWildCard.Create('*<abc>end').Match('xxxdend'));
 end;
 
 procedure TWildCardMatcherDUnitX.CompiledDigitAndQuestionTest;
 begin
-  Assert.IsTrue (TWildCard.Create('Test_###.log').Match('Test_001.log'));
-  Assert.IsFalse(TWildCard.Create('Test_###.log').Match('Test_00A.log'));
+  Assert.IsTrue (TWildCard.Create('Test_<###>.log').Match('Test_001.log'));
+  Assert.IsFalse(TWildCard.Create('Test_<###>.log').Match('Test_00A.log'));
   Assert.IsTrue (TWildCard.Create('b?ll').Match('ball'));
   Assert.IsFalse(TWildCard.Create('b?ll').Match('bll'));
-  Assert.IsTrue (TWildCard.Create('*_v#_*').Match('x_v3_y'));
-  Assert.IsFalse(TWildCard.Create('*_v#_*').Match('x_vA_y'));
+  Assert.IsTrue (TWildCard.Create('*_v<#>_*').Match('x_v3_y'));
+  Assert.IsFalse(TWildCard.Create('*_v<#>_*').Match('x_vA_y'));
 end;
 
 procedure TWildCardMatcherDUnitX.CompiledCaseSensitiveTest;
@@ -1237,12 +1293,12 @@ begin
   // CS instance: ordinal compiled engine
   Assert.IsTrue (TWildCard.Create('*.pas', True).Match('unit1.pas'));
   Assert.IsFalse(TWildCard.Create('*.pas', True).Match('UNIT1.PAS'));
-  Assert.IsTrue (TWildCard.Create('["foo"|"bar"]', True).Match('bar'));
-  Assert.IsFalse(TWildCard.Create('["foo"|"bar"]', True).Match('BAR'));
+  Assert.IsTrue (TWildCard.Create('<"foo"|"bar">', True).Match('bar'));
+  Assert.IsFalse(TWildCard.Create('<"foo"|"bar">', True).Match('BAR'));
 
   // CI instance: per-char engine, pattern case irrelevant
   Assert.IsTrue (TWildCard.Create('*.PAS').Match('unit1.pas'));
-  Assert.IsTrue (TWildCard.Create('["FOO"|"BAR"]').Match('bar'));
+  Assert.IsTrue (TWildCard.Create('<"FOO"|"BAR">').Match('bar'));
 end;
 
 procedure TWildCardMatcherDUnitX.CompiledEmptyAndMalformedPatternTest;
@@ -1252,14 +1308,14 @@ begin
   Assert.IsFalse(TWildCard.Create('').Match('x'));
 
   // Malformed patterns never match (compiled as invalid)
-  Assert.IsFalse(TWildCard.Create('[abc').Match('a'));
-  Assert.IsFalse(TWildCard.Create('["foo').Match('foo'));
-  Assert.IsFalse(TWildCard.Create('["foo"|"bar').Match('foo'));
-  Assert.IsFalse(TWildCard.Create('["foo""bar"]').Match('foo'));
-  Assert.IsFalse(TWildCard.Create('["foo"x"bar"]').Match('foo'));
+  Assert.IsFalse(TWildCard.Create('<abc').Match('a'));
+  Assert.IsFalse(TWildCard.Create('<"foo').Match('foo'));
+  Assert.IsFalse(TWildCard.Create('<"foo"|"bar').Match('foo'));
+  Assert.IsFalse(TWildCard.Create('<"foo""bar">').Match('foo'));
+  Assert.IsFalse(TWildCard.Create('<"foo"x"bar">').Match('foo'));
 
   // A malformed pattern in a set must not break the others
-  Assert.IsTrue(TWildCard.Create(TArray<string>.Create('[bad', '*.pas')).Match('Unit1.pas'));
+  Assert.IsTrue(TWildCard.Create(TArray<string>.Create('<bad', '*.pas')).Match('Unit1.pas'));
 end;
 
 { TWildCardFilter: include / exclude wrapper }
@@ -1388,7 +1444,7 @@ begin
   // Full pattern syntax works in both lists.
   LFilter := TWildCardFilter.Create(
     TArray<string>.Create('*.md'),
-    TArray<string>.Create('*["draft"|"backup"]*'));
+    TArray<string>.Create('*<"draft"|"backup">*'));
 
   Assert.IsTrue (LFilter.Accepts('docs\notes.md'));
   Assert.IsFalse(LFilter.Accepts('docs\notes_draft.md'));
@@ -1420,15 +1476,18 @@ begin
   Assert.IsTrue(TWildCard.ValidatePattern('', LError));
   Assert.IsTrue(TWildCard.ValidatePattern('*', LError));
   Assert.IsTrue(TWildCard.ValidatePattern('*.pas', LError));
-  Assert.IsTrue(TWildCard.ValidatePattern('Test_###.log', LError));
-  Assert.IsTrue(TWildCard.ValidatePattern('b[ae]ll', LError));
-  Assert.IsTrue(TWildCard.ValidatePattern('[]abc]', LError), 'leading ] is a literal member');
-  Assert.IsTrue(TWildCard.ValidatePattern('[-x]', LError));
-  Assert.IsTrue(TWildCard.ValidatePattern('[!a-z]', LError));
-  Assert.IsTrue(TWildCard.ValidatePattern('["a"|"b"]', LError));
-  Assert.IsTrue(TWildCard.ValidatePattern('[!"foo"|"bar"]', LError));
-  Assert.IsTrue(TWildCard.ValidatePattern('foo[""]', LError), 'empty alternative is legal');
+  Assert.IsTrue(TWildCard.ValidatePattern('Test_<###>.log', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('b<ae>ll', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('<>abc>', LError), 'leading > is a literal member');
+  Assert.IsTrue(TWildCard.ValidatePattern('<-x>', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('<!a-z>', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('<"a"|"b">', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('<!"foo"|"bar">', LError));
+  Assert.IsTrue(TWildCard.ValidatePattern('foo<"">', LError), 'empty alternative is legal');
   Assert.IsTrue(TWildCard.ValidatePattern('a|b', LError), '| outside a class is a literal');
+  Assert.IsTrue(TWildCard.ValidatePattern('C:\Temp\Foo[ab].txt', LError), '[ and ] are plain literals');
+  Assert.IsTrue(TWildCard.ValidatePattern('Track #01.mp3', LError), '# is a plain literal');
+  Assert.IsTrue(TWildCard.ValidatePattern('a[bc', LError), 'unbalanced [ is just text now');
 
   Assert.AreEqual('', LError, 'no error message for valid patterns');
 end;
@@ -1437,25 +1496,28 @@ procedure TWildCardMatcherDUnitX.ValidatePatternRejectsMalformedPatternsTest;
 var
   LError: string;
 begin
-  Assert.IsFalse(TWildCard.ValidatePattern('[abc', LError));
+  Assert.IsFalse(TWildCard.ValidatePattern('<abc', LError));
   Assert.IsTrue(LError.Contains('position 1'), LError);
 
-  Assert.IsFalse(TWildCard.ValidatePattern('a[bc', LError));
+  Assert.IsFalse(TWildCard.ValidatePattern('a<bc', LError));
   Assert.IsTrue(LError.Contains('position 2'), LError);
 
-  Assert.IsFalse(TWildCard.ValidatePattern('[]', LError), 'bare [] is an unterminated class');
+  Assert.IsFalse(TWildCard.ValidatePattern('<>', LError), 'bare <> is an unterminated class');
   Assert.IsTrue(LError.Contains('position 1'), LError);
 
-  Assert.IsFalse(TWildCard.ValidatePattern('["foo', LError), 'unterminated quoted alternative');
-  Assert.IsTrue(LError.Contains('position 2'), LError);
-
-  Assert.IsFalse(TWildCard.ValidatePattern('["a"x"b"]', LError), 'garbage between alternatives');
-  Assert.IsTrue(LError.Contains('position 5'), LError);
-
-  Assert.IsFalse(TWildCard.ValidatePattern('["a"|"b', LError), 'unterminated second alternative');
+  Assert.IsFalse(TWildCard.ValidatePattern('Test_<###.log', LError), 'unterminated digit run');
   Assert.IsTrue(LError.Contains('position 6'), LError);
 
-  Assert.IsFalse(TWildCard.ValidatePattern('["a"', LError), 'class never closed after alternative');
+  Assert.IsFalse(TWildCard.ValidatePattern('<"foo', LError), 'unterminated quoted alternative');
+  Assert.IsTrue(LError.Contains('position 2'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('<"a"x"b">', LError), 'garbage between alternatives');
+  Assert.IsTrue(LError.Contains('position 5'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('<"a"|"b', LError), 'unterminated second alternative');
+  Assert.IsTrue(LError.Contains('position 6'), LError);
+
+  Assert.IsFalse(TWildCard.ValidatePattern('<"a"', LError), 'class never closed after alternative');
   Assert.IsTrue(LError.Contains('position 1'), LError);
 end;
 
@@ -1617,8 +1679,10 @@ end;
 
 function FuzzRandomPattern(var ASeed: Cardinal): string;
 const
-  PATTERN_CHARS: array[0..19] of Char = (
-    'a', 'b', 'c', 'A', 'Z', '0', '7', '*', '?', '#', '[', ']', '!', '"', '|', '-', '\', '/', '.', 'x');
+  // '#', '[' and ']' are plain literals - kept in the alphabet so both
+  // engines get exercised on them next to the real class syntax '<...>'.
+  PATTERN_CHARS: array[0..21] of Char = (
+    'a', 'b', 'c', 'A', 'Z', '0', '7', '*', '?', '#', '<', '>', '[', ']', '!', '"', '|', '-', '\', '/', '.', 'x');
 var
   LLen, LIndex: Integer;
 begin
@@ -1631,8 +1695,8 @@ end;
 
 function FuzzRandomInput(var ASeed: Cardinal): string;
 const
-  INPUT_CHARS: array[0..12] of Char = (
-    'a', 'b', 'c', 'A', 'B', 'Z', '0', '7', '\', '/', '.', 'x', 'y');
+  INPUT_CHARS: array[0..15] of Char = (
+    'a', 'b', 'c', 'A', 'B', 'Z', '0', '7', '\', '/', '.', 'x', 'y', '#', '[', ']');
 var
   LLen, LIndex: Integer;
 begin
@@ -1665,8 +1729,13 @@ begin
       '?':
         Result := Result + FILL_CHARS[FuzzNextRandom(ASeed, Length(FILL_CHARS))];
       '#':
-        Result := Result + Chr(Ord('0') + Integer(FuzzNextRandom(ASeed, 10)));
-      '[', ']', '!', '"', '|':
+        // A literal '#' outside a class, a digit inside a '<##>' run -
+        // either guess yields useful inputs.
+        if FuzzNextRandom(ASeed, 2) = 0 then
+          Result := Result + '#'
+        else
+          Result := Result + Chr(Ord('0') + Integer(FuzzNextRandom(ASeed, 10)));
+      '<', '>', '!', '"', '|':
         ; // drop class/alternation syntax - close enough for fuzzing
     else
       Result := Result + APattern[LIndex];
@@ -1756,12 +1825,12 @@ procedure TWildCardMatcherDUnitX.LintPatternMalformedTest;
 var
   LDiagnostics: TArray<TWildCardDiagnostic>;
 begin
-  LDiagnostics := TWildCard.LintPattern('[abc');
+  LDiagnostics := TWildCard.LintPattern('<abc');
 
   Assert.AreEqual(1, Length(LDiagnostics));
   Assert.IsTrue(LDiagnostics[0].Kind = wdkWarning);
   Assert.IsTrue(LDiagnostics[0].Message.Contains('never matches'), LDiagnostics[0].Message);
-  Assert.AreEqual('[abc', LDiagnostics[0].Pattern);
+  Assert.AreEqual('<abc', LDiagnostics[0].Pattern);
   Assert.AreEqual(-1, LDiagnostics[0].PatternIndex, 'no list context for LintPattern');
 end;
 
@@ -1783,18 +1852,18 @@ end;
 procedure TWildCardMatcherDUnitX.LintPatternClassAndAlternationTest;
 begin
   // Empty range (low > high).
-  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('[z-a]'), wdkHint, 'empty (low > high)'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('<z-a>'), wdkHint, 'empty (low > high)'));
 
   // Duplicate alternatives; case-awareness follows the options.
-  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('["a"|"a"]'), wdkHint, 'duplicate alternative'));
-  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('["a"|"A"]'), wdkHint, 'duplicate alternative'),
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('<"a"|"a">'), wdkHint, 'duplicate alternative'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('<"a"|"A">'), wdkHint, 'duplicate alternative'),
     'CI: a and A are the same alternative');
-  Assert.AreEqual(0, Length(TWildCard.LintPattern('["a"|"A"]', [wcoCaseSensitive])),
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('<"a"|"A">', [wcoCaseSensitive])),
     'CS: a and A are distinct alternatives');
 
   // Degenerate alternations.
-  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('foo[""]'), wdkHint, 'no effect'));
-  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('[!""]'), wdkWarning, 'never matches'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('foo<"">'), wdkHint, 'no effect'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('<!"">'), wdkWarning, 'never matches'));
 end;
 
 procedure TWildCardMatcherDUnitX.LintPatternEmptyTest;
@@ -1898,6 +1967,99 @@ begin
   Assert.AreEqual(0, Length(LFilter.Lint));
 end;
 
+procedure TWildCardMatcherDUnitX.LintPreAngleBracketSyntaxTest;
+begin
+  // The pre-'<...>' alternation syntax is now plain text containing '"' and
+  // '|', which no Windows path can contain - it would silently never match.
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('*["3rdParty"|"ThirdParty"]*'), wdkWarning, 'outside a'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('a>b'), wdkWarning, 'outside a'));
+  Assert.IsTrue(DiagnosticsContain(TWildCard.LintPattern('a|b'), wdkWarning, 'outside a'));
+
+  // Inside a class those characters are syntax, not literals.
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('*<"3rdParty"|"ThirdParty">*')));
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('<"a|b">')), '| inside a quoted alternative');
+
+  // No false positives on valid Windows paths containing '[', ']' or '#'.
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('C:\Temp\Foo[ab].txt')));
+  Assert.AreEqual(0, Length(TWildCard.LintPattern('Track #01.mp3')));
+end;
+
+{ IsWildCard and plain paths }
+
+procedure TWildCardMatcherDUnitX.IsWildCardTest;
+begin
+  // Plain text - any valid Windows path is not a wildcard pattern.
+  Assert.IsFalse(TWildCard.IsWildCard(''));
+  Assert.IsFalse(TWildCard.IsWildCard('C:\Temp\Foo.txt'));
+  Assert.IsFalse(TWildCard.IsWildCard('C:\Temp\Foo[ab].txt'), '[ and ] are legal file name characters');
+  Assert.IsFalse(TWildCard.IsWildCard('Track #01.mp3'), '# is a legal file name character');
+  Assert.IsFalse(TWildCard.IsWildCard('\\server\share\dir\file.txt'));
+  Assert.IsFalse(TWildCard.IsWildCard('C:/forward/slashes.txt'));
+  Assert.IsFalse(TWildCard.IsWildCard('Files (x86)\{GUID}\a,b;c=d+e@f~g''h.txt'));
+
+  // Literal outside a class, so not wildcard syntax either.
+  Assert.IsFalse(TWildCard.IsWildCard('a|b'));
+  Assert.IsFalse(TWildCard.IsWildCard('a>b'));
+  Assert.IsFalse(TWildCard.IsWildCard('say "hi"'));
+
+  // Wildcards.
+  Assert.IsTrue(TWildCard.IsWildCard('C:\Temp\*oo.txt'));
+  Assert.IsTrue(TWildCard.IsWildCard('Foo?.txt'));
+  Assert.IsTrue(TWildCard.IsWildCard('*'));
+  Assert.IsTrue(TWildCard.IsWildCard('Test_<###>.log'));
+  Assert.IsTrue(TWildCard.IsWildCard('b<ae>ll'));
+  Assert.IsTrue(TWildCard.IsWildCard('*<"3rdParty"|"ThirdParty">\*'));
+
+  // Malformed is still "wildcard" - ValidatePattern is the syntax check.
+  Assert.IsTrue(TWildCard.IsWildCard('Foo<abc'));
+end;
+
+procedure TWildCardMatcherDUnitX.IsWildCardFalseMeansPatternMatchesItselfTest;
+const
+  SEED = 20261013;
+  ITERATIONS = 3000;
+  MODE_OPTIONS: array[0..3] of TWildCardOptions = ([], [wcoCaseSensitive], [wcoPathMode], [wcoCaseSensitive, wcoPathMode]);
+var
+  LSeed: Cardinal;
+  LIteration, LIndex, LLen, LMode, LChecked: Integer;
+  LText: string;
+begin
+  // The contract behind IsWildCard: text it calls plain is matched
+  // literally by both engines in every mode - so it always matches itself.
+  // Random strings over all printable ASCII (metacharacters included) plus
+  // a few non-ASCII letters; the property is checked whenever IsWildCard
+  // says False.
+  LSeed := SEED;
+  LChecked := 0;
+
+  for LIteration := 1 to ITERATIONS do
+  begin
+    LLen := FuzzNextRandom(LSeed, 16);
+    SetLength(LText, LLen);
+
+    for LIndex := 1 to LLen do
+      if FuzzNextRandom(LSeed, 10) = 0 then
+        LText[LIndex] := Char($00E4 + FuzzNextRandom(LSeed, 3)) // ä, å, æ
+      else
+        LText[LIndex] := Char(32 + FuzzNextRandom(LSeed, 95));
+
+    if TWildCard.IsWildCard(LText) then
+      Continue;
+
+    Inc(LChecked);
+
+    for LMode := 0 to High(MODE_OPTIONS) do
+    begin
+      Assert.IsTrue(TWildCard.Create(MODE_OPTIONS[LMode]).Match(LText, LText),
+        Format('ad-hoc engine: plain text <%s> does not match itself (mode %d)', [LText, LMode]));
+      Assert.IsTrue(TWildCard.Create(LText, MODE_OPTIONS[LMode]).Match(LText),
+        Format('registered engine: plain text <%s> does not match itself (mode %d)', [LText, LMode]));
+    end;
+  end;
+
+  Assert.IsTrue(LChecked > ITERATIONS div 4, Format('only %d plain strings generated - fuzz alphabet too wildcard-heavy', [LChecked]));
+end;
+
 { API additions }
 
 procedure TWildCardMatcherDUnitX.PatternMatchesEverythingTest;
@@ -1954,17 +2116,24 @@ end;
 
 { Additional matcher coverage }
 
-procedure TWildCardMatcherDUnitX.LiteralMetacharacterTricksTest;
+procedure TWildCardMatcherDUnitX.FileNameCharactersAreLiteralTest;
 begin
-  // The README documents these idioms for matching literal metachars -
-  // pin them so the documentation stays true.
-  Assert.IsTrue (TWildCard.Create.Match('#', '[#]'));
-  Assert.IsFalse(TWildCard.Create.Match('5', '[#]'), '[#] is a literal #, not a digit');
-  Assert.IsTrue (TWildCard.Create.Match('[', '[[]'));
-  Assert.IsTrue (TWildCard.Create.Match(']', '[]]'));
+  // '[', ']' and '#' are legal in Windows file names, so the syntax never
+  // gives them a meaning - a path containing them matches itself.
+  Assert.IsTrue (TWildCard.Create.Match('C:\Temp\Foo[ab].txt', 'C:\Temp\Foo[ab].txt'));
+  Assert.IsTrue (TWildCard.Create('C:\Temp\Foo[ab].txt').Match('C:\Temp\Foo[ab].txt'));
+  Assert.IsFalse(TWildCard.Create.Match('C:\Temp\Fooa.txt', 'C:\Temp\Foo[ab].txt'), '[ab] is not a class');
 
-  Assert.IsTrue (TWildCard.Create.Match('Track #01.mp3', 'Track [#][0-9][0-9].mp3'));
-  Assert.IsFalse(TWildCard.Create.Match('Track 001.mp3', 'Track [#][0-9][0-9].mp3'));
+  Assert.IsTrue (TWildCard.Create.Match('Track #01.mp3', 'Track #01.mp3'));
+  Assert.IsTrue (TWildCard.Create('Track #01.mp3').Match('Track #01.mp3'));
+
+  // Literal '#' next to a digit run - the README example.
+  Assert.IsTrue (TWildCard.Create.Match('Track #01.mp3', 'Track #<##>.mp3'));
+  Assert.IsFalse(TWildCard.Create.Match('Track 001.mp3', 'Track #<##>.mp3'));
+
+  // Brackets combine with wildcards as plain text.
+  Assert.IsTrue (TWildCard.Create('*[old]*').Match('notes[old].txt'));
+  Assert.IsFalse(TWildCard.Create('*[old]*').Match('notes_old.txt'));
 end;
 
 procedure TWildCardMatcherDUnitX.UnicodeNonAsciiSimdCandidateTest;
@@ -2012,23 +2181,23 @@ const
   A_UMLAUT_LOWER = #$00E4; // ä
   A_UMLAUT_UPPER = #$00C4; // Ä
 begin
-  Assert.IsTrue (TWildCard.Create.Match(A_UMLAUT_UPPER, '["' + A_UMLAUT_LOWER + '"]'),
+  Assert.IsTrue (TWildCard.Create.Match(A_UMLAUT_UPPER, '<"' + A_UMLAUT_LOWER + '">'),
     'CI: quoted alternative must match across Unicode case');
-  Assert.IsTrue (TWildCard.Create('["' + A_UMLAUT_LOWER + '"]').Match(A_UMLAUT_UPPER));
+  Assert.IsTrue (TWildCard.Create('<"' + A_UMLAUT_LOWER + '">').Match(A_UMLAUT_UPPER));
 
-  Assert.IsFalse(TWildCard.Create(True).Match(A_UMLAUT_UPPER, '["' + A_UMLAUT_LOWER + '"]'), 'CS');
-  Assert.IsFalse(TWildCard.Create('["' + A_UMLAUT_LOWER + '"]', True).Match(A_UMLAUT_UPPER));
+  Assert.IsFalse(TWildCard.Create(True).Match(A_UMLAUT_UPPER, '<"' + A_UMLAUT_LOWER + '">'), 'CS');
+  Assert.IsFalse(TWildCard.Create('<"' + A_UMLAUT_LOWER + '">', True).Match(A_UMLAUT_UPPER));
 end;
 
 procedure TWildCardMatcherDUnitX.PathModeClassAndQuotedAltSeparatorsTest;
 begin
   // Quoted alternatives are literal - a separator inside one matches
   // normally even in path mode.
-  Assert.IsTrue(TWildCard.Create('["a\b"]', [wcoPathMode]).Match('a\b'));
+  Assert.IsTrue(TWildCard.Create('<"a\b">', [wcoPathMode]).Match('a\b'));
 
   // Character classes are evaluated normally in path mode too - an
   // explicit separator member may match one.
-  Assert.IsTrue(TWildCard.Create('a[\a]b', [wcoPathMode]).Match('a\b'),
+  Assert.IsTrue(TWildCard.Create('a<\a>b', [wcoPathMode]).Match('a\b'),
     'class with an explicit backslash member matches a separator');
 
   // ...but '?' and '*' never do.

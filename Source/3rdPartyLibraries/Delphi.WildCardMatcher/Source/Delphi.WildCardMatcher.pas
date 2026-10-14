@@ -4,32 +4,42 @@
 //
 //   *                  matches zero or more characters
 //   ?                  matches exactly one character
-//   #                  matches exactly one decimal digit (0-9)
-//   [abc]              matches any one of the characters in the set
-//   [!abc]             matches any one character NOT in the set
-//   [a-z]              matches any one character in the range (low..high, ascending)
-//   ["foo"|"bar"]      matches the literal "foo" OR the literal "bar" at this position
-//   [!"foo"|"bar"]     matches a slice of length max(altLen) that is NEITHER prefix
+//   <#>                matches exactly one decimal digit (0-9); <###> matches three
+//   <abc>              matches any one of the characters in the set
+//   <!abc>             matches any one character NOT in the set
+//   <a-z>              matches any one character in the range (low..high, ascending)
+//   <"foo"|"bar">      matches the literal "foo" OR the literal "bar" at this position
+//   <!"foo"|"bar">     matches a slice of length max(altLen) that is NEITHER prefix
 //
-// Sets may combine literals and ranges, e.g. '[a-zA-Z0-9_]'.
-// A literal ']' inside a single-char class must be the first content character:
-// '[]abc]' matches ']', 'a', 'b' or 'c'.  '[!]abc]' negates the same set.
+// Every metacharacter is one Windows forbids in file names ('*', '?', '<',
+// '>', '"', '|'), so ANY valid Windows path is a literal pattern that
+// matches itself - 'C:\Temp\Foo[ab].txt' or 'Track #01.mp3' included.
+// '[', ']' and '#' are plain literal characters.  IsWildCard tells a
+// pattern from a plain path by exactly this rule.
+//
+// Sets may combine literals and ranges, e.g. '<a-zA-Z0-9_>'.
+// A literal '>' inside a single-char class must be the first content character:
+// '<>abc>' matches '>', 'a', 'b' or 'c'.  '<!>abc>' negates the same set.
 // A '-' that is the first or last content character is treated as a literal,
-// e.g. '[-x]' matches '-' or 'x'; '[a-]' matches 'a' or '-'.
+// e.g. '<-x>' matches '-' or 'x'; '<a->' matches 'a' or '-'.
 //
-// Two flavours of '[...]':
+// Three flavours of '<...>':
 //
-//   Single-char class: '[abc]', '[a-z]', '[!xyz]' - matches exactly one input
-//   character.  This is the legacy DOS form.
+//   Digit run: '<#>', '<##>', '<###>' ... - content made of '#' only matches
+//   that many decimal digits.  '#' mixed with other members ('<#a>') is a
+//   plain class member.
 //
-//   Quoted-string alternation: '["foo"|"bar"|"baz"]' - matches one of the
+//   Single-char class: '<abc>', '<a-z>', '<!xyz>' - matches exactly one input
+//   character.
+//
+//   Quoted-string alternation: '<"foo"|"bar"|"baz">' - matches one of the
 //   listed literal strings at the current position and consumes its length.
 //   '|' inside the brackets is the alternative separator.  Auto-detected:
 //   if the first content character (after an optional '!') is '"', the
-//   class is parsed in alternation form; otherwise the legacy single-char
-//   rules apply.
+//   class is parsed in alternation form; otherwise the single-char rules
+//   apply.
 //
-//   Negated alternation '[!"foo"|"bar"]' succeeds when NONE of the listed
+//   Negated alternation '<!"foo"|"bar">' succeeds when NONE of the listed
 //   alternatives is a prefix at the current position; it then consumes the
 //   length of the LONGEST alternative.  When the input has fewer characters
 //   left than the longest alternative, the match fails (just like the
@@ -37,11 +47,10 @@
 //
 //   Empty quoted alternative ('""') is allowed and matches zero characters
 //   (always succeeds, consumes nothing).  Backslashes / quote escapes are
-//   NOT supported - quoted alternation is intended for file-mask use and
-//   Windows file names cannot contain the characters '[', ']', '|' or '"'
-//   to begin with, so the syntax stays safe to embed in literal masks.
+//   NOT supported - Windows file names cannot contain '"', so no escape is
+//   ever needed for file masks.
 //
-//   '"' OUTSIDE a '[...]' class is a plain literal character.
+//   '"', '|' and '>' OUTSIDE a '<...>' class are plain literal characters.
 //
 // Matching is case-insensitive by default (Windows convention); pass
 // ACaseSensitive = True for ordinal comparison.  The case-sensitive and
@@ -186,6 +195,7 @@ type
     // Case-independent helpers
     class function IsAsciiDigit(const AChar: Char): Boolean; static; inline;
     class function IsPathSeparator(const AChar: Char): Boolean; static; inline;
+    class function DigitRunLength(const APattern: string; const AStart, APatternLen: Integer): Integer; static;
     class function FindClassEnd(const APattern: string; const AStart: Integer; var AIsQuotedAlt: Boolean): Integer; static;
     class function PatternTailIsLiteral(const APattern: string; const APatternIndex: Integer): Boolean; static; inline;
     // Compiled engine (registered patterns).  The pattern text handed to
@@ -252,6 +262,15 @@ type
     // never matches anything at runtime; use this to reject bad masks at
     // input time (settings dialogs, config files) instead.
     class function ValidatePattern(const APattern: string; out AErrorMessage: string): Boolean; static;
+
+    // True when APattern contains wildcard syntax - '*', '?' or a '<'
+    // starting a class / digit run / alternation - and False for plain
+    // text.  Every metacharacter is forbidden in Windows file names, so
+    // any valid file name or path ('C:\Temp\Foo[ab].txt', 'Track #01.mp3')
+    // returns False and, used as a pattern, matches only itself.  Says
+    // nothing about well-formedness: 'Foo<abc' is True (and malformed -
+    // see ValidatePattern).
+    class function IsWildCard(const APattern: string): Boolean; static;
 
     // True when APattern matches every possible input: a run of '*'s
     // (in path mode a run of at least two - a single '*' cannot cross
@@ -582,22 +601,58 @@ begin
   Result := (AChar = '\') or (AChar = '/');
 end;
 
+// AStart points at '<'.  Returns N when '<' is followed by N >= 1 '#'
+// characters and a closing '>' (a digit run matching N digits), else 0 -
+// '<#a>', '<!#>', '<>#>' and an unterminated '<##' are all ordinary
+// classes, left to FindClassEnd / ParseClassToken.
+class function TWildCard.DigitRunLength(const APattern: string; const AStart, APatternLen: Integer): Integer;
+var
+  LIndex: Integer;
+begin
+  LIndex := AStart + 1;
+
+  while (LIndex <= APatternLen) and (APattern[LIndex] = '#') do
+    Inc(LIndex);
+
+  if (LIndex > AStart + 1) and (LIndex <= APatternLen) and (APattern[LIndex] = '>') then
+    Result := LIndex - AStart - 1
+  else
+    Result := 0;
+end;
+
+class function TWildCard.IsWildCard(const APattern: string): Boolean;
+var
+  LIndex: Integer;
+begin
+  // '*', '?' and '<' are the only characters the engines do not take
+  // literally ('!', '"', '|', '-' and '>' have meaning only inside a
+  // '<...>' class).  All three are forbidden in Windows file names.
+  for LIndex := 1 to Length(APattern) do
+    case APattern[LIndex] of
+      '*', '?', '<':
+        Exit(True);
+    end;
+
+  Result := False;
+end;
+
 class function TWildCard.ValidatePattern(const APattern: string; out AErrorMessage: string): Boolean;
 var
   LLen, LIdx, LClassStart, LQuoteStart: Integer;
 begin
   // Walks the pattern with the same class-parsing rules as the engines
-  // (leading ']' literal, quoted alternation auto-detection) and reports
-  // the first syntax problem with its 1-based position.  Anything this
-  // function accepts compiles to a matching pattern; anything it rejects
-  // never matches at runtime.
+  // (leading '>' literal, quoted alternation auto-detection) and reports
+  // the first syntax problem with its 1-based position.  A digit run
+  // '<###>' is a well-formed class to this walk.  Anything this function
+  // accepts compiles to a matching pattern; anything it rejects never
+  // matches at runtime.
   AErrorMessage := '';
   LLen := Length(APattern);
   LIdx := 1;
 
   while LIdx <= LLen do
   begin
-    if APattern[LIdx] = '[' then
+    if APattern[LIdx] = '<' then
     begin
       LClassStart := LIdx;
       Inc(LIdx);
@@ -607,16 +662,16 @@ begin
 
       if (LIdx <= LLen) and (APattern[LIdx] = '"') then
       begin
-        // Quoted alternation form: "alt" ('|' "alt")* ']'
+        // Quoted alternation form: "alt" ('|' "alt")* '>'
         while True do
         begin
           if LIdx > LLen then
           begin
-            AErrorMessage := Format('Unterminated quoted alternation class (''['' at position %d)', [LClassStart]);
+            AErrorMessage := Format('Unterminated quoted alternation class (''<'' at position %d)', [LClassStart]);
             Exit(False);
           end;
 
-          if APattern[LIdx] = ']' then
+          if APattern[LIdx] = '>' then
             Break;
 
           if APattern[LIdx] <> '"' then
@@ -641,37 +696,37 @@ begin
 
           if LIdx > LLen then
           begin
-            AErrorMessage := Format('Unterminated quoted alternation class (''['' at position %d)', [LClassStart]);
+            AErrorMessage := Format('Unterminated quoted alternation class (''<'' at position %d)', [LClassStart]);
             Exit(False);
           end;
 
           if APattern[LIdx] = '|' then
             Inc(LIdx)
-          else if APattern[LIdx] <> ']' then
+          else if APattern[LIdx] <> '>' then
           begin
-            AErrorMessage := Format('Expected ''|'' or '']'' after quoted alternative at position %d', [LIdx]);
+            AErrorMessage := Format('Expected ''|'' or ''>'' after quoted alternative at position %d', [LIdx]);
             Exit(False);
           end;
         end;
 
-        Inc(LIdx); // past ']'
+        Inc(LIdx); // past '>'
       end
       else
       begin
-        // Legacy single-char class: a leading ']' is a literal member.
-        if (LIdx <= LLen) and (APattern[LIdx] = ']') then
+        // Single-char class (or digit run): a leading '>' is a literal member.
+        if (LIdx <= LLen) and (APattern[LIdx] = '>') then
           Inc(LIdx);
 
-        while (LIdx <= LLen) and (APattern[LIdx] <> ']') do
+        while (LIdx <= LLen) and (APattern[LIdx] <> '>') do
           Inc(LIdx);
 
         if LIdx > LLen then
         begin
-          AErrorMessage := Format('Unterminated character class (''['' at position %d)', [LClassStart]);
+          AErrorMessage := Format('Unterminated character class (''<'' at position %d)', [LClassStart]);
           Exit(False);
         end;
 
-        Inc(LIdx); // past ']'
+        Inc(LIdx); // past '>'
       end;
     end
     else
@@ -717,6 +772,7 @@ var
   LCompiled: TCompiledPattern;
   LIndex, LRun, LMaxRun: Integer;
   LTokenIndex, LRangeIndex, LAltIndex, LOtherIndex: Integer;
+  LIsQuotedAlt: Boolean;
 begin
   // Malformed pattern: one warning, nothing else worth analysing.
   if not ValidatePattern(APrepared, LError) then
@@ -731,6 +787,27 @@ begin
     AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
       'Pattern is empty - it matches only the empty string');
     Exit;
+  end;
+
+  // '"', '|' and '>' outside a '<...>' class are matched literally, but
+  // Windows file names cannot contain them - typically the pre-'<...>'
+  // alternation syntax '["a"|"b"]', which now never matches a path.  The
+  // pattern is well-formed here, so FindClassEnd always finds the end.
+  LIndex := 1;
+
+  while LIndex <= Length(APrepared) do
+  begin
+    if APrepared[LIndex] = '<' then
+      LIndex := FindClassEnd(APrepared, LIndex, LIsQuotedAlt) + 1
+    else if CharInSet(APrepared[LIndex], ['"', '|', '>']) then
+    begin
+      AppendWildCardDiagnostic(ADiagnostics, wdkWarning, AList, APatternIndex, ADisplay,
+        Format('Pattern ''%s'': ''%s'' at position %d is outside a ''<...>'' class, so it is matched literally - and Windows '
+        + 'file names cannot contain it (quoted alternation is written <"a"|"b">)', [ADisplay, APrepared[LIndex], LIndex]));
+      Break;
+    end
+    else
+      Inc(LIndex);
   end;
 
   // Star runs are collapsed by the tokenizer, so scan the text.
@@ -774,11 +851,11 @@ begin
           // never match (the empty alternative is a prefix everywhere).
           if LCompiled.Tokens[LTokenIndex].Negate and (LCompiled.Tokens[LTokenIndex].MaxAltLen = 0) then
             AppendWildCardDiagnostic(ADiagnostics, wdkWarning, AList, APatternIndex, ADisplay,
-              Format('Pattern ''%s'': ''[!""]'' never matches - the empty alternative is a prefix of everything', [ADisplay]))
+              Format('Pattern ''%s'': ''<!"">'' never matches - the empty alternative is a prefix of everything', [ADisplay]))
           else if (Length(LCompiled.Tokens[LTokenIndex].Alts) = 1) and (LCompiled.Tokens[LTokenIndex].Alts[0] = '')
             and not LCompiled.Tokens[LTokenIndex].Negate then
             AppendWildCardDiagnostic(ADiagnostics, wdkHint, AList, APatternIndex, ADisplay,
-              Format('Pattern ''%s'': ''[""]'' matches zero characters - it has no effect', [ADisplay]));
+              Format('Pattern ''%s'': ''<"">'' matches zero characters - it has no effect', [ADisplay]));
 
           for LAltIndex := 1 to High(LCompiled.Tokens[LTokenIndex].Alts) do
             for LOtherIndex := 0 to LAltIndex - 1 do
@@ -848,16 +925,16 @@ var
   LIndex: Integer;
   LPatternLen: Integer;
 begin
-  // AStart points at '['. Returns index of ']' that closes the class, or 0
+  // AStart points at '<'. Returns index of '>' that closes the class, or 0
   // if the class is unterminated.  AIsQuotedAlt reports whether the class
   // is in quoted-alternation form (first content char after an optional
   // '!' is '"') - returned from here so the caller does not have to
   // re-scan the class prefix to find out.
   //
   // Two scanning modes:
-  //   Legacy single-char class: leading ']' is treated as a literal so
-  //     '[]abc]' is a valid class containing ']abc'.
-  //   Quoted-alternation class: ']' inside a '"..."' span is part of the
+  //   Single-char class (and digit run): leading '>' is treated as a
+  //     literal so '<>abc>' is a valid class containing '>abc'.
+  //   Quoted-alternation class: '>' inside a '"..."' span is part of the
   //     alternative literal and does NOT close the class.  An unterminated
   //     '"' (no closing quote before end of pattern) makes the class
   //     malformed (returns 0).
@@ -869,7 +946,7 @@ begin
 
   AIsQuotedAlt := (LIndex <= LPatternLen) and (APattern[LIndex] = '"');
 
-  if (not AIsQuotedAlt) and (LIndex <= LPatternLen) and (APattern[LIndex] = ']') then
+  if (not AIsQuotedAlt) and (LIndex <= LPatternLen) and (APattern[LIndex] = '>') then
     Inc(LIndex);
 
   while LIndex <= LPatternLen do
@@ -889,7 +966,7 @@ begin
       Continue;
     end;
 
-    if APattern[LIndex] = ']' then
+    if APattern[LIndex] = '>' then
       Exit(LIndex);
 
     Inc(LIndex);
@@ -909,7 +986,7 @@ begin
   // position.
   for LIndex := APatternIndex to Length(APattern) do
     case APattern[LIndex] of
-      '*', '?', '#', '[':
+      '*', '?', '<':
         Exit(False);
     end;
 
@@ -938,7 +1015,7 @@ begin
   begin
     // 'X-Y' is a range when '-' is followed by a real content character.
     // When '-' is the last content character (next position is the closing
-    // ']'), it is treated as a literal.
+    // '>'), it is treated as a literal.
     if (LIndex + 2 < AEnd) and (APattern[LIndex + 1] = '-') then
     begin
       if (AChar >= APattern[LIndex]) and (AChar <= APattern[LIndex + 2]) then
@@ -989,7 +1066,7 @@ var
   LAfterAlt: Integer;
   LMaxLen: Integer;
 begin
-  // AClassStart points at '[', AClassEnd at the closing ']'.  Iterates the
+  // AClassStart points at '<', AClassEnd at the closing '>'.  Iterates the
   // alternatives, recursing into MatchRecursiveCS on the remainder of the
   // pattern for each.  For the negated form, the longest alternative
   // dictates how much input the class consumes when it succeeds.
@@ -1089,6 +1166,7 @@ class function TWildCard.MatchRecursiveCS(const AInput, APattern: string; AInput
   const APathMode: Boolean): Boolean;
 var
   LClassEnd: Integer;
+  LDigitRun: Integer;
   LIsQuotedAlt: Boolean;
   LInputLen, LPatternLen: Integer;
   LTailLen, LTailStart, LIndex: Integer;
@@ -1192,8 +1270,10 @@ begin
                   Inc(AInputIndex);
                 end;
               end;
-            '#':
+            '<':
+              if DigitRunLength(APattern, APatternIndex, LPatternLen) > 0 then
               begin
+                // Digit run: only positions starting with a digit qualify.
                 while AInputIndex <= LInputLen do
                 begin
                   if IsAsciiDigit(AInput[AInputIndex]) then
@@ -1202,8 +1282,8 @@ begin
 
                   Inc(AInputIndex);
                 end;
-              end;
-            '[':
+              end
+              else
               begin
                 // Classes need full evaluation - and a quoted-alt class
                 // with an empty alternative can match zero chars - so try
@@ -1257,19 +1337,24 @@ begin
           Inc(AInputIndex);
           Inc(APatternIndex);
         end;
-      '#':
+      '<':
         begin
-          if AInputIndex > LInputLen then
-            Exit(False);
+          LDigitRun := DigitRunLength(APattern, APatternIndex, LPatternLen);
 
-          if not IsAsciiDigit(AInput[AInputIndex]) then
-            Exit(False);
+          if LDigitRun > 0 then
+          begin
+            if AInputIndex + LDigitRun - 1 > LInputLen then
+              Exit(False);
 
-          Inc(AInputIndex);
-          Inc(APatternIndex);
-        end;
-      '[':
-        begin
+            for LIndex := AInputIndex to AInputIndex + LDigitRun - 1 do
+              if not IsAsciiDigit(AInput[LIndex]) then
+                Exit(False);
+
+            Inc(AInputIndex, LDigitRun);
+            Inc(APatternIndex, LDigitRun + 2);
+            Continue;
+          end;
+
           LClassEnd := FindClassEnd(APattern, APatternIndex, LIsQuotedAlt);
           if LClassEnd = 0 then
             Exit(False);
@@ -1475,6 +1560,7 @@ class function TWildCard.MatchRecursiveCI(const AInput, APattern: string; AInput
   const APathMode: Boolean): Boolean;
 var
   LClassEnd: Integer;
+  LDigitRun: Integer;
   LIsQuotedAlt: Boolean;
   LInputLen, LPatternLen: Integer;
   LTailLen, LTailStart, LIndex: Integer;
@@ -1580,8 +1666,10 @@ begin
                   Inc(AInputIndex);
                 end;
               end;
-            '#':
+            '<':
+              if DigitRunLength(APattern, APatternIndex, LPatternLen) > 0 then
               begin
+                // Digit run: only positions starting with a digit qualify.
                 while AInputIndex <= LInputLen do
                 begin
                   if IsAsciiDigit(AInput[AInputIndex]) then
@@ -1590,8 +1678,8 @@ begin
 
                   Inc(AInputIndex);
                 end;
-              end;
-            '[':
+              end
+              else
               begin
                 // Classes need full evaluation - and a quoted-alt class
                 // with an empty alternative can match zero chars - so try
@@ -1654,19 +1742,24 @@ begin
           Inc(AInputIndex);
           Inc(APatternIndex);
         end;
-      '#':
+      '<':
         begin
-          if AInputIndex > LInputLen then
-            Exit(False);
+          LDigitRun := DigitRunLength(APattern, APatternIndex, LPatternLen);
 
-          if not IsAsciiDigit(AInput[AInputIndex]) then
-            Exit(False);
+          if LDigitRun > 0 then
+          begin
+            if AInputIndex + LDigitRun - 1 > LInputLen then
+              Exit(False);
 
-          Inc(AInputIndex);
-          Inc(APatternIndex);
-        end;
-      '[':
-        begin
+            for LIndex := AInputIndex to AInputIndex + LDigitRun - 1 do
+              if not IsAsciiDigit(AInput[LIndex]) then
+                Exit(False);
+
+            Inc(AInputIndex, LDigitRun);
+            Inc(APatternIndex, LDigitRun + 2);
+            Continue;
+          end;
+
           LClassEnd := FindClassEnd(APattern, APatternIndex, LIsQuotedAlt);
           if LClassEnd = 0 then
             Exit(False);
@@ -1730,10 +1823,12 @@ begin
   end;
 end;
 
-// AClassIndex is at '[' on entry; on success it is moved past the closing
-// ']'.  Mirrors the interpreting engine's FindClassEnd + CharInClass* +
+// AClassIndex is at '<' on entry; on success it is moved past the closing
+// '>'.  Mirrors the interpreting engine's FindClassEnd + CharInClass* +
 // MatchQuotedAltClass* parsing rules exactly - the two engines MUST stay
 // in agreement (the benchmark app has a parity suite that checks this).
+// Digit runs ('<###>') never get here - CompilePattern turns them into
+// tkDigit tokens first.
 class function TWildCard.ParseClassToken(const APattern: string; var AClassIndex: Integer; var AToken: TToken; const ALen: Integer): Boolean;
 var
   LPos, LContentStart, LContentEnd, LQStart: Integer;
@@ -1763,7 +1858,7 @@ begin
       if LPos > ALen then
         Exit(False);
 
-      if APattern[LPos] = ']' then
+      if APattern[LPos] = '>' then
         Break;
 
       if APattern[LPos] <> '"' then
@@ -1792,14 +1887,14 @@ begin
       if Length(LAlt) < AToken.MinAltLen then
         AToken.MinAltLen := Length(LAlt);
 
-      // After an alternative: '|' continues, ']' ends (checked at loop
+      // After an alternative: '|' continues, '>' ends (checked at loop
       // top), anything else - including a bare '"' - is malformed.
       if LPos > ALen then
         Exit(False);
 
       if APattern[LPos] = '|' then
         Inc(LPos)
-      else if APattern[LPos] <> ']' then
+      else if APattern[LPos] <> '>' then
         Exit(False);
     end;
 
@@ -1812,22 +1907,22 @@ begin
     Exit(True);
   end;
 
-  // Legacy single-char class form.
+  // Single-char class form.
   AToken.Kind := tkCharClass;
   LContentStart := LPos;
   LContentEnd := LPos;
 
-  // First content char ']' is a literal member.
-  if (LContentEnd <= ALen) and (APattern[LContentEnd] = ']') then
+  // First content char '>' is a literal member.
+  if (LContentEnd <= ALen) and (APattern[LContentEnd] = '>') then
     Inc(LContentEnd);
 
-  while (LContentEnd <= ALen) and (APattern[LContentEnd] <> ']') do
+  while (LContentEnd <= ALen) and (APattern[LContentEnd] <> '>') do
     Inc(LContentEnd);
 
   if LContentEnd > ALen then
     Exit(False);
 
-  // Content spans [LContentStart .. LContentEnd - 1]; LContentEnd = ']'.
+  // Content spans LContentStart .. LContentEnd - 1; LContentEnd = '>'.
   // 'X-Y' is a range when '-' is followed by a real content character
   // (same rule as CharInClass*).
   LPos := LContentStart;
@@ -1862,6 +1957,7 @@ var
   LTok: TToken;
   LMin: Integer;
   LStarRun: Integer;
+  LDigitRun, LDigitIndex: Integer;
 begin
   Result.Valid := True;
   Result.Tokens := nil;
@@ -1910,20 +2006,26 @@ begin
           Inc(LIndex);
           LLitStart := LIndex;
         end;
-      '#':
+      '<':
         begin
           FlushLiteralToken(APattern, LIndex, LLitStart, LTokens, LCount);
 
-          LTok := Default(TToken);
-          LTok.Kind := tkDigit;
-          AddToken(LTok, LTokens, LCount);
+          // Digit run '<###>': one tkDigit token per digit.
+          LDigitRun := DigitRunLength(APattern, LIndex, LLen);
 
-          Inc(LIndex);
-          LLitStart := LIndex;
-        end;
-      '[':
-        begin
-          FlushLiteralToken(APattern, LIndex, LLitStart, LTokens, LCount);
+          if LDigitRun > 0 then
+          begin
+            for LDigitIndex := 1 to LDigitRun do
+            begin
+              LTok := Default(TToken);
+              LTok.Kind := tkDigit;
+              AddToken(LTok, LTokens, LCount);
+            end;
+
+            Inc(LIndex, LDigitRun + 2);
+            LLitStart := LIndex;
+            Continue;
+          end;
 
           if not ParseClassToken(APattern, LIndex, LTok, LLen) then
           begin

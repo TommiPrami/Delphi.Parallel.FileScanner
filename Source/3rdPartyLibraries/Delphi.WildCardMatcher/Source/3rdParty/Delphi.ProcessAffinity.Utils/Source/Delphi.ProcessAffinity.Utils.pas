@@ -1,4 +1,4 @@
-unit Delphi.ProcessAffinity.Utils;
+﻿unit Delphi.ProcessAffinity.Utils;
 
 {
   Code is highly influenced by code from the Graphics32 project:

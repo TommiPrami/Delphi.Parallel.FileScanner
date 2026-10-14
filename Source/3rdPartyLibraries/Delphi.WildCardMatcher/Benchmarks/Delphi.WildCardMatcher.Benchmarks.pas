@@ -21,6 +21,11 @@
 //
 // Adding a scenario: one RunScenario call in RunBenchmarkScenarios.
 // Adding a parity case: one CheckParity(pattern, input) line.
+//
+// Patterns are written in the current '<...>' syntax.  The frozen baseline
+// engine predates it ('[...]' classes, bare '#' digit), so when the bound
+// engine turns out to be the legacy one, ToEngineSyntax translates every
+// pattern before use - the baseline unit itself stays untouched.
 
 interface
 
@@ -39,10 +44,62 @@ const
 
   WORST_CASE_LONG_PATH = 'C:\Users\developer\source\repos\MyApp\src\main\delphi\modules\data_access\repositories\implementations\sqlserver\'
     + 'concrete\OrderRepositoryImplementation_2024_03_15_v3_revised_final.pas';
-  WORST_CASE_COMPLEX_PATTERN = '*\Users\*\source\*\MyApp\*\modules\*\repositories\*\sqlserver\*\*Repository*_v#_*.xyz';
+  WORST_CASE_COMPLEX_PATTERN = '*\Users\*\source\*\MyApp\*\modules\*\repositories\*\sqlserver\*\*Repository*_v<#>_*.xyz';
 
 var
   GParityFailures: Integer = 0;
+
+{ ----------------------------------------------------------------------- }
+{ Pattern syntax of the bound engine                                       }
+{ ----------------------------------------------------------------------- }
+
+// True when the bound Delphi.WildCardMatcher speaks the '<...>' syntax;
+// the legacy engine reads '<a>' as three literal characters.
+function EngineHasAngleBracketSyntax: Boolean;
+begin
+  Result := TWildCard.Create.Match('a', '<a>');
+end;
+
+// Translates a '<...>' pattern to the legacy '[...]' syntax when the bound
+// engine needs it: digit run '<##>' -> '##', '<' -> '[', '>' -> ']'.  A
+// '>' inside a quoted alternative becomes ']', which the legacy engine
+// also treats as a literal there, so the meaning is preserved.
+function ToEngineSyntax(const APattern: string): string;
+var
+  LIndex, LRunEnd: Integer;
+begin
+  if EngineHasAngleBracketSyntax then
+    Exit(APattern);
+
+  Result := '';
+  LIndex := 1;
+
+  while LIndex <= Length(APattern) do
+  begin
+    if APattern[LIndex] = '<' then
+    begin
+      LRunEnd := LIndex + 1;
+
+      while (LRunEnd <= Length(APattern)) and (APattern[LRunEnd] = '#') do
+        Inc(LRunEnd);
+
+      if (LRunEnd > LIndex + 1) and (LRunEnd <= Length(APattern)) and (APattern[LRunEnd] = '>') then
+      begin
+        Result := Result + StringOfChar('#', LRunEnd - LIndex - 1);
+        LIndex := LRunEnd + 1;
+        Continue;
+      end;
+
+      Result := Result + '[';
+    end
+    else if APattern[LIndex] = '>' then
+      Result := Result + ']'
+    else
+      Result := Result + APattern[LIndex];
+
+    Inc(LIndex);
+  end;
+end;
 
 { ----------------------------------------------------------------------- }
 { Parity suite: registered engine vs ad-hoc engine                         }
@@ -50,32 +107,40 @@ var
 
 procedure CheckParity(const APattern, AInput: string);
 var
+  LPattern: string;
   LAdhocCI, LAdhocCS, LRegCI, LRegCS: Boolean;
 begin
-  LAdhocCI := TWildCard.Create.Match(AInput, APattern);
-  LRegCI := TWildCard.Create(APattern).Match(AInput);
+  LPattern := ToEngineSyntax(APattern);
 
-  LAdhocCS := TWildCard.Create(True).Match(AInput, APattern);
-  LRegCS := TWildCard.Create(APattern, True).Match(AInput);
+  LAdhocCI := TWildCard.Create.Match(AInput, LPattern);
+  LRegCI := TWildCard.Create(LPattern).Match(AInput);
+
+  LAdhocCS := TWildCard.Create(True).Match(AInput, LPattern);
+  LRegCS := TWildCard.Create(LPattern, True).Match(AInput);
 
   if LAdhocCI <> LRegCI then
   begin
     Inc(GParityFailures);
     Log('PARITY FAIL (CI): pattern=<%s> input=<%s> ad-hoc=%s registered=%s',
-      [APattern, AInput, BoolToStr(LAdhocCI, True), BoolToStr(LRegCI, True)]);
+      [LPattern, AInput, BoolToStr(LAdhocCI, True), BoolToStr(LRegCI, True)]);
   end;
 
   if LAdhocCS <> LRegCS then
   begin
     Inc(GParityFailures);
     Log('PARITY FAIL (CS): pattern=<%s> input=<%s> ad-hoc=%s registered=%s',
-      [APattern, AInput, BoolToStr(LAdhocCS, True), BoolToStr(LRegCS, True)]);
+      [LPattern, AInput, BoolToStr(LAdhocCS, True), BoolToStr(LRegCS, True)]);
   end;
 end;
 
 procedure RunParitySuite;
 begin
-  // '*' / '?' / '#' basics
+  if EngineHasAngleBracketSyntax then
+    Log('Pattern syntax: <...> classes (current engine).')
+  else
+    Log('Pattern syntax: [...] classes (legacy engine) - patterns are translated before use.');
+
+  // '*' / '?' / digit-run basics
   CheckParity('wh*', 'what');
   CheckParity('wh*', 'awhile');
   CheckParity('*', '');
@@ -87,72 +152,79 @@ begin
   CheckParity('*world*', 'hello');
   CheckParity('b?ll', 'ball');
   CheckParity('b?ll', 'bll');
-  CheckParity('1#3', '103');
-  CheckParity('1#3', '1a3');
-  CheckParity('1#3', '13');
+  CheckParity('1<#>3', '103');
+  CheckParity('1<#>3', '1a3');
+  CheckParity('1<#>3', '13');
   CheckParity('*?', '');
   CheckParity('*?', 'x');
   CheckParity('?*', 'x');
   CheckParity('**.txt', 'a.b.c.txt');
   CheckParity('*a*b*c*', 'xaxbxcx');
   CheckParity('*a*b*c*', 'xxxxxx');
-  CheckParity('Test_###.log', 'Test_001.log');
-  CheckParity('Test_###.log', 'Test_00A.log');
+  CheckParity('Test_<###>.log', 'Test_001.log');
+  CheckParity('Test_<###>.log', 'Test_00A.log');
+  CheckParity('*<##>.log', 'trace_42.log');
+  CheckParity('*<##>.log', 'trace_4.log');
   CheckParity('*.pas', 'pas');
   CheckParity('*.pas', '.pas');
 
   // Char classes
-  CheckParity('b[ae]ll', 'bell');
-  CheckParity('b[ae]ll', 'bill');
-  CheckParity('b[!ae]ll', 'bull');
-  CheckParity('b[!ae]ll', 'ball');
-  CheckParity('b[a-c]d', 'bbd');
-  CheckParity('b[a-c]d', 'bdd');
-  CheckParity('[a-zA-Z]', 'X');
-  CheckParity('[a-zA-Z]', '5');
-  CheckParity('[!a]*', 'apple');
-  CheckParity('[!a]*', 'zebra');
-  CheckParity('[]abc]', ']');
-  CheckParity('[]abc]', 'x');
-  CheckParity('[-x]', '-');
-  CheckParity('[a-]', '-');
-  CheckParity('[a-]', 'b');
-  CheckParity('[abc', 'a');
-  CheckParity('[]', 'a');
-  CheckParity('Foo[_-]#.pas', 'Foo_5.pas');
-  CheckParity('Foo[_-]#.pas', 'Foo.5.pas');
-  CheckParity('*[abc]end', 'xxxaend');
-  CheckParity('*[abc]end', 'xxxdend');
+  CheckParity('b<ae>ll', 'bell');
+  CheckParity('b<ae>ll', 'bill');
+  CheckParity('b<!ae>ll', 'bull');
+  CheckParity('b<!ae>ll', 'ball');
+  CheckParity('b<a-c>d', 'bbd');
+  CheckParity('b<a-c>d', 'bdd');
+  CheckParity('<a-zA-Z>', 'X');
+  CheckParity('<a-zA-Z>', '5');
+  CheckParity('<!a>*', 'apple');
+  CheckParity('<!a>*', 'zebra');
+  CheckParity('<>abc>', '>');
+  CheckParity('<>abc>', 'x');
+  CheckParity('<-x>', '-');
+  CheckParity('<a->', '-');
+  CheckParity('<a->', 'b');
+  CheckParity('<abc', 'a');
+  CheckParity('<>', 'a');
+  CheckParity('Foo<_-><#>.pas', 'Foo_5.pas');
+  CheckParity('Foo<_-><#>.pas', 'Foo.5.pas');
+  CheckParity('*<abc>end', 'xxxaend');
+  CheckParity('*<abc>end', 'xxxdend');
+  CheckParity('<#a>', '#');
+  CheckParity('<!#>', '5');
 
   // Quoted alternation
-  CheckParity('["foo"]', 'foo');
-  CheckParity('["foo"]', 'fo');
-  CheckParity('["foo"|"bar"]', 'bar');
-  CheckParity('["foo"|"bar"]', 'qux');
-  CheckParity('*["foo"|"bar"]*', 'xxbaryy');
-  CheckParity('*["foo"|"bar"]*', 'xxxxxx');
-  CheckParity('["a"|"ab"]b', 'abb');
-  CheckParity('["a"|"ab"]b', 'ab');
-  CheckParity('[""]foo', 'foo');
-  CheckParity('foo[""]', 'foo');
-  CheckParity('[""|"foo"]bar', 'foobar');
-  CheckParity('[!"foo"|"bar"]*', 'quxsuffix');
-  CheckParity('[!"foo"|"bar"]*', 'foosuffix');
-  CheckParity('[!"foo"|"barbaz"]-tail', 'abcdef-tail');
-  CheckParity('[!"foo"|"barbaz"]-tail', 'barbaz-tail');
-  CheckParity('[!"foo"|"bar"]', 'ab');
-  CheckParity('["foo', 'foo');
-  CheckParity('["foo"|"bar', 'foo');
-  CheckParity('["foo""bar"]', 'foo');
-  CheckParity('["foo"x"bar"]', 'foo');
-  CheckParity('["a]b"]', 'a]b');
-  CheckParity('["[x]"]', '[x]');
-  CheckParity('*["3rdparty"|"ThirdParty"]*.md', 'docs\3rdparty\notes.md');
-  CheckParity('*["3rdparty"|"ThirdParty"]*.md', 'docs\internal\notes.md');
+  CheckParity('<"foo">', 'foo');
+  CheckParity('<"foo">', 'fo');
+  CheckParity('<"foo"|"bar">', 'bar');
+  CheckParity('<"foo"|"bar">', 'qux');
+  CheckParity('*<"foo"|"bar">*', 'xxbaryy');
+  CheckParity('*<"foo"|"bar">*', 'xxxxxx');
+  CheckParity('<"a"|"ab">b', 'abb');
+  CheckParity('<"a"|"ab">b', 'ab');
+  CheckParity('<"">foo', 'foo');
+  CheckParity('foo<"">', 'foo');
+  CheckParity('<""|"foo">bar', 'foobar');
+  CheckParity('<!"foo"|"bar">*', 'quxsuffix');
+  CheckParity('<!"foo"|"bar">*', 'foosuffix');
+  CheckParity('<!"foo"|"barbaz">-tail', 'abcdef-tail');
+  CheckParity('<!"foo"|"barbaz">-tail', 'barbaz-tail');
+  CheckParity('<!"foo"|"bar">', 'ab');
+  CheckParity('<"foo', 'foo');
+  CheckParity('<"foo"|"bar', 'foo');
+  CheckParity('<"foo""bar">', 'foo');
+  CheckParity('<"foo"x"bar">', 'foo');
+  CheckParity('<"a>b">', 'a>b');
+  CheckParity('<"<x>">', '<x>');
+  CheckParity('*<"3rdparty"|"ThirdParty">*.md', 'docs\3rdparty\notes.md');
+  CheckParity('*<"3rdparty"|"ThirdParty">*.md', 'docs\internal\notes.md');
 
-  // '|' literal outside classes
+  // Literals: '|' outside classes; '[', ']' and '#' (legal in file names)
   CheckParity('a|b', 'a|b');
   CheckParity('a|b', 'ab');
+  CheckParity('C:\Temp\Foo[ab].txt', 'C:\Temp\Foo[ab].txt');
+  CheckParity('Track #<##>.mp3', 'Track #01.mp3');
+  CheckParity('*[old]*', 'notes[old].txt');
 
   // Worst-case pattern parity
   CheckParity(WORST_CASE_COMPLEX_PATTERN, WORST_CASE_LONG_PATH);
@@ -181,6 +253,8 @@ procedure RunScenario(const AName: string; const AInputs: TArray<string>; const 
 var
   LRegisteredCI, LRegisteredCS, LAdhocCI, LAdhocCS: TWildCard;
   LTotalOps, LExpectedTotal: Int64;
+  LPatterns: TArray<string>;
+  LIndex: Integer;
 begin
   Log('');
   Log('=== %s  (%d patterns x %d inputs x %d loops, best of %d rounds) ===',
@@ -189,8 +263,13 @@ begin
   LTotalOps := Int64(ALoops) * Length(AInputs);
   LExpectedTotal := Int64(ALoops) * AExpectedPerIter;
 
-  LRegisteredCI := TWildCard.Create(APatterns, False);
-  LRegisteredCS := TWildCard.Create(APatterns, True);
+  SetLength(LPatterns, Length(APatterns));
+
+  for LIndex := 0 to High(APatterns) do
+    LPatterns[LIndex] := ToEngineSyntax(APatterns[LIndex]);
+
+  LRegisteredCI := TWildCard.Create(LPatterns, False);
+  LRegisteredCS := TWildCard.Create(LPatterns, True);
   LAdhocCI := TWildCard.Create(False);
   LAdhocCS := TWildCard.Create(True);
 
@@ -214,7 +293,7 @@ begin
       Result := 0;
       for LIter := 1 to ALoops do
         for LIdx := 0 to High(AInputs) do
-          if LAdhocCI.Match(AInputs[LIdx], APatterns) then
+          if LAdhocCI.Match(AInputs[LIdx], LPatterns) then
             Inc(Result);
     end);
 
@@ -238,7 +317,7 @@ begin
       Result := 0;
       for LIter := 1 to ALoops do
         for LIdx := 0 to High(AInputs) do
-          if LAdhocCS.Match(AInputs[LIdx], APatterns) then
+          if LAdhocCS.Match(AInputs[LIdx], LPatterns) then
             Inc(Result);
     end);
 end;
@@ -282,7 +361,7 @@ begin
 
   RunScenario('S3 worst-case backtracking', LWorstInput, TArray<string>.Create(WORST_CASE_COMPLEX_PATTERN), WORST_CASE_LOOPS, 0);
 
-  RunScenario('S4 quoted-alt mask', LAltInputs, TArray<string>.Create('*["3rdparty"|"ThirdParty"]*.md'), BULK_LOOPS, BULK_INPUT_COUNT div 20);
+  RunScenario('S4 quoted-alt mask', LAltInputs, TArray<string>.Create('*<"3rdparty"|"ThirdParty">*.md'), BULK_LOOPS, BULK_INPUT_COUNT div 20);
 end;
 
 end.
