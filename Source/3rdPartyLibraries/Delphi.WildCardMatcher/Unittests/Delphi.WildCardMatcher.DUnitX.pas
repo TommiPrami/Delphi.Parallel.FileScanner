@@ -57,6 +57,10 @@ type
     procedure DigitRunMatchesSeveralDigitsTest;
     [Test]
     procedure DigitRunEdgeCasesTest;
+    [Test]
+    procedure SequenceMixesDigitsAndAnyCharTest;
+    [Test]
+    procedure SequenceEquivalentFormsTest;
 
     { Edge cases }
     [Test]
@@ -302,12 +306,52 @@ type
     procedure PathModeMixedSeparatorsTest;
     [Test]
     procedure FilterPathModeOptionsTest;
+
+    { Wildcard combinations - every case checked in both engines }
+    [Test]
+    procedure StarAndQuestionCombinationsTest;
+    [Test]
+    procedure StarAndSequenceCombinationsTest;
+    [Test]
+    procedure StarAndClassCombinationsTest;
+    [Test]
+    procedure StarAndAlternationCombinationsTest;
+    [Test]
+    procedure FixedWidthTokenCombinationsTest;
+    [Test]
+    procedure NegatedFormCombinationsTest;
+    [Test]
+    procedure CaseSensitivityCombinationsTest;
+    [Test]
+    procedure PathModeCombinationsTest;
+    [Test]
+    procedure RealWorldMaskCombinationsTest;
+    [Test]
+    procedure WildcardsInsideQuotesAreLiteralTest;
+    [Test]
+    procedure AnchoringCombinationsTest;
+    [Test]
+    procedure BacktrackingCombinationsTest;
+    [Test]
+    procedure EmptyInputCombinationsTest;
+    [Test]
+    procedure ReferenceMatcherFuzzTest;
   end;
 
 implementation
 
 uses
   System.Classes, System.SysUtils;
+
+{ Fuzzing random source - shared by the fuzz and equivalence tests }
+
+function FuzzNextRandom(var ASeed: Cardinal; const ARange: Cardinal): Cardinal;
+begin
+  // Deterministic LCG (Numerical Recipes constants) - keeps the fuzz run
+  // reproducible regardless of the RTL's global Random state.
+  ASeed := (ASeed * 1664525) + 1013904223;
+  Result := (ASeed shr 16) mod ARange;
+end;
 
 { Spec example 1: '*' }
 
@@ -494,6 +538,119 @@ begin
   // Unterminated digit run is a malformed class - never matches.
   Assert.IsFalse(TWildCard.Create.Match('12', '<##'));
   Assert.IsFalse(TWildCard.Create('<##').Match('12'));
+end;
+
+procedure TWildCardMatcherDUnitX.SequenceMixesDigitsAndAnyCharTest;
+var
+  LError: string;
+begin
+  // '<?##>': any one character, then two digits.
+  Assert.IsTrue (TWildCard.Create.Match('x12.txt', '<?##>.txt'));
+  Assert.IsTrue (TWildCard.Create('<?##>.txt').Match('912.txt'), 'registered engine');
+  Assert.IsFalse(TWildCard.Create.Match('12.txt',  '<?##>.txt'), '? needs a character of its own');
+  Assert.IsFalse(TWildCard.Create.Match('x1a.txt', '<?##>.txt'), 'a is not a digit');
+  Assert.IsFalse(TWildCard.Create('<?##>.txt').Match('xy12.txt'));
+
+  // Order matters: '<#?#>' is digit, any, digit.
+  Assert.IsTrue (TWildCard.Create.Match('1x2', '<#?#>'));
+  Assert.IsFalse(TWildCard.Create.Match('x12', '<#?#>'));
+  Assert.IsTrue (TWildCard.Create('<#?#>').Match('1-2'));
+
+  // '<?>' alone is the same as '?'.
+  Assert.IsTrue (TWildCard.Create.Match('a', '<?>'));
+  Assert.IsFalse(TWildCard.Create.Match('',  '<?>'));
+  Assert.IsFalse(TWildCard.Create('<?>').Match('ab'));
+
+  // Path mode: a '?' in a sequence does not match a separator, like a bare '?'.
+  Assert.IsFalse(TWildCard.Create([wcoPathMode]).Match('a\12', 'a<?##>'));
+  Assert.IsFalse(TWildCard.Create('a<?##>', [wcoPathMode]).Match('a\12'));
+  Assert.IsTrue (TWildCard.Create.Match('a\12', 'a<?##>'), 'without path mode ? matches the separator');
+
+  // '?' mixed with other members, or after '!', is a plain class.
+  Assert.IsTrue (TWildCard.Create.Match('a', '<?a>'));
+  Assert.IsFalse(TWildCard.Create.Match('b', '<?a>'), '<?a> is the set {?, a}');
+  Assert.IsTrue (TWildCard.Create.Match('b', '<!?>'));
+  Assert.IsFalse(TWildCard.Create.Match('?', '<!?>'));
+
+  Assert.IsTrue(TWildCard.ValidatePattern('<?##>.txt', LError), LError);
+end;
+
+procedure TWildCardMatcherDUnitX.SequenceEquivalentFormsTest;
+const
+  SEED = 20261014;
+  ITERATIONS = 2000;
+  // Digit-heavy fragments so the masks get real hits, not just agreement
+  // on "no match".
+  INPUT_FRAGMENTS: array[0..9] of string = ('A', 'x', '1', '2', '7', '\', '.t', '#', '?', 'A1');
+  MODE_OPTIONS: array[0..3] of TWildCardOptions = ([], [wcoCaseSensitive], [wcoPathMode], [wcoCaseSensitive, wcoPathMode]);
+  // Each row lists spellings of the same pattern; all must agree on
+  // every input, in both engines and every mode.
+  EQUIVALENT_FORMS: array[0..5] of array[0..3] of string = (
+    ('A*<##>.txt',    'A*<#><#>.txt',   'A*<#><#>.txt',  'A*<#><#>.txt'),
+    ('<?##>.txt',     '<?><##>.txt',    '?<##>.txt',     '?<#><#>.txt'),
+    ('*<#?#>*',       '*<#>?<#>*',      '*<#><?><#>*',   '*<#>?<#>*'),
+    ('*<??>*',        '*??*',           '*<?><?>*',      '*<?>?*'),
+    ('*A<###>*',      '*A<#><#><#>*',   '*A<##><#>*',    '*A<#><##>*'),
+    ('**<?#>\*',      '**?<#>\*',       '**<?><#>\*',    '**?<#>\*'));
+var
+  LSeed: Cardinal;
+  LIteration, LIndex, LLen, LMode, LRow, LForm: Integer;
+  LInput: string;
+  LExpected: Boolean;
+  LHits: array[0..High(EQUIVALENT_FORMS)] of Integer;
+  LMatchers: array[0..High(EQUIVALENT_FORMS), 0..3, 0..High(MODE_OPTIONS)] of TWildCard;
+begin
+  FillChar(LHits, SizeOf(LHits), 0);
+
+  // The user-facing promise: '<##>' and '<#><#>' (and '<?##>' and
+  // '<?><##>') are the same pattern - '<...>' only marks the region.
+  Assert.AreEqual(TWildCard.Create.Match('A12.txt', 'A*<##>.txt'), TWildCard.Create.Match('A12.txt', 'A*<#><#>.txt'));
+  Assert.IsTrue (TWildCard.Create.Match('Abc12.txt', 'A*<##>.txt'));
+  Assert.IsTrue (TWildCard.Create.Match('Abc12.txt', 'A*<#><#>.txt'));
+  Assert.IsTrue (TWildCard.Create.Match('x12.txt', '<?##>.txt'));
+  Assert.IsTrue (TWildCard.Create.Match('x12.txt', '<?><##>.txt'));
+
+  for LRow := 0 to High(EQUIVALENT_FORMS) do
+    for LForm := 0 to 3 do
+      for LMode := 0 to High(MODE_OPTIONS) do
+        LMatchers[LRow, LForm, LMode] := TWildCard.Create(EQUIVALENT_FORMS[LRow, LForm], MODE_OPTIONS[LMode]);
+
+  LSeed := SEED;
+
+  for LIteration := 1 to ITERATIONS do
+  begin
+    LLen := FuzzNextRandom(LSeed, 6);
+    LInput := '';
+
+    for LIndex := 1 to LLen do
+      LInput := LInput + INPUT_FRAGMENTS[FuzzNextRandom(LSeed, Length(INPUT_FRAGMENTS))];
+
+    if FuzzNextRandom(LSeed, 2) = 0 then
+      LInput := LInput + '.txt';
+
+    for LRow := 0 to High(EQUIVALENT_FORMS) do
+      for LMode := 0 to High(MODE_OPTIONS) do
+      begin
+        LExpected := TWildCard.Create(MODE_OPTIONS[LMode]).Match(LInput, EQUIVALENT_FORMS[LRow, 0]);
+
+        if LExpected then
+          Inc(LHits[LRow]);
+
+        for LForm := 0 to 3 do
+        begin
+          Assert.AreEqual(LExpected, TWildCard.Create(MODE_OPTIONS[LMode]).Match(LInput, EQUIVALENT_FORMS[LRow, LForm]),
+            Format('ad-hoc: <%s> vs <%s> disagree on input <%s> (mode %d)',
+            [EQUIVALENT_FORMS[LRow, 0], EQUIVALENT_FORMS[LRow, LForm], LInput, LMode]));
+          Assert.AreEqual(LExpected, LMatchers[LRow, LForm, LMode].Match(LInput),
+            Format('registered: <%s> vs <%s> disagree on input <%s> (mode %d)',
+            [EQUIVALENT_FORMS[LRow, 0], EQUIVALENT_FORMS[LRow, LForm], LInput, LMode]));
+        end;
+      end;
+  end;
+
+  // Agreeing on "no match" everywhere would prove nothing.
+  for LRow := 0 to High(EQUIVALENT_FORMS) do
+    Assert.IsTrue(LHits[LRow] >= 20, Format('<%s> matched only %d random inputs', [EQUIVALENT_FORMS[LRow, 0], LHits[LRow]]));
 end;
 
 { Edge cases }
@@ -1669,14 +1826,6 @@ end;
 
 { Differential fuzzing helpers }
 
-function FuzzNextRandom(var ASeed: Cardinal; const ARange: Cardinal): Cardinal;
-begin
-  // Deterministic LCG (Numerical Recipes constants) - keeps the fuzz run
-  // reproducible regardless of the RTL's global Random state.
-  ASeed := (ASeed * 1664525) + 1013904223;
-  Result := (ASeed shr 16) mod ARange;
-end;
-
 function FuzzRandomPattern(var ASeed: Cardinal): string;
 const
   // '#', '[' and ']' are plain literals - kept in the alphabet so both
@@ -2229,6 +2378,975 @@ begin
   Assert.IsTrue (LFilter.Accepts('src\Unit1.pas'));
   Assert.IsFalse(LFilter.Accepts('src\deep\Unit1.pas'), 'include * must not cross the separator');
   Assert.IsFalse(LFilter.Accepts('src\Unit1_test.pas'), 'excluded');
+end;
+
+{ Wildcard combinations - helpers }
+
+function OptionsText(const AOptions: TWildCardOptions): string;
+begin
+  if wcoCaseSensitive in AOptions then
+    Result := 'CS'
+  else
+    Result := 'CI';
+
+  if wcoPathMode in AOptions then
+    Result := Result + '+Path';
+end;
+
+// Checks one case in both engines: ad-hoc (interpreting) and registered (compiled).
+procedure CheckMatch(const APattern, AInput: string; const AExpected: Boolean; const AOptions: TWildCardOptions = []);
+begin
+  Assert.AreEqual(AExpected, TWildCard.Create(AOptions).Match(AInput, APattern),
+    Format('ad-hoc %s: pattern <%s>, input <%s>', [OptionsText(AOptions), APattern, AInput]));
+  Assert.AreEqual(AExpected, TWildCard.Create(APattern, AOptions).Match(AInput),
+    Format('registered %s: pattern <%s>, input <%s>', [OptionsText(AOptions), APattern, AInput]));
+end;
+
+// Same, in all four case / path mode combinations - for cases whose result depends on neither.
+procedure CheckMatchAllModes(const APattern, AInput: string; const AExpected: Boolean);
+begin
+  CheckMatch(APattern, AInput, AExpected, []);
+  CheckMatch(APattern, AInput, AExpected, [wcoCaseSensitive]);
+  CheckMatch(APattern, AInput, AExpected, [wcoPathMode]);
+  CheckMatch(APattern, AInput, AExpected, [wcoCaseSensitive, wcoPathMode]);
+end;
+
+{ Wildcard combinations }
+
+procedure TWildCardMatcherDUnitX.StarAndQuestionCombinationsTest;
+begin
+  CheckMatchAllModes('*?', '', False);
+  CheckMatchAllModes('*?', 'a', True);
+  CheckMatchAllModes('*?', 'ab', True);
+
+  CheckMatchAllModes('?*', '', False);
+  CheckMatchAllModes('?*', 'a', True);
+
+  CheckMatchAllModes('?*?', 'a', False);
+  CheckMatchAllModes('?*?', 'ab', True);
+  CheckMatchAllModes('?*?', 'abc', True);
+
+  CheckMatchAllModes('*?*', '', False);
+  CheckMatchAllModes('*?*', 'x', True);
+
+  CheckMatchAllModes('??*??', 'abc', False);
+  CheckMatchAllModes('??*??', 'abcd', True);
+  CheckMatchAllModes('??*??', 'abcdefg', True);
+
+  CheckMatchAllModes('a*?b', 'ab', False);
+  CheckMatchAllModes('a*?b', 'axb', True);
+  CheckMatchAllModes('a*?b', 'axxb', True);
+  CheckMatchAllModes('a*?b', 'abb', True);
+
+  CheckMatchAllModes('a?*b', 'ab', False);
+  CheckMatchAllModes('a?*b', 'acb', True);
+
+  CheckMatchAllModes('*a?', 'ab', True);
+  CheckMatchAllModes('*a?', 'a', False);
+  CheckMatchAllModes('*a?', 'xxaz', True);
+  CheckMatchAllModes('*a?', 'xxa', False);
+  CheckMatchAllModes('*a?', 'aa', True);
+
+  CheckMatchAllModes('?a*', 'ba', True);
+  CheckMatchAllModes('?a*', 'a', False);
+  CheckMatchAllModes('?a*', 'aa', True);
+
+  CheckMatchAllModes('***?***', '', False);
+  CheckMatchAllModes('***?***', 'q', True);
+end;
+
+procedure TWildCardMatcherDUnitX.StarAndSequenceCombinationsTest;
+begin
+  CheckMatchAllModes('*<#>', '', False);
+  CheckMatchAllModes('*<#>', 'a1', True);
+  CheckMatchAllModes('*<#>', '1a', False);
+  CheckMatchAllModes('*<#>', '1', True);
+
+  CheckMatchAllModes('<#>*', '1', True);
+  CheckMatchAllModes('<#>*', '1abc', True);
+  CheckMatchAllModes('<#>*', 'a1', False);
+
+  CheckMatchAllModes('*<#>*', 'abc', False);
+  CheckMatchAllModes('*<#>*', 'ab3c', True);
+
+  CheckMatchAllModes('*<##>*', 'a1b2', False);
+  CheckMatchAllModes('*<##>*', 'a12', True);
+
+  CheckMatchAllModes('*<#>*<#>*', 'a1b2', True);
+  CheckMatchAllModes('*<#>*<#>*', 'a12', True);
+  CheckMatchAllModes('*<#>*<#>*', 'a1', False);
+
+  CheckMatchAllModes('*<#?#>*', 'x1-2y', True);
+  CheckMatchAllModes('*<#?#>*', 'x12y', False);
+
+  CheckMatchAllModes('<?>*<?>', 'a', False);
+  CheckMatchAllModes('<?>*<?>', 'ab', True);
+
+  CheckMatchAllModes('*<???>', 'ab', False);
+  CheckMatchAllModes('*<???>', 'abc', True);
+  CheckMatchAllModes('*<???>', 'abcd', True);
+
+  CheckMatchAllModes('<###>*.log', '123.log', True);
+  CheckMatchAllModes('<###>*.log', '12.log', False);
+  CheckMatchAllModes('<###>*.log', '1234.log', True);
+  CheckMatchAllModes('<###>*.log', '123x.log', True);
+
+  CheckMatchAllModes('*_<####>-<##>-<##>.txt', 'backup_2026-10-14.txt', True);
+  CheckMatchAllModes('*_<####>-<##>-<##>.txt', 'backup_2026-1-14.txt', False);
+  CheckMatchAllModes('*_<####>-<##>-<##>.txt', 'a_b_2026-10-14.txt', True);
+
+  CheckMatchAllModes('<?##>*<?##>', 'x12y34', True);
+  CheckMatchAllModes('<?##>*<?##>', 'x12x12', True);
+  CheckMatchAllModes('<?##>*<?##>', 'x12', False);
+end;
+
+procedure TWildCardMatcherDUnitX.StarAndClassCombinationsTest;
+begin
+  CheckMatchAllModes('*<ab>', 'xa', True);
+  CheckMatchAllModes('*<ab>', 'xc', False);
+  CheckMatchAllModes('*<ab>', '', False);
+
+  CheckMatchAllModes('<ab>*', 'a', True);
+  CheckMatchAllModes('<ab>*', 'bxyz', True);
+  CheckMatchAllModes('<ab>*', 'c', False);
+
+  CheckMatchAllModes('*<!ab>', 'aac', True);
+  CheckMatchAllModes('*<!ab>', 'aab', False);
+  CheckMatchAllModes('*<!ab>', '', False);
+
+  // Order matters: the a-c character must come before the x-z one.
+  CheckMatchAllModes('*<a-c>*<x-z>*', 'qqbqqyqq', True);
+  CheckMatchAllModes('*<a-c>*<x-z>*', 'qqyqqbqq', False);
+
+  CheckMatchAllModes('<a-c>?<a-c>', 'aXc', True);
+  CheckMatchAllModes('<a-c>?<a-c>', 'aXd', False);
+
+  // '<0-9>' is a range class, not a sequence - same result as '<#>' though.
+  CheckMatchAllModes('*<0-9><0-9>', 'v12', True);
+  CheckMatchAllModes('*<0-9><0-9>', 'v1', False);
+
+  CheckMatchAllModes('<!0-9>*', 'a1', True);
+  CheckMatchAllModes('<!0-9>*', '1a', False);
+  CheckMatchAllModes('<!0-9>*', '', False);
+
+  CheckMatchAllModes('*<>>*', 'a>b', True);
+  CheckMatchAllModes('*<>>*', 'ab', False);
+
+  CheckMatchAllModes('*<-x>*', 'a-b', True);
+  CheckMatchAllModes('*<-x>*', 'axb', True);
+  CheckMatchAllModes('*<-x>*', 'ab', False);
+
+  CheckMatchAllModes('<a->*', '-z', True);
+  CheckMatchAllModes('<a->*', 'a', True);
+  CheckMatchAllModes('<a->*', 'b', False);
+end;
+
+procedure TWildCardMatcherDUnitX.StarAndAlternationCombinationsTest;
+begin
+  CheckMatchAllModes('*<"ab"|"cd">', 'xxab', True);
+  CheckMatchAllModes('*<"ab"|"cd">', 'xxcd', True);
+  CheckMatchAllModes('*<"ab"|"cd">', 'xxad', False);
+  CheckMatchAllModes('*<"ab"|"cd">', 'ab', True);
+
+  CheckMatchAllModes('<"ab"|"cd">*', 'abzzz', True);
+  CheckMatchAllModes('<"ab"|"cd">*', 'zab', False);
+
+  CheckMatchAllModes('*<"ab"|"cd">*', 'zzcdzz', True);
+  CheckMatchAllModes('*<"ab"|"cd">*', 'zacbdz', False);
+
+  // Overlapping alternatives: both lengths must be tried.
+  CheckMatchAllModes('*<"a"|"ab">c', 'ac', True);
+  CheckMatchAllModes('*<"a"|"ab">c', 'abc', True);
+  CheckMatchAllModes('*<"a"|"ab">c', 'xabc', True);
+  CheckMatchAllModes('*<"a"|"ab">c', 'abd', False);
+
+  CheckMatchAllModes('<"a"|"ab">b', 'ab', True);
+  CheckMatchAllModes('<"a"|"ab">b', 'abb', True);
+  CheckMatchAllModes('<"a"|"ab">b', 'ac', False);
+
+  // Empty alternative: optional text.
+  CheckMatchAllModes('<""|"x">y', 'y', True);
+  CheckMatchAllModes('<""|"x">y', 'xy', True);
+  CheckMatchAllModes('<""|"x">y', 'xxy', False);
+
+  CheckMatchAllModes('*<""|"x">', '', True);
+  CheckMatchAllModes('*<""|"x">', 'anything', True);
+  CheckMatchAllModes('<"x"|"">*', '', True);
+
+  // Negated alternation after a star: the LAST two characters must not be "ab".
+  CheckMatchAllModes('*<!"ab">', 'cd', True);
+  CheckMatchAllModes('*<!"ab">', 'xab', False);
+  CheckMatchAllModes('*<!"ab">', 'a', False);
+
+  CheckMatchAllModes('<!"ab">*', 'ac', True);
+  CheckMatchAllModes('<!"ab">*', 'abc', False);
+  CheckMatchAllModes('<!"ab">*', 'a', False);
+
+  CheckMatchAllModes('*.<"pas"|"dpr"|"dpk">', 'Unit1.pas', True);
+  CheckMatchAllModes('*.<"pas"|"dpr"|"dpk">', 'P.dpk', True);
+  CheckMatchAllModes('*.<"pas"|"dpr"|"dpk">', 'x.dcu', False);
+  CheckMatchAllModes('*.<"pas"|"dpr"|"dpk">', 'x.pas.bak', False);
+
+  CheckMatchAllModes('*<"\"|"/">*', 'a/b', True);
+  CheckMatchAllModes('*<"\"|"/">*', 'a\b', True);
+  CheckMatchAllModes('*<"\"|"/">*', 'ab', False);
+end;
+
+procedure TWildCardMatcherDUnitX.FixedWidthTokenCombinationsTest;
+begin
+  // No star: every token consumes a fixed amount, side by side.
+  CheckMatchAllModes('?<a>?', 'xay', True);
+  CheckMatchAllModes('?<a>?', 'xby', False);
+
+  CheckMatchAllModes('<#><a-z>?', '1bZ', True);
+  CheckMatchAllModes('<#><a-z>?', 'a1Z', False);
+
+  CheckMatchAllModes('<?#><!#>', 'x1y', True);
+  CheckMatchAllModes('<?#><!#>', 'x12', True);
+  CheckMatchAllModes('<?#><!#>', 'x1#', False);
+
+  CheckMatchAllModes('<"ab"|"c"><#>', 'ab1', True);
+  CheckMatchAllModes('<"ab"|"c"><#>', 'c1', True);
+  CheckMatchAllModes('<"ab"|"c"><#>', 'abc1', False);
+
+  CheckMatchAllModes('<#><"ab"|"c">', '1ab', True);
+  CheckMatchAllModes('<#><"ab"|"c">', '1c', True);
+  CheckMatchAllModes('<#><"ab"|"c">', '1', False);
+
+  CheckMatchAllModes('<!"x"><?>', 'ab', True);
+  CheckMatchAllModes('<!"x"><?>', 'xb', False);
+
+  CheckMatchAllModes('<##><!"00">', '1201', True);
+  CheckMatchAllModes('<##><!"00">', '1200', False);
+
+  CheckMatchAllModes('a<#>b<?>c', 'a1bZc', True);
+  CheckMatchAllModes('a<#>b<?>c', 'a1bc', False);
+
+  CheckMatchAllModes('<a-c><#><!a-c>', 'b5x', True);
+  CheckMatchAllModes('<a-c><#><!a-c>', 'b5c', False);
+end;
+
+procedure TWildCardMatcherDUnitX.NegatedFormCombinationsTest;
+begin
+  CheckMatchAllModes('<!a><!b>', 'ba', True);
+  CheckMatchAllModes('<!a><!b>', 'ab', False);
+  CheckMatchAllModes('<!a><!b>', 'cc', True);
+
+  CheckMatchAllModes('<!a-z>*<!a-z>', '1x2', True);
+  CheckMatchAllModes('<!a-z>*<!a-z>', '1', False);
+  CheckMatchAllModes('<!a-z>*<!a-z>', 'ax1', False);
+
+  // Negated alternation consumes the length of the longest alternative (3).
+  CheckMatchAllModes('<!"ab"|"cde">*', 'xyz', True);
+  CheckMatchAllModes('<!"ab"|"cde">*', 'abz', False);
+  CheckMatchAllModes('<!"ab"|"cde">*', 'cdx', True);
+  CheckMatchAllModes('<!"ab"|"cde">*', 'cde', False);
+  CheckMatchAllModes('<!"ab"|"cde">*', 'xy', False);
+
+  // '<!#>' is a class (anything but '#'), not a negated digit.
+  CheckMatchAllModes('*<!#>', '12a', True);
+  CheckMatchAllModes('*<!#>', '123', True);
+  CheckMatchAllModes('*<!#>', '12#', False);
+
+  CheckMatchAllModes('<!?>', 'a', True);
+  CheckMatchAllModes('<!?>', '?', False);
+
+  // Double negation by two tokens.
+  CheckMatchAllModes('<!"a"><!b>', 'xy', True);
+  CheckMatchAllModes('<!"a"><!b>', 'ay', False);
+  CheckMatchAllModes('<!"a"><!b>', 'xb', False);
+end;
+
+procedure TWildCardMatcherDUnitX.CaseSensitivityCombinationsTest;
+begin
+  CheckMatch('*.<"PAS"|"dpr">', 'a.pas', True);
+  CheckMatch('*.<"PAS"|"dpr">', 'a.DPR', True);
+  CheckMatch('*.<"PAS"|"dpr">', 'a.pas', False, [wcoCaseSensitive]);
+  CheckMatch('*.<"PAS"|"dpr">', 'a.PAS', True, [wcoCaseSensitive]);
+  CheckMatch('*.<"PAS"|"dpr">', 'a.dpr', True, [wcoCaseSensitive]);
+  CheckMatch('*.<"PAS"|"dpr">', 'a.DPR', False, [wcoCaseSensitive]);
+
+  CheckMatch('<a-c>x', 'BX', True);
+  CheckMatch('<a-c>x', 'BX', False, [wcoCaseSensitive]);
+  CheckMatch('<a-c>x', 'bx', True, [wcoCaseSensitive]);
+  CheckMatch('<a-c>x', 'bX', False, [wcoCaseSensitive]);
+
+  CheckMatch('<!a>*', 'A', False);
+  CheckMatch('<!a>*', 'A', True, [wcoCaseSensitive]);
+
+  CheckMatch('<!"ab">?', 'ABc', False);
+  CheckMatch('<!"ab">?', 'ABc', True, [wcoCaseSensitive]);
+
+  CheckMatch('<"Ab">', 'aB', True);
+  CheckMatch('<"Ab">', 'aB', False, [wcoCaseSensitive]);
+
+  CheckMatch('*<?#>X', 'q1x', True);
+  CheckMatch('*<?#>X', 'q1x', False, [wcoCaseSensitive]);
+
+  // Case never matters for digits, '?' and separators.
+  CheckMatchAllModes('<?##>', 'Z12', True);
+  CheckMatchAllModes('<?##>', 'z12', True);
+end;
+
+procedure TWildCardMatcherDUnitX.PathModeCombinationsTest;
+begin
+  CheckMatch('*<#>', 'a\1', True);
+  CheckMatch('*<#>', 'a\1', False, [wcoPathMode]);
+  CheckMatch('**<#>', 'a\1', True, [wcoPathMode]);
+
+  CheckMatch('<?#>', '\1', True);
+  CheckMatch('<?#>', '\1', False, [wcoPathMode]);
+
+  CheckMatch('*\<"Win32"|"Win64">\*', 'Out\Win32\x.exe', True, [wcoPathMode]);
+  CheckMatch('*\<"Win32"|"Win64">\*', 'Out\Win32\sub\x.exe', False, [wcoPathMode]);
+  CheckMatch('*\<"Win32"|"Win64">\*', 'Out\Win32\sub\x.exe', True);
+  CheckMatch('*\<"Win32"|"Win64">\*', 'a\b\Win32\x', False, [wcoPathMode]);
+  CheckMatch('**\<"Win32"|"Win64">\*', 'a\b\Win32\x', True, [wcoPathMode]);
+
+  CheckMatch('*.<"pas"|"inc">', 'src\a.pas', True);
+  CheckMatch('*.<"pas"|"inc">', 'src\a.pas', False, [wcoPathMode]);
+  CheckMatch('**.<"pas"|"inc">', 'src\a.pas', True, [wcoPathMode]);
+
+  CheckMatch('<?>*', '\a', True);
+  CheckMatch('<?>*', '\a', False, [wcoPathMode]);
+
+  CheckMatch('?', '/', False, [wcoPathMode]);
+  CheckMatch('*', '', True, [wcoPathMode]);
+  CheckMatch('**', 'a/b\c', True, [wcoPathMode]);
+
+  CheckMatch('*/*', 'a/b', True, [wcoPathMode]);
+  CheckMatch('*/*', 'a/b/c', False, [wcoPathMode]);
+  CheckMatch('*/*', 'a/b/c', True);
+
+  CheckMatch('*<?##>', 'dir\x12', False, [wcoPathMode]);
+  CheckMatch('*<?##>', 'dir\x12', True);
+  CheckMatch('**\<?##>', 'dir\ab\x12', True, [wcoPathMode]);
+
+  // Classes and quoted alternatives are evaluated normally in path mode -
+  // only '*' and '?' (also inside a sequence) refuse separators.
+  CheckMatch('<!a>', '\', True, [wcoPathMode]);
+  CheckMatch('<!"ab">', 'x\', True, [wcoPathMode]);
+  CheckMatch('<"a\">*', 'a\b', True, [wcoPathMode]);
+end;
+
+procedure TWildCardMatcherDUnitX.RealWorldMaskCombinationsTest;
+const
+  PHOTO = 'IMG_<####><##><##>_<######>.<"jpg"|"jpeg"|"heic">';
+  BUILD_OUTPUT = '*\<"Win32"|"Win64">\<"Debug"|"Release">\*.<"dcu"|"exe">';
+begin
+  CheckMatch(PHOTO, 'IMG_20261014_235959.jpg', True);
+  CheckMatch(PHOTO, 'IMG_20261014_235959.jpeg', True);
+  CheckMatch(PHOTO, 'IMG_2026101_235959.jpg', False);
+  CheckMatch(PHOTO, 'img_20261014_235959.HEIC', True);
+  CheckMatch(PHOTO, 'img_20261014_235959.HEIC', False, [wcoCaseSensitive]);
+  CheckMatch(PHOTO, 'IMG_20261014_235959.png', False);
+
+  CheckMatch(BUILD_OUTPUT, 'C:\p\Win32\Debug\a.dcu', True);
+  CheckMatch(BUILD_OUTPUT, 'C:\p\Win64\Release\b.exe', True);
+  CheckMatch(BUILD_OUTPUT, 'C:\p\Win32\Debug\a.pas', False);
+  CheckMatch(BUILD_OUTPUT, 'C:\p\Linux64\Debug\a.dcu', False);
+  CheckMatch(BUILD_OUTPUT, 'C:\p\Win32\Debug\a.dcu', False, [wcoPathMode]);
+
+  CheckMatch('~$*', '~$Report.docx', True);
+  CheckMatch('~$*', 'Report.docx', False);
+
+  CheckMatch('Track #<##> - *.mp3', 'Track #01 - Intro.mp3', True);
+  CheckMatch('Track #<##> - *.mp3', 'Track #1 - Intro.mp3', False);
+
+  CheckMatch('Foo[<ab>].txt', 'Foo[a].txt', True);
+  CheckMatch('Foo[<ab>].txt', 'Foo[ab].txt', False);
+  CheckMatch('Foo[<ab>].txt', 'Foo[c].txt', False);
+
+  CheckMatch('*.~*', 'Unit1.~pas', True);
+  CheckMatch('*.~*', 'Unit1.pas', False);
+
+  // Names that do not start with '_' or '.'.
+  CheckMatch('<!"_"|".">*', '_hidden', False);
+  CheckMatch('<!"_"|".">*', '.git', False);
+  CheckMatch('<!"_"|".">*', 'src', True);
+  CheckMatch('<!"_"|".">*', '', False);
+
+  CheckMatch('*<"3rdParty"|"ThirdParty">*', 'src\3rdParty\x.pas', True);
+  CheckMatch('*<"3rdParty"|"ThirdParty">*', 'src\thirdparty\x.pas', True);
+  CheckMatch('*<"3rdParty"|"ThirdParty">*', 'src\Vendor\x.pas', False);
+end;
+
+procedure TWildCardMatcherDUnitX.WildcardsInsideQuotesAreLiteralTest;
+begin
+  CheckMatchAllModes('<"*">', '*', True);
+  CheckMatchAllModes('<"*">', 'a', False);
+
+  CheckMatchAllModes('<"?"|"#">', '?', True);
+  CheckMatchAllModes('<"?"|"#">', '#', True);
+  CheckMatchAllModes('<"?"|"#">', 'a', False);
+  CheckMatchAllModes('<"?"|"#">', '1', False);
+
+  CheckMatchAllModes('<"<#>">', '<#>', True);
+  CheckMatchAllModes('<"<#>">', '1', False);
+
+  CheckMatchAllModes('<"a|b">', 'a|b', True);
+  CheckMatchAllModes('<"a|b">', 'a', False);
+
+  CheckMatchAllModes('*.<"bak"|"tmp"|"~*">', 'a.~*', True);
+  CheckMatchAllModes('*.<"bak"|"tmp"|"~*">', 'a.~x', False);
+  CheckMatchAllModes('*.<"bak"|"tmp"|"~*">', 'a.tmp', True);
+end;
+
+procedure TWildCardMatcherDUnitX.AnchoringCombinationsTest;
+begin
+  // Without a star at an end, the pattern must cover the whole input.
+  CheckMatchAllModes('abc', 'abcd', False);
+  CheckMatchAllModes('abc', 'xabc', False);
+  CheckMatchAllModes('a*', 'ba', False);
+  CheckMatchAllModes('*a', 'ab', False);
+  CheckMatchAllModes('<#>', '12', False);
+  CheckMatchAllModes('<"ab">', 'abc', False);
+  CheckMatchAllModes('<"ab">', 'xab', False);
+  CheckMatchAllModes('<?##>', 'x123', False);
+  CheckMatchAllModes('<ab>', 'ab', False);
+  CheckMatchAllModes('<!"a">', 'bb', False);
+  CheckMatchAllModes('?', 'ab', False);
+end;
+
+procedure TWildCardMatcherDUnitX.BacktrackingCombinationsTest;
+var
+  LIndex: Integer;
+  LManyA, LManyDigits, LManyPairs: string;
+begin
+  // Patterns that make a naive matcher backtrack a lot - results must be
+  // right, and the run must stay quick.
+  LManyA := StringOfChar('a', 30);
+  LManyDigits := StringOfChar('1', 25);
+  LManyPairs := '';
+
+  for LIndex := 1 to 10 do
+    LManyPairs := LManyPairs + 'a1';
+
+  CheckMatchAllModes('*a*a*a*a*b', LManyA, False);
+  CheckMatchAllModes('*a*a*a*a*b', LManyA + 'b', True);
+
+  CheckMatchAllModes('*<#>*<#>*<#>*<#>x', LManyDigits, False);
+  CheckMatchAllModes('*<#>*<#>*<#>*<#>x', LManyDigits + 'x', True);
+
+  CheckMatchAllModes('*<"a"|"aa">*<"a"|"aa">*b', LManyA, False);
+  CheckMatchAllModes('*<"a"|"aa">*<"a"|"aa">*b', LManyA + 'b', True);
+
+  CheckMatchAllModes('*<?#>*<?#>*!', LManyPairs, False);
+  CheckMatchAllModes('*<?#>*<?#>*!', LManyPairs + '!', True);
+
+  CheckMatchAllModes('*<a-z>*<!a-z>*<a-z>*<!a-z>*z', LManyPairs, False);
+  CheckMatchAllModes('*<a-z>*<!a-z>*<a-z>*<!a-z>*z', LManyPairs + 'z', True);
+end;
+
+procedure TWildCardMatcherDUnitX.EmptyInputCombinationsTest;
+begin
+  CheckMatchAllModes('', '', True);
+  CheckMatchAllModes('*', '', True);
+  CheckMatchAllModes('**', '', True);
+  CheckMatchAllModes('?', '', False);
+  CheckMatchAllModes('<?>', '', False);
+  CheckMatchAllModes('<#>', '', False);
+  CheckMatchAllModes('<a>', '', False);
+  CheckMatchAllModes('<!a>', '', False);
+  CheckMatchAllModes('<"">', '', True);
+  CheckMatchAllModes('<""|"a">', '', True);
+  CheckMatchAllModes('*<"">*', '', True);
+  CheckMatchAllModes('<!"">', '', False);
+  CheckMatchAllModes('<!"a">', '', False);
+
+  CheckMatchAllModes('<"">', 'a', False);
+  CheckMatchAllModes('<"">a<"">', 'a', True);
+end;
+
+{ Reference matcher - a deliberately naive third implementation of the README
+  rules, written without looking at either engine's fast paths: tokens matched
+  by plain memoized recursion, no pruning, no SIMD.  ASCII input only, so case
+  folding is UpperCase. }
+
+type
+  TReferenceTokenKind = (rtkLiteral, rtkStar, rtkAnyChar, rtkDigit, rtkClass, rtkAlternation);
+
+  TReferenceToken = record
+    Alternatives: TArray<string>;   // rtkAlternation
+    Kind: TReferenceTokenKind;
+    Literal: Char;                  // rtkLiteral
+    Members: string;                // rtkClass: single characters
+    Negate: Boolean;                // rtkClass, rtkAlternation
+    Ranges: string;                 // rtkClass: low, high pairs
+    SegmentOnly: Boolean;           // rtkStar: a single '*' in path mode
+  end;
+
+  TReferenceMatcher = class
+  strict private
+    FCaseSensitive: Boolean;
+    FInput: string;
+    FMemo: TArray<ShortInt>;        // per (token, input position): -1 unknown, 0 no, 1 yes
+    FPathMode: Boolean;
+    FTokens: TArray<TReferenceToken>;
+    FValid: Boolean;
+    procedure AddToken(const AToken: TReferenceToken);
+    function CharInClass(const AToken: TReferenceToken; const AChar: Char): Boolean;
+    function IsSeparator(const AChar: Char): Boolean;
+    function MatchFrom(const ATokenIndex, AInputIndex: Integer): Boolean;
+    function MatchTokenAt(const ATokenIndex, AInputIndex: Integer): Boolean;
+    function ParseAngleBrackets(const APattern: string; var AIndex: Integer): Boolean;
+    function StartsWithAt(const AText: string; const AInputIndex: Integer): Boolean;
+  public
+    // False when the pattern is malformed - it then never matches anything
+    function Parse(const APattern: string; const AOptions: TWildCardOptions): Boolean;
+    function Match(const AInput: string): Boolean;
+  end;
+
+procedure TReferenceMatcher.AddToken(const AToken: TReferenceToken);
+begin
+  FTokens := FTokens + [AToken];
+end;
+
+function TReferenceMatcher.CharInClass(const AToken: TReferenceToken; const AChar: Char): Boolean;
+var
+  LIndex: Integer;
+begin
+  if Pos(AChar, AToken.Members) > 0 then
+    Exit(True);
+
+  LIndex := 1;
+
+  while LIndex < Length(AToken.Ranges) do
+  begin
+    if (AChar >= AToken.Ranges[LIndex]) and (AChar <= AToken.Ranges[LIndex + 1]) then
+      Exit(True);
+
+    Inc(LIndex, 2);
+  end;
+
+  Result := False;
+end;
+
+function TReferenceMatcher.IsSeparator(const AChar: Char): Boolean;
+begin
+  Result := (AChar = '\') or (AChar = '/');
+end;
+
+function TReferenceMatcher.Match(const AInput: string): Boolean;
+begin
+  if not FValid then
+    Exit(False);
+
+  if FCaseSensitive then
+    FInput := AInput
+  else
+    FInput := UpperCase(AInput);
+
+  SetLength(FMemo, (Length(FTokens) + 1) * (Length(FInput) + 2));
+  FillChar(FMemo[0], Length(FMemo), $FF);
+
+  Result := MatchFrom(0, 1);
+end;
+
+function TReferenceMatcher.MatchFrom(const ATokenIndex, AInputIndex: Integer): Boolean;
+var
+  LSlot: Integer;
+begin
+  LSlot := (ATokenIndex * (Length(FInput) + 2)) + AInputIndex;
+
+  if FMemo[LSlot] < 0 then
+    FMemo[LSlot] := Ord(MatchTokenAt(ATokenIndex, AInputIndex));
+
+  Result := FMemo[LSlot] = 1;
+end;
+
+// Does the pattern from token ATokenIndex on match the input from AInputIndex on?
+function TReferenceMatcher.MatchTokenAt(const ATokenIndex, AInputIndex: Integer): Boolean;
+var
+  LAlternative: string;
+  LEnd, LLongest: Integer;
+  LHasChar: Boolean;
+  LToken: TReferenceToken;
+begin
+  if ATokenIndex > High(FTokens) then
+    Exit(AInputIndex = Length(FInput) + 1);
+
+  LToken := FTokens[ATokenIndex];
+  LHasChar := AInputIndex <= Length(FInput);
+
+  case LToken.Kind of
+    rtkStar:
+      begin
+        // The star takes FInput[AInputIndex .. LEnd - 1], shortest first.
+        for LEnd := AInputIndex to Length(FInput) + 1 do
+        begin
+          if MatchFrom(ATokenIndex + 1, LEnd) then
+            Exit(True);
+
+          if LToken.SegmentOnly and (LEnd <= Length(FInput)) and IsSeparator(FInput[LEnd]) then
+            Exit(False);
+        end;
+
+        Result := False;
+      end;
+    rtkAnyChar:
+      Result := LHasChar and not (FPathMode and IsSeparator(FInput[AInputIndex])) and MatchFrom(ATokenIndex + 1, AInputIndex + 1);
+    rtkDigit:
+      Result := LHasChar and CharInSet(FInput[AInputIndex], ['0'..'9']) and MatchFrom(ATokenIndex + 1, AInputIndex + 1);
+    rtkLiteral:
+      Result := LHasChar and (FInput[AInputIndex] = LToken.Literal) and MatchFrom(ATokenIndex + 1, AInputIndex + 1);
+    rtkClass:
+      Result := LHasChar and (CharInClass(LToken, FInput[AInputIndex]) <> LToken.Negate)
+        and MatchFrom(ATokenIndex + 1, AInputIndex + 1);
+    rtkAlternation:
+      if LToken.Negate then
+      begin
+        // No alternative may start here; consumes the length of the longest one.
+        LLongest := 0;
+
+        for LAlternative in LToken.Alternatives do
+        begin
+          if StartsWithAt(LAlternative, AInputIndex) then
+            Exit(False);
+
+          if Length(LAlternative) > LLongest then
+            LLongest := Length(LAlternative);
+        end;
+
+        Result := (AInputIndex + LLongest <= Length(FInput) + 1) and MatchFrom(ATokenIndex + 1, AInputIndex + LLongest);
+      end
+      else
+      begin
+        for LAlternative in LToken.Alternatives do
+          if StartsWithAt(LAlternative, AInputIndex) and MatchFrom(ATokenIndex + 1, AInputIndex + Length(LAlternative)) then
+            Exit(True);
+
+        Result := False;
+      end;
+  else
+    Result := False;
+  end;
+end;
+
+// AIndex is at '<'; on success it is moved past the closing '>'.
+function TReferenceMatcher.ParseAngleBrackets(const APattern: string; var AIndex: Integer): Boolean;
+var
+  LEnd, LIndex, LQuoteEnd: Integer;
+  LToken: TReferenceToken;
+begin
+  // Sequence: nothing but '#' and '?' up to the closing '>'.
+  LEnd := AIndex + 1;
+
+  while (LEnd <= Length(APattern)) and CharInSet(APattern[LEnd], ['#', '?']) do
+    Inc(LEnd);
+
+  if (LEnd > AIndex + 1) and (LEnd <= Length(APattern)) and (APattern[LEnd] = '>') then
+  begin
+    for LIndex := AIndex + 1 to LEnd - 1 do
+    begin
+      LToken := Default(TReferenceToken);
+
+      if APattern[LIndex] = '#' then
+        LToken.Kind := rtkDigit
+      else
+        LToken.Kind := rtkAnyChar;
+
+      AddToken(LToken);
+    end;
+
+    AIndex := LEnd + 1;
+    Exit(True);
+  end;
+
+  LToken := Default(TReferenceToken);
+  LIndex := AIndex + 1;
+  LToken.Negate := (LIndex <= Length(APattern)) and (APattern[LIndex] = '!');
+
+  if LToken.Negate then
+    Inc(LIndex);
+
+  if (LIndex <= Length(APattern)) and (APattern[LIndex] = '"') then
+  begin
+    // Alternation: "alt" ('|' "alt")* '>'
+    LToken.Kind := rtkAlternation;
+
+    while True do
+    begin
+      if (LIndex > Length(APattern)) or (APattern[LIndex] <> '"') then
+        Exit(False);
+
+      LQuoteEnd := LIndex + 1;
+
+      while (LQuoteEnd <= Length(APattern)) and (APattern[LQuoteEnd] <> '"') do
+        Inc(LQuoteEnd);
+
+      if LQuoteEnd > Length(APattern) then
+        Exit(False);
+
+      LToken.Alternatives := LToken.Alternatives + [Copy(APattern, LIndex + 1, LQuoteEnd - LIndex - 1)];
+      LIndex := LQuoteEnd + 1;
+
+      if LIndex > Length(APattern) then
+        Exit(False);
+
+      if APattern[LIndex] = '>' then
+        Break;
+
+      if APattern[LIndex] <> '|' then
+        Exit(False);
+
+      Inc(LIndex);
+    end;
+
+    AddToken(LToken);
+    AIndex := LIndex + 1;
+    Exit(True);
+  end;
+
+  // Single-character class; a '>' right after '<' or '<!' is a member.
+  LToken.Kind := rtkClass;
+  LEnd := LIndex;
+
+  if (LEnd <= Length(APattern)) and (APattern[LEnd] = '>') then
+    Inc(LEnd);
+
+  while (LEnd <= Length(APattern)) and (APattern[LEnd] <> '>') do
+    Inc(LEnd);
+
+  if LEnd > Length(APattern) then
+    Exit(False);
+
+  // Members are LIndex .. LEnd - 1; 'x-y' is a range unless the '-' is the last member.
+  while LIndex < LEnd do
+    if (LIndex + 2 < LEnd) and (APattern[LIndex + 1] = '-') then
+    begin
+      LToken.Ranges := LToken.Ranges + APattern[LIndex] + APattern[LIndex + 2];
+      Inc(LIndex, 3);
+    end
+    else
+    begin
+      LToken.Members := LToken.Members + APattern[LIndex];
+      Inc(LIndex);
+    end;
+
+  AddToken(LToken);
+  AIndex := LEnd + 1;
+  Result := True;
+end;
+
+function TReferenceMatcher.Parse(const APattern: string; const AOptions: TWildCardOptions): Boolean;
+var
+  LIndex, LStarCount: Integer;
+  LPattern: string;
+  LToken: TReferenceToken;
+begin
+  FCaseSensitive := wcoCaseSensitive in AOptions;
+  FPathMode := wcoPathMode in AOptions;
+  FTokens := nil;
+  FValid := False;
+
+  // Case-insensitive: both sides are folded to upper case.
+  if FCaseSensitive then
+    LPattern := APattern
+  else
+    LPattern := UpperCase(APattern);
+
+  LIndex := 1;
+
+  while LIndex <= Length(LPattern) do
+  begin
+    LToken := Default(TReferenceToken);
+
+    case LPattern[LIndex] of
+      '*':
+        begin
+          LStarCount := 0;
+
+          while (LIndex <= Length(LPattern)) and (LPattern[LIndex] = '*') do
+          begin
+            Inc(LStarCount);
+            Inc(LIndex);
+          end;
+
+          LToken.Kind := rtkStar;
+          LToken.SegmentOnly := FPathMode and (LStarCount = 1);
+          AddToken(LToken);
+        end;
+      '?':
+        begin
+          LToken.Kind := rtkAnyChar;
+          AddToken(LToken);
+          Inc(LIndex);
+        end;
+      '<':
+        if not ParseAngleBrackets(LPattern, LIndex) then
+          Exit(False);
+    else
+      begin
+        LToken.Kind := rtkLiteral;
+        LToken.Literal := LPattern[LIndex];
+        AddToken(LToken);
+        Inc(LIndex);
+      end;
+    end;
+  end;
+
+  FValid := True;
+  Result := True;
+end;
+
+function TReferenceMatcher.StartsWithAt(const AText: string; const AInputIndex: Integer): Boolean;
+begin
+  Result := Copy(FInput, AInputIndex, Length(AText)) = AText;
+end;
+
+type
+  TReferencePiece = record
+    Pattern: string;
+    Example: string;   // an input fragment the piece matches (case-insensitively)
+  end;
+
+const
+  REFERENCE_PIECES: array[0..37] of TReferencePiece = (
+    (Pattern: 'a';             Example: 'a'),
+    (Pattern: 'B';             Example: 'b'),
+    (Pattern: '1';             Example: '1'),
+    (Pattern: '\';             Example: '\'),
+    (Pattern: '/';             Example: '/'),
+    (Pattern: '.';             Example: '.'),
+    (Pattern: '#';             Example: '#'),
+    (Pattern: '[';             Example: '['),
+    (Pattern: '*';             Example: ''),
+    (Pattern: '**';            Example: ''),
+    (Pattern: '?';             Example: 'x'),
+    (Pattern: '<#>';           Example: '5'),
+    (Pattern: '<##>';          Example: '42'),
+    (Pattern: '<?#>';          Example: 'a7'),
+    (Pattern: '<#?>';          Example: '7\'),
+    (Pattern: '<??>';          Example: 'ab'),
+    (Pattern: '<?>';           Example: '\'),
+    (Pattern: '<ab>';          Example: 'b'),
+    (Pattern: '<!ab>';         Example: 'c'),
+    (Pattern: '<a-c>';         Example: 'B'),
+    (Pattern: '<!0-9>';        Example: 'x'),
+    (Pattern: '<>a>';          Example: '>'),
+    (Pattern: '<-a>';          Example: '-'),
+    (Pattern: '<a->';          Example: 'a'),
+    (Pattern: '<#a>';          Example: '#'),
+    (Pattern: '<!#>';          Example: '1'),
+    (Pattern: '<\/>';          Example: '/'),
+    (Pattern: '<"ab"|"b">';    Example: 'ab'),
+    (Pattern: '<"a"|"ab">';    Example: 'ab'),
+    (Pattern: '<""|"x">';      Example: ''),
+    (Pattern: '<"">';          Example: ''),
+    (Pattern: '<!"a"|"bc">';   Example: 'xy'),
+    (Pattern: '<!"\">';        Example: 'a'),
+    (Pattern: '<"A"|"1\">';    Example: '1\'),
+    (Pattern: '<!"">';         Example: ''),
+    (Pattern: '<"*"|"?">';     Example: '*'),
+    (Pattern: '*';             Example: ''),
+    (Pattern: '?';             Example: 'b'));
+
+  REFERENCE_MALFORMED_PIECES: array[0..4] of string = ('<ab', '<"a', '<"a""b">', '<!"a"x>', '<');
+
+  REFERENCE_FILL_CHARS = 'aB1\/.#x>';
+
+procedure TWildCardMatcherDUnitX.ReferenceMatcherFuzzTest;
+const
+  SEED = 20261015;
+  ITERATIONS = 3000;
+  MODE_OPTIONS: array[0..3] of TWildCardOptions = ([], [wcoCaseSensitive], [wcoPathMode], [wcoCaseSensitive, wcoPathMode]);
+var
+  LAdhoc: TWildCard;
+  LChecks, LMatches: Integer;
+  LError, LExample, LPattern: string;
+  LExpected: Boolean;
+  LInputs: array[0..2] of string;
+  LIteration, LPieceCount, LPieceIndex, LFillIndex, LInputIndex, LMode, LPosition: Integer;
+  LPiece: TReferencePiece;
+  LReference: TReferenceMatcher;
+  LRegistered: TWildCard;
+  LSeed: Cardinal;
+begin
+  // Both engines against an independent reference implementation (the
+  // differential fuzz test only compares the engines with each other, so it
+  // cannot catch a mistake they share).  Patterns are built from pieces
+  // with known example inputs, so a good share of the inputs match.
+  LSeed := SEED;
+  LChecks := 0;
+  LMatches := 0;
+
+  LReference := TReferenceMatcher.Create;
+  try
+    for LIteration := 1 to ITERATIONS do
+    begin
+      LPattern := '';
+      LExample := '';
+      LPieceCount := 1 + Integer(FuzzNextRandom(LSeed, 5));
+
+      for LPieceIndex := 1 to LPieceCount do
+      begin
+        LPiece := REFERENCE_PIECES[FuzzNextRandom(LSeed, Length(REFERENCE_PIECES))];
+        LPattern := LPattern + LPiece.Pattern;
+
+        if LPiece.Pattern[1] = '*' then
+        begin
+          for LFillIndex := 1 to Integer(FuzzNextRandom(LSeed, 4)) do
+            LExample := LExample + REFERENCE_FILL_CHARS[1 + FuzzNextRandom(LSeed, Length(REFERENCE_FILL_CHARS))];
+        end
+        else
+          LExample := LExample + LPiece.Example;
+      end;
+
+      if FuzzNextRandom(LSeed, 20) = 0 then
+        LPattern := LPattern + REFERENCE_MALFORMED_PIECES[FuzzNextRandom(LSeed, Length(REFERENCE_MALFORMED_PIECES))];
+
+      // The example as is, a mutated copy (one character replaced, removed or added) and the empty input.
+      LInputs[0] := LExample;
+      LInputs[1] := LExample;
+      LPosition := 1 + Integer(FuzzNextRandom(LSeed, Length(LExample) + 1));
+
+      case FuzzNextRandom(LSeed, 3) of
+        0:
+          if LPosition <= Length(LExample) then
+            LInputs[1][LPosition] := REFERENCE_FILL_CHARS[1 + FuzzNextRandom(LSeed, Length(REFERENCE_FILL_CHARS))];
+        1:
+          Delete(LInputs[1], LPosition, 1);
+      else
+        Insert(REFERENCE_FILL_CHARS[1 + FuzzNextRandom(LSeed, Length(REFERENCE_FILL_CHARS))], LInputs[1], LPosition);
+      end;
+
+      LInputs[2] := '';
+
+      for LMode := 0 to High(MODE_OPTIONS) do
+      begin
+        // The reference parser and ValidatePattern must agree on what is malformed.
+        Assert.AreEqual(LReference.Parse(LPattern, MODE_OPTIONS[LMode]), TWildCard.ValidatePattern(LPattern, LError),
+          Format('reference parser and ValidatePattern disagree on <%s> (%s)', [LPattern, LError]));
+
+        LAdhoc := TWildCard.Create(MODE_OPTIONS[LMode]);
+        LRegistered := TWildCard.Create(LPattern, MODE_OPTIONS[LMode]);
+
+        for LInputIndex := 0 to High(LInputs) do
+        begin
+          LExpected := LReference.Match(LInputs[LInputIndex]);
+
+          Assert.AreEqual(LExpected, LAdhoc.Match(LInputs[LInputIndex], LPattern),
+            Format('ad-hoc %s differs from the reference: pattern <%s>, input <%s>, iteration %d',
+            [OptionsText(MODE_OPTIONS[LMode]), LPattern, LInputs[LInputIndex], LIteration]));
+          Assert.AreEqual(LExpected, LRegistered.Match(LInputs[LInputIndex]),
+            Format('registered %s differs from the reference: pattern <%s>, input <%s>, iteration %d',
+            [OptionsText(MODE_OPTIONS[LMode]), LPattern, LInputs[LInputIndex], LIteration]));
+
+          Inc(LChecks);
+
+          if LExpected then
+            Inc(LMatches);
+        end;
+      end;
+    end;
+  finally
+    LReference.Free;
+  end;
+
+  // Agreeing only on "no match" would prove little.
+  Assert.IsTrue(LMatches * 5 > LChecks, Format('only %d of %d checks matched', [LMatches, LChecks]));
+  Assert.IsTrue(LMatches * 5 < LChecks * 4, Format('%d of %d checks matched - too few mismatches', [LMatches, LChecks]));
 end;
 
 initialization

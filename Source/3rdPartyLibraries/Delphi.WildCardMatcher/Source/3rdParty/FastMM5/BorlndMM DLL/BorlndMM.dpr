@@ -92,8 +92,7 @@ end;
 {The debug support library must be statically linked in order to prevent it from being unloaded before the leak check
 can be performed.}
 function LogStackTrace(AReturnAddresses: PNativeUInt; AMaxDepth: Cardinal; ABuffer: PAnsiChar): PAnsiChar;
-  external {$if SizeOf(Pointer) = 4}'FastMM_FullDebugMode.dll'{$else}'FastMM_FullDebugMode64.dll'{$endif}
-  name 'LogStackTrace';
+  external CFastMM_DefaultDebugSupportLibraryName name 'LogStackTrace';
 {$endif}
 
 exports
@@ -123,7 +122,7 @@ exports
   FastMM_WalkBlocks,
   FastMM_ProcessAllPendingFrees,
   FastMM_ScanDebugBlocksForCorruption,
-  FastMM_GetUsageSummary,
+  FastMM_GetUsageSummary(ALockTimeoutMilliseconds: Cardinal),
   FastMM_LogStateToFile,
   FastMM_EnterMinimumAddressAlignment,
   FastMM_ExitMinimumAddressAlignment,

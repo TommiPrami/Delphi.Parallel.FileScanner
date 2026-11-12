@@ -5,6 +5,7 @@
 //   *                  matches zero or more characters
 //   ?                  matches exactly one character
 //   <#>                matches exactly one decimal digit (0-9); <###> matches three
+//   <?##>              sequence: any one character, then two digits (= ?<##>)
 //   <abc>              matches any one of the characters in the set
 //   <!abc>             matches any one character NOT in the set
 //   <a-z>              matches any one character in the range (low..high, ascending)
@@ -25,9 +26,11 @@
 //
 // Three flavours of '<...>':
 //
-//   Digit run: '<#>', '<##>', '<###>' ... - content made of '#' only matches
-//   that many decimal digits.  '#' mixed with other members ('<#a>') is a
-//   plain class member.
+//   Sequence: content made only of '#' and '?' matches one character per
+//   content character, in order - '#' a decimal digit, '?' any character.
+//   '<###>' matches three digits, '<?##>' = '<?><##>' = '?<#><#>'.  So
+//   '<##>' and '<#><#>' are the same pattern.  '#' or '?' mixed with other
+//   members ('<#a>') is a plain class member.
 //
 //   Single-char class: '<abc>', '<a-z>', '<!xyz>' - matches exactly one input
 //   character.
@@ -195,7 +198,9 @@ type
     // Case-independent helpers
     class function IsAsciiDigit(const AChar: Char): Boolean; static; inline;
     class function IsPathSeparator(const AChar: Char): Boolean; static; inline;
-    class function DigitRunLength(const APattern: string; const AStart, APatternLen: Integer): Integer; static;
+    class function SequenceLength(const APattern: string; const AStart, APatternLen: Integer): Integer; static;
+    class function SequenceMatches(const AInput, APattern: string; const AInputIndex, APatternIndex, ASequenceLen: Integer;
+      const APathMode: Boolean): Boolean; static;
     class function FindClassEnd(const APattern: string; const AStart: Integer; var AIsQuotedAlt: Boolean): Integer; static;
     class function PatternTailIsLiteral(const APattern: string; const APatternIndex: Integer): Boolean; static; inline;
     // Compiled engine (registered patterns).  The pattern text handed to
@@ -264,7 +269,7 @@ type
     class function ValidatePattern(const APattern: string; out AErrorMessage: string): Boolean; static;
 
     // True when APattern contains wildcard syntax - '*', '?' or a '<'
-    // starting a class / digit run / alternation - and False for plain
+    // starting a class / sequence / alternation - and False for plain
     // text.  Every metacharacter is forbidden in Windows file names, so
     // any valid file name or path ('C:\Temp\Foo[ab].txt', 'Track #01.mp3')
     // returns False and, used as a pattern, matches only itself.  Says
@@ -601,23 +606,48 @@ begin
   Result := (AChar = '\') or (AChar = '/');
 end;
 
-// AStart points at '<'.  Returns N when '<' is followed by N >= 1 '#'
-// characters and a closing '>' (a digit run matching N digits), else 0 -
-// '<#a>', '<!#>', '<>#>' and an unterminated '<##' are all ordinary
-// classes, left to FindClassEnd / ParseClassToken.
-class function TWildCard.DigitRunLength(const APattern: string; const AStart, APatternLen: Integer): Integer;
+// AStart points at '<'.  Returns N when '<' is followed by N >= 1 '#' / '?'
+// characters and a closing '>' (a sequence matching N characters: '#' a
+// digit, '?' any character), else 0 - '<#a>', '<!#>', '<>#>' and an
+// unterminated '<##' are all ordinary classes, left to FindClassEnd /
+// ParseClassToken.
+class function TWildCard.SequenceLength(const APattern: string; const AStart, APatternLen: Integer): Integer;
 var
   LIndex: Integer;
 begin
   LIndex := AStart + 1;
 
-  while (LIndex <= APatternLen) and (APattern[LIndex] = '#') do
+  while (LIndex <= APatternLen) and ((APattern[LIndex] = '#') or (APattern[LIndex] = '?')) do
     Inc(LIndex);
 
   if (LIndex > AStart + 1) and (LIndex <= APatternLen) and (APattern[LIndex] = '>') then
     Result := LIndex - AStart - 1
   else
     Result := 0;
+end;
+
+// APatternIndex points at the sequence's '<'.  Checks the ASequenceLen
+// input characters from AInputIndex against it: '#' needs a digit, '?'
+// any character (in path mode, not a separator).  Case-independent, so
+// both interpreting engines share it.
+class function TWildCard.SequenceMatches(const AInput, APattern: string; const AInputIndex, APatternIndex,
+  ASequenceLen: Integer; const APathMode: Boolean): Boolean;
+var
+  LIndex: Integer;
+begin
+  if AInputIndex + ASequenceLen - 1 > Length(AInput) then
+    Exit(False);
+
+  for LIndex := 0 to ASequenceLen - 1 do
+    if APattern[APatternIndex + 1 + LIndex] = '#' then
+    begin
+      if not IsAsciiDigit(AInput[AInputIndex + LIndex]) then
+        Exit(False);
+    end
+    else if APathMode and IsPathSeparator(AInput[AInputIndex + LIndex]) then
+      Exit(False);
+
+  Result := True;
 end;
 
 class function TWildCard.IsWildCard(const APattern: string): Boolean;
@@ -642,8 +672,8 @@ var
 begin
   // Walks the pattern with the same class-parsing rules as the engines
   // (leading '>' literal, quoted alternation auto-detection) and reports
-  // the first syntax problem with its 1-based position.  A digit run
-  // '<###>' is a well-formed class to this walk.  Anything this function
+  // the first syntax problem with its 1-based position.  A sequence
+  // '<?##>' is a well-formed class to this walk.  Anything this function
   // accepts compiles to a matching pattern; anything it rejects never
   // matches at runtime.
   AErrorMessage := '';
@@ -713,7 +743,7 @@ begin
       end
       else
       begin
-        // Single-char class (or digit run): a leading '>' is a literal member.
+        // Single-char class (or sequence): a leading '>' is a literal member.
         if (LIdx <= LLen) and (APattern[LIdx] = '>') then
           Inc(LIdx);
 
@@ -932,7 +962,7 @@ begin
   // re-scan the class prefix to find out.
   //
   // Two scanning modes:
-  //   Single-char class (and digit run): leading '>' is treated as a
+  //   Single-char class (and sequence): leading '>' is treated as a
   //     literal so '<>abc>' is a valid class containing '>abc'.
   //   Quoted-alternation class: '>' inside a '"..."' span is part of the
   //     alternative literal and does NOT close the class.  An unterminated
@@ -1166,8 +1196,8 @@ class function TWildCard.MatchRecursiveCS(const AInput, APattern: string; AInput
   const APathMode: Boolean): Boolean;
 var
   LClassEnd: Integer;
-  LDigitRun: Integer;
   LIsQuotedAlt: Boolean;
+  LSequenceLen: Integer;
   LInputLen, LPatternLen: Integer;
   LTailLen, LTailStart, LIndex: Integer;
   LNextChar: Char;
@@ -1271,29 +1301,34 @@ begin
                 end;
               end;
             '<':
-              if DigitRunLength(APattern, APatternIndex, LPatternLen) > 0 then
               begin
-                // Digit run: only positions starting with a digit qualify.
-                while AInputIndex <= LInputLen do
+                LSequenceLen := SequenceLength(APattern, APatternIndex, LPatternLen);
+
+                if LSequenceLen > 0 then
                 begin
-                  if IsAsciiDigit(AInput[AInputIndex]) then
+                  // Sequence: a candidate needs LSequenceLen chars of input
+                  // left - and a digit first when the sequence starts with '#'.
+                  while AInputIndex <= LInputLen - LSequenceLen + 1 do
+                  begin
+                    if (APattern[APatternIndex + 1] = '?') or IsAsciiDigit(AInput[AInputIndex]) then
+                      if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
+                        Exit(True);
+
+                    Inc(AInputIndex);
+                  end;
+                end
+                else
+                begin
+                  // Classes need full evaluation - and a quoted-alt class
+                  // with an empty alternative can match zero chars - so try
+                  // every position INCLUDING the end-of-input one.
+                  while AInputIndex <= LInputLen + 1 do
+                  begin
                     if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                       Exit(True);
 
-                  Inc(AInputIndex);
-                end;
-              end
-              else
-              begin
-                // Classes need full evaluation - and a quoted-alt class
-                // with an empty alternative can match zero chars - so try
-                // every position INCLUDING the end-of-input one.
-                while AInputIndex <= LInputLen + 1 do
-                begin
-                  if MatchRecursiveCS(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
-                    Exit(True);
-
-                  Inc(AInputIndex);
+                    Inc(AInputIndex);
+                  end;
                 end;
               end;
           else
@@ -1339,19 +1374,15 @@ begin
         end;
       '<':
         begin
-          LDigitRun := DigitRunLength(APattern, APatternIndex, LPatternLen);
+          LSequenceLen := SequenceLength(APattern, APatternIndex, LPatternLen);
 
-          if LDigitRun > 0 then
+          if LSequenceLen > 0 then
           begin
-            if AInputIndex + LDigitRun - 1 > LInputLen then
+            if not SequenceMatches(AInput, APattern, AInputIndex, APatternIndex, LSequenceLen, APathMode) then
               Exit(False);
 
-            for LIndex := AInputIndex to AInputIndex + LDigitRun - 1 do
-              if not IsAsciiDigit(AInput[LIndex]) then
-                Exit(False);
-
-            Inc(AInputIndex, LDigitRun);
-            Inc(APatternIndex, LDigitRun + 2);
+            Inc(AInputIndex, LSequenceLen);
+            Inc(APatternIndex, LSequenceLen + 2);
             Continue;
           end;
 
@@ -1560,8 +1591,8 @@ class function TWildCard.MatchRecursiveCI(const AInput, APattern: string; AInput
   const APathMode: Boolean): Boolean;
 var
   LClassEnd: Integer;
-  LDigitRun: Integer;
   LIsQuotedAlt: Boolean;
+  LSequenceLen: Integer;
   LInputLen, LPatternLen: Integer;
   LTailLen, LTailStart, LIndex: Integer;
   LNextChar: Char;
@@ -1667,29 +1698,34 @@ begin
                 end;
               end;
             '<':
-              if DigitRunLength(APattern, APatternIndex, LPatternLen) > 0 then
               begin
-                // Digit run: only positions starting with a digit qualify.
-                while AInputIndex <= LInputLen do
+                LSequenceLen := SequenceLength(APattern, APatternIndex, LPatternLen);
+
+                if LSequenceLen > 0 then
                 begin
-                  if IsAsciiDigit(AInput[AInputIndex]) then
+                  // Sequence: a candidate needs LSequenceLen chars of input
+                  // left - and a digit first when the sequence starts with '#'.
+                  while AInputIndex <= LInputLen - LSequenceLen + 1 do
+                  begin
+                    if (APattern[APatternIndex + 1] = '?') or IsAsciiDigit(AInput[AInputIndex]) then
+                      if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
+                        Exit(True);
+
+                    Inc(AInputIndex);
+                  end;
+                end
+                else
+                begin
+                  // Classes need full evaluation - and a quoted-alt class
+                  // with an empty alternative can match zero chars - so try
+                  // every position INCLUDING the end-of-input one.
+                  while AInputIndex <= LInputLen + 1 do
+                  begin
                     if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
                       Exit(True);
 
-                  Inc(AInputIndex);
-                end;
-              end
-              else
-              begin
-                // Classes need full evaluation - and a quoted-alt class
-                // with an empty alternative can match zero chars - so try
-                // every position INCLUDING the end-of-input one.
-                while AInputIndex <= LInputLen + 1 do
-                begin
-                  if MatchRecursiveCI(AInput, APattern, AInputIndex, APatternIndex, APathMode) then
-                    Exit(True);
-
-                  Inc(AInputIndex);
+                    Inc(AInputIndex);
+                  end;
                 end;
               end;
           else
@@ -1744,19 +1780,15 @@ begin
         end;
       '<':
         begin
-          LDigitRun := DigitRunLength(APattern, APatternIndex, LPatternLen);
+          LSequenceLen := SequenceLength(APattern, APatternIndex, LPatternLen);
 
-          if LDigitRun > 0 then
+          if LSequenceLen > 0 then
           begin
-            if AInputIndex + LDigitRun - 1 > LInputLen then
+            if not SequenceMatches(AInput, APattern, AInputIndex, APatternIndex, LSequenceLen, APathMode) then
               Exit(False);
 
-            for LIndex := AInputIndex to AInputIndex + LDigitRun - 1 do
-              if not IsAsciiDigit(AInput[LIndex]) then
-                Exit(False);
-
-            Inc(AInputIndex, LDigitRun);
-            Inc(APatternIndex, LDigitRun + 2);
+            Inc(AInputIndex, LSequenceLen);
+            Inc(APatternIndex, LSequenceLen + 2);
             Continue;
           end;
 
@@ -1827,8 +1859,8 @@ end;
 // '>'.  Mirrors the interpreting engine's FindClassEnd + CharInClass* +
 // MatchQuotedAltClass* parsing rules exactly - the two engines MUST stay
 // in agreement (the benchmark app has a parity suite that checks this).
-// Digit runs ('<###>') never get here - CompilePattern turns them into
-// tkDigit tokens first.
+// Sequences ('<?##>') never get here - CompilePattern turns them into
+// tkAnyChar / tkDigit tokens first.
 class function TWildCard.ParseClassToken(const APattern: string; var AClassIndex: Integer; var AToken: TToken; const ALen: Integer): Boolean;
 var
   LPos, LContentStart, LContentEnd, LQStart: Integer;
@@ -1957,7 +1989,7 @@ var
   LTok: TToken;
   LMin: Integer;
   LStarRun: Integer;
-  LDigitRun, LDigitIndex: Integer;
+  LSequenceLen, LSequenceIndex: Integer;
 begin
   Result.Valid := True;
   Result.Tokens := nil;
@@ -2010,19 +2042,28 @@ begin
         begin
           FlushLiteralToken(APattern, LIndex, LLitStart, LTokens, LCount);
 
-          // Digit run '<###>': one tkDigit token per digit.
-          LDigitRun := DigitRunLength(APattern, LIndex, LLen);
+          // Sequence '<?##>': one tkAnyChar / tkDigit token per character,
+          // exactly as if written '?<#><#>'.
+          LSequenceLen := SequenceLength(APattern, LIndex, LLen);
 
-          if LDigitRun > 0 then
+          if LSequenceLen > 0 then
           begin
-            for LDigitIndex := 1 to LDigitRun do
+            for LSequenceIndex := LIndex + 1 to LIndex + LSequenceLen do
             begin
               LTok := Default(TToken);
-              LTok.Kind := tkDigit;
+
+              if APattern[LSequenceIndex] = '#' then
+                LTok.Kind := tkDigit
+              else
+              begin
+                LTok.Kind := tkAnyChar;
+                LTok.PathSeg := APathMode;
+              end;
+
               AddToken(LTok, LTokens, LCount);
             end;
 
-            Inc(LIndex, LDigitRun + 2);
+            Inc(LIndex, LSequenceLen + 2);
             LLitStart := LIndex;
             Continue;
           end;

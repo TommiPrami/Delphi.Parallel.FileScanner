@@ -61,7 +61,7 @@ begin
 end;
 
 // Translates a '<...>' pattern to the legacy '[...]' syntax when the bound
-// engine needs it: digit run '<##>' -> '##', '<' -> '[', '>' -> ']'.  A
+// engine needs it: sequence '<?##>' -> '?##', '<' -> '[', '>' -> ']'.  A
 // '>' inside a quoted alternative becomes ']', which the legacy engine
 // also treats as a literal there, so the meaning is preserved.
 function ToEngineSyntax(const APattern: string): string;
@@ -80,12 +80,13 @@ begin
     begin
       LRunEnd := LIndex + 1;
 
-      while (LRunEnd <= Length(APattern)) and (APattern[LRunEnd] = '#') do
+      // Sequence '<?##>' - the legacy engine spells it bare: '?##'.
+      while (LRunEnd <= Length(APattern)) and ((APattern[LRunEnd] = '#') or (APattern[LRunEnd] = '?')) do
         Inc(LRunEnd);
 
       if (LRunEnd > LIndex + 1) and (LRunEnd <= Length(APattern)) and (APattern[LRunEnd] = '>') then
       begin
-        Result := Result + StringOfChar('#', LRunEnd - LIndex - 1);
+        Result := Result + Copy(APattern, LIndex + 1, LRunEnd - LIndex - 1);
         LIndex := LRunEnd + 1;
         Continue;
       end;
@@ -192,6 +193,10 @@ begin
   CheckParity('*<abc>end', 'xxxdend');
   CheckParity('<#a>', '#');
   CheckParity('<!#>', '5');
+  CheckParity('<?##>.txt', 'x12.txt');
+  CheckParity('<?##>.txt', '12.txt');
+  CheckParity('*<#?#>*', 'ab1x2cd');
+  CheckParity('*<#?#>*', 'abx12cd');
 
   // Quoted alternation
   CheckParity('<"foo">', 'foo');

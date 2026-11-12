@@ -14,6 +14,7 @@ Pure Pascal, single unit, no dependencies beyond the RTL.
 | `?`                | Exactly one character                                    | `b?ll`                      | `ball`, `bell`           | `bll`, `baal`     |
 | `<#>`              | Exactly one decimal digit (0-9)                          | `1<#>3`                     | `103`, `113`             | `1a3`, `13`       |
 | `<###>`            | Exactly that many decimal digits (one per `#`)           | `Test_<###>.log`            | `Test_001.log`           | `Test_01.log`, `Test_0A1.log` |
+| `<?##>`            | A sequence: `#` = one digit, `?` = any one character     | `<?##>.txt`                 | `x12.txt`, `912.txt`     | `12.txt`, `x1a.txt` |
 | `<abc>`            | Any one character in the set                             | `b<ae>ll`                   | `ball`, `bell`           | `bill`            |
 | `<!abc>`           | Any one character NOT in the set                         | `b<!ae>ll`                  | `bill`, `bull`           | `ball`, `bell`    |
 | `<a-z>`            | Any one character in the range (low..high, ascending)    | `b<a-c>d`                   | `bad`, `bbd`             | `bdd`, `b0d`      |
@@ -39,9 +40,14 @@ e.g. `<-x>` matches `-` or `x`; `<a->` matches `a` or `-`.
 
 `<...>` is **auto-detected**:
 
-- If the content is only `#` characters, it is a **digit run**: `<#>` is
-  one digit, `<####>` four. A `#` mixed with other members (`<#a>`) is an
-  ordinary class member, and a bare `#` outside brackets is a literal.
+- If the content is only `#` and `?` characters, it is a **sequence**: one
+  input character per content character, in order - `#` a decimal digit,
+  `?` any character. `<#>` is one digit, `<####>` four, `<?##>` any
+  character followed by two digits. The brackets only mark the region, so
+  `<##>` is the same pattern as `<#><#>`, and `<?##>` the same as
+  `<?><##>` or `?<##>`. A `#` or `?` mixed with other members (`<#a>`) is
+  an ordinary class member, `<!#>` is a negated class, and a bare `#`
+  outside brackets is a literal.
 - If the first content character (after an optional `!`) is `"`, the class
   is parsed as **quoted-string alternation**: `<"foo"|"bar"|"baz">`. The
   `|` separates alternatives. The class matches the FIRST alternative that
