@@ -58,6 +58,11 @@ type
     [Test] procedure PrefixExcludesWholeFoldersOnly;
     [Test] procedure SkippedFilesCountCountsPrunedFolders;
     [Test] procedure BlankExclusionsAreIgnored;
+    [Test] procedure AlternationExtensionPatternIsAWildcard;
+    [Test] procedure ScanOnBusyScannerRaises;
+    [Test] procedure DirectoryLinksAreNotFollowed;
+    [Test] procedure SkippedFilesCountCountsNestedRootFilesOnce;
+    [Test] procedure ForwardSlashesAreReadAsBackslashes;
 
     [Test] procedure WorkersCountLimitsWorkerThreads;
     [Test] procedure MoreWorkersThanCoresScanCorrectly;
@@ -582,7 +587,7 @@ procedure TParallelFileScannerTestsCustom.QuotedAlternationExcludesEveryListedFo
 var
   LExclusions: TFileScanExclusions;
 begin
-  LExclusions.Patterns := ['*\["FastMM5"|"SPRING4D"]\*'];
+  LExclusions.Patterns := ['*\<"FastMM5"|"SPRING4D">\*'];
 
   AssertExclusionsLeave(LExclusions,
     BaselineWhere(
@@ -590,7 +595,7 @@ begin
       begin
         Result := not (AFile.Contains('\fastmm5\') or AFile.Contains('\spring4d\'));
       end),
-    'GetFileList excluding *\["FastMM5"|"SPRING4D"]\*');
+    'GetFileList excluding *\<"FastMM5"|"SPRING4D">\*');
 end;
 
 // A pattern that does not end in '*' cannot prune folders, but still excludes the files it matches.
@@ -665,7 +670,7 @@ var
   LExclusions: TFileScanExclusions;
   LScanner: TParallelFileScannerCustom;
 begin
-  LExclusions.Patterns := ['*\[3rdParty\*'];
+  LExclusions.Patterns := ['*\<3rdParty\*'];
   LScanner := CreateScanner;
   try
     Assert.WillRaise(
@@ -673,7 +678,7 @@ begin
       begin
         ScanToStringList(LScanner, FScanRoots, LExclusions);
       end,
-      EInOutArgumentException, 'An unterminated [ in an exclusion pattern must raise');
+      EInOutArgumentException, 'An unterminated < in an exclusion pattern must raise');
   finally
     LScanner.Free;
   end;
@@ -696,12 +701,12 @@ begin
   try
     Assert.IsTrue(LExpected.Count > 0, 'The tree must hold files the pattern matches');
 
-    LScanner := ScannerClass.Create(['*["Scanner"|"Matcher"]*.pas'], nil);
+    LScanner := ScannerClass.Create(['*<"Scanner"|"Matcher">*.pas'], nil);
     try
       LScanner.ConvertRelativePathsToAbsolute := True;
 
       AssertSameFiles(LExpected, ScanToStringList(LScanner, FScanRoots, LExclusions),
-        'GetFileList with *["Scanner"|"Matcher"]*.pas');
+        'GetFileList with *<"Scanner"|"Matcher">*.pas');
     finally
       LScanner.Free;
     end;
@@ -792,6 +797,211 @@ begin
         Result := True;
       end),
     'GetFileList with blank exclusions');
+end;
+
+// '*.<"pas"|"inc">' starts like a plain '*.ext' pattern but is a wildcard: it must not be taken for the literal
+// extension '.<"pas"|"inc">', which no file has.
+procedure TParallelFileScannerTestsCustom.AlternationExtensionPatternIsAWildcard;
+var
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExpected := BaselineWhere(
+    function(AFile: string): Boolean
+    begin
+      Result := AFile.EndsWith('.pas') or AFile.EndsWith('.inc');
+    end);
+  try
+    Assert.IsTrue(LExpected.Count > 0, 'The tree must hold .pas and .inc files');
+
+    LScanner := ScannerClass.Create(['*.<"pas"|"inc">'], nil);
+    try
+      LScanner.ConvertRelativePathsToAbsolute := True;
+
+      AssertSameFiles(LExpected, ScanToStringList(LScanner, FScanRoots, LExclusions),
+        'GetFileList with *.<"pas"|"inc">');
+    finally
+      LScanner.Free;
+    end;
+  finally
+    LExpected.Free;
+  end;
+end;
+
+// A scan on a scanner that is already scanning - here from its own callback - would replace the running walk's state
+// under its workers, so it must be refused; the running scan must finish normally, and the scanner work afterwards.
+procedure TParallelFileScannerTestsCustom.ScanOnBusyScannerRaises;
+var
+  LExclusions: TFileScanExclusions;
+  LFileCount: Integer;
+  LNestedOutcome: string;
+  LNestedStarted: Integer;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LScanner := CreateScanner;
+  try
+    LFileCount := 0;
+    LNestedStarted := 0;
+    LNestedOutcome := '';
+
+    LScanner.ScanFiles(FScanRoots, LExclusions,
+      procedure(const AFileName: string)
+      begin
+        if AtomicCmpExchange(LNestedStarted, 1, 0) = 0 then
+        try
+          ScanToStringList(LScanner, FScanRoots, LExclusions);
+          LNestedOutcome := 'no exception';
+        except
+          on E: Exception do
+            LNestedOutcome := E.ClassName;
+        end;
+      end,
+      LFileCount);
+
+    Assert.AreEqual(EInvalidOpException.ClassName, LNestedOutcome, 'A scan on a busy scanner');
+    Assert.AreEqual(FBaseline.Count, LFileCount, 'Files of the running scan');
+    AssertSameFiles(FBaseline, ScanToStringList(LScanner, FScanRoots, LExclusions), 'GetFileList afterwards');
+  finally
+    LScanner.Free;
+  end;
+end;
+
+// Root\Sub\LoopBack is a junction back to Root - a cycle - and Root\Linked one to a folder outside the tree. Neither
+// is followed by default, by the walk or by SkippedFilesCount; with FollowDirectoryLinks both are.
+procedure TParallelFileScannerTestsCustom.DirectoryLinksAreNotFollowed;
+var
+  LBase: string;
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LLinked: string;
+  LLoopBack: string;
+  LRoot: string;
+  LScanner: TParallelFileScannerCustom;
+  LTarget: string;
+begin
+  LBase := TPath.Combine(TPath.GetTempPath, Format('DPFSLinkTest_%d_%d', [GetCurrentProcessId, GetTickCount64]));
+  LRoot := TPath.Combine(LBase, 'Root');
+  LTarget := TPath.Combine(LBase, 'Target');
+  LLoopBack := TPath.Combine(LRoot, 'Sub\LoopBack');
+  LLinked := TPath.Combine(LRoot, 'Linked');
+
+  TDirectory.CreateDirectory(TPath.Combine(LRoot, 'Sub'));
+  TDirectory.CreateDirectory(LTarget);
+  try
+    TFile.WriteAllText(TPath.Combine(LRoot, 'Sub\Unit1.pas'), 'unit Unit1;');
+    TFile.WriteAllText(TPath.Combine(LTarget, 'Unit2.pas'), 'unit Unit2;');
+    CreateDirectoryJunction(LLoopBack, LRoot);
+    CreateDirectoryJunction(LLinked, LTarget);
+
+    LScanner := CreateScanner;
+    try
+      LExpected := TFileSet.Create([TPath.Combine(LRoot, 'Sub\Unit1.pas')]);
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, [LRoot], LExclusions), 'GetFileList over junctions');
+      finally
+        LExpected.Free;
+      end;
+
+      LExclusions.PathPrefixes := [TPath.Combine(LRoot, 'Sub')];
+      ScanToStringList(LScanner, [LRoot], LExclusions);
+      Assert.AreEqual(1, LScanner.SkippedFilesCount, 'SkippedFilesCount of a pruned folder holding a junction loop');
+
+      // Followed, with the loop pruned by a pattern.
+      LScanner.FollowDirectoryLinks := True;
+      LExclusions.PathPrefixes := [];
+      LExclusions.Patterns := ['*\LoopBack\'];
+      LExpected := TFileSet.Create([TPath.Combine(LRoot, 'Sub\Unit1.pas'), TPath.Combine(LLinked, 'Unit2.pas')]);
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, [LRoot], LExclusions),
+          'GetFileList with FollowDirectoryLinks');
+      finally
+        LExpected.Free;
+      end;
+    finally
+      LScanner.Free;
+    end;
+  finally
+    // The junctions themselves first, so deleting the tree cannot reach through them.
+    RemoveDirectory(PChar(LLoopBack));
+    RemoveDirectory(PChar(LLinked));
+    TDirectory.Delete(LBase, True);
+  end;
+end;
+
+// Roots Source and Source\3rdPartyLibraries\FastMM5 with 3rdPartyLibraries excluded: the nested root's own files are
+// returned, so SkippedFilesCount counts every other file under 3rdPartyLibraries exactly once - whatever order the
+// workers met the folders in, so the scan is repeated.
+procedure TParallelFileScannerTestsCustom.SkippedFilesCountCountsNestedRootFilesOnce;
+const
+  SCAN_COUNT = 5;
+var
+  LExcludedPrefix: string;
+  LExclusions: TFileScanExclusions;
+  LExpectedCount: Integer;
+  LNestedRoot: string;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExcludedPrefix := IncludeTrailingPathDelimiter(TPath.GetFullPath(TPath.Combine(FScanRoots[0], '3rdPartyLibraries')));
+  LNestedRoot := IncludeTrailingPathDelimiter(TPath.Combine(LExcludedPrefix, 'FastMM5'));
+  LExpectedCount := 0;
+
+  for var LIndex := 0 to FBaseline.Count - 1 do
+    if FBaseline.Files[LIndex].StartsWith(LExcludedPrefix.ToLower)
+      and (ExtractFilePath(FBaseline.Files[LIndex]) <> LNestedRoot.ToLower) then
+      Inc(LExpectedCount);
+
+  Assert.IsTrue(LExpectedCount > 0, 'The tree must hold files under 3rdPartyLibraries');
+  LExclusions.PathPrefixes := [LExcludedPrefix];
+
+  for var LScan := 1 to SCAN_COUNT do
+  begin
+    LScanner := CreateScanner;
+    try
+      ScanToStringList(LScanner, [FScanRoots[0], LNestedRoot], LExclusions);
+
+      Assert.AreEqual(LExpectedCount, LScanner.SkippedFilesCount, Format('SkippedFilesCount, scan %d', [LScan]));
+    finally
+      LScanner.Free;
+    end;
+  end;
+end;
+
+// The walk builds its paths with '\', so '/' in roots, prefixes and patterns must be read as '\' - or they could never
+// match, and would silently exclude nothing.
+procedure TParallelFileScannerTestsCustom.ForwardSlashesAreReadAsBackslashes;
+var
+  LExcludedPrefix: string;
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LFiles: TArray<string>;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExcludedPrefix := TPath.GetFullPath(TPath.Combine(FScanRoots[0], 'Units'));
+  LExclusions.PathPrefixes := [LExcludedPrefix.Replace('\', '/')];
+  LExclusions.Patterns := ['*/FastMM5/'];
+
+  LExpected := BaselineWhere(
+    function(AFile: string): Boolean
+    begin
+      Result := not (AFile.Contains('\fastmm5\') or AFile.StartsWith(LExcludedPrefix.ToLower + '\'));
+    end);
+  try
+    LScanner := CreateScanner;
+    try
+      LScanner.ConvertRelativePathsToAbsolute := False; // the root is used as given
+      LFiles := ScanToStringList(LScanner, [TPath.GetFullPath(FScanRoots[0]).Replace('\', '/')], LExclusions);
+
+      for var LFile in LFiles do
+        Assert.IsFalse(LFile.Contains('/'), 'A path with a ''/'': ' + LFile);
+
+      AssertSameFiles(LExpected, LFiles, 'GetFileList with ''/'' in the root and the exclusions');
+    finally
+      LScanner.Free;
+    end;
+  finally
+    LExpected.Free;
+  end;
 end;
 
 // With Workers.Count N a scan runs at most N workers - so its files arrive on at most N threads - and still finds every

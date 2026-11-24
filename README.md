@@ -22,17 +22,19 @@ full sort at the end.
 ## Matching rules
 
 Wildcards are [Delphi.WildCardMatcher](Source/3rdPartyLibraries/Delphi.WildCardMatcher/README.md)
-patterns (`*`, `?`, `#` for a digit, `[a-z]`, `["foo"|"bar"]`), case-insensitive, with `*`
-matching across folder boundaries (DOS style). `DPFSUnit.Parallel.FileScanner` needs that
+patterns (`*`, `?`, `<#>` for a digit, `<a-z>`, `<"foo"|"bar">`), case-insensitive, with `*`
+matching across folder boundaries (DOS style). Every metacharacter is one Windows forbids in
+file names, so `[`, `]` and `#` are literal characters: the older `[a-z]` / `["foo"|"bar"]` /
+`#` syntax now matches literally, i.e. nothing. `DPFSUnit.Parallel.FileScanner` needs that
 unit on the search path; it is pure RTL.
 
 - **Search patterns** (the list given to `Create`) match file **names**. A plain `*.ext` is a
-  fast, allocation-free extension test; anything else is a wildcard, e.g. `Unit?.pas` or
-  `*["Form"|"Frame"]*.pas`. A pattern containing a path delimiter, an empty one or a
-  malformed one raises `EInOutArgumentException` when the scan starts.
+  fast, allocation-free extension test; anything else is a wildcard, e.g. `Unit?.pas`,
+  `*.<"pas"|"inc">` or `*<"Form"|"Frame">*.pas`. A pattern containing a path delimiter, an
+  empty one or a malformed one raises `EInOutArgumentException` when the scan starts.
 - **Exclusions** (`TFileScanExclusions`) combine: anything any of them matches is left out.
   - `Patterns` are wildcards matched against **full paths**, e.g. `*\__history\*`,
-    `*\.git\*` or `C:\MyCode\*["3rdParty"|"ThirdParty"]\*`. A pattern ending in `*` that
+    `*\.git\*` or `C:\MyCode\*<"3rdParty"|"ThirdParty">\*`. A pattern ending in `*` that
     matches a folder (its path plus `\`) prunes the whole folder from the walk; every
     pattern is also matched against each file's full path, so `*.inc` excludes files. A
     pattern ending in `\` names folders, as in `.gitignore`: `*\__history\` means
@@ -40,17 +42,27 @@ unit on the search path; it is pure RTL.
   - `PathPrefixes` exclude a folder and everything under it, by path. Whole folder names
     only: `C:\Code\Lib` does not exclude `C:\Code\Library`.
   - `PathSuffixes` exclude files whose full path ends with one of them.
-  - Blank entries are ignored.
+  - Blank entries are ignored, and `/` is read as `\` (in roots too).
 - Roots are walked once each: a root that is the same as, or inside, another root is
   dropped before the walk (case-insensitively), so overlapping roots do not produce
   duplicate results. A nested root inside an excluded folder is still scanned, since it
   was asked for explicitly.
+- Directory links inside the tree &mdash; junctions, directory symbolic links, volume mount
+  points &mdash; are not followed: they lead to folders found elsewhere anyway, or back up the
+  tree. Set `FollowDirectoryLinks` to walk into them (a link back up the tree then repeats it
+  until the paths get too long, so prune such links with an exclusion). A root that is
+  itself a link is scanned. Other reparse points, such as OneDrive's cloud-file folders, are
+  ordinary folders.
 - Search patterns, path prefixes and filename suffixes are compared ordinally and
   case-insensitively, the way the file system compares names &mdash; not by the current
   locale's rules.
 - The sorted order is `CompareText` order.
-- `SkippedFilesCount` counts the excluded files: those excluded by a pattern or suffix,
-  plus the files the search patterns match inside pruned folders (counted on demand).
+- `SkippedFilesCount` counts the excluded files, each once: those excluded by a pattern or
+  suffix, plus the files the search patterns match inside pruned folders (counted on demand,
+  in one pass over each pruned folder).
+- One scan at a time per scanner: starting a scan on a scanner that is already scanning
+  &mdash; from another thread, or from its own `ScanFiles` callback &mdash; raises
+  `EInvalidOpException`. Give each concurrent scan a scanner of its own.
 
 Wildcard exclusions cost next to nothing: the folder and file paths they are matched
 against are built by the walk anyway. Scanning `C:\git_opensource` (49k folders, 250k files)
@@ -135,8 +147,9 @@ result API returns the same file set as a straightforward flat enumeration of th
 repository's `Source` tree, prefix exclusion keeps excluded subtrees out, overlapping roots
 give no duplicates, sorted results are in `CompareText` order, the workers run at
 `Workers.Priority` and never on more threads than the worker count, a worker's exception
-reaches the caller, a scan from inside a callback works, and back-to-back scans pile up no
-handles or memory. Then the OTL value queue, the priority conversion, the Spring4D
+reaches the caller, a scan from inside a callback works (and one on the busy scanner itself
+is refused), directory links are not followed unless asked for, `SkippedFilesCount` counts
+each file once, `/` works like `\`, and back-to-back scans pile up no handles or memory. Then the OTL value queue, the priority conversion, the Spring4D
 `IList<string>` and `TFileScanWorkers` itself (defaults, limits, the `Initialize` helpers,
 the scanner owning it) are tested.
 
@@ -158,6 +171,4 @@ the OTL scanner pool's thread count bounded. It exits with a non-zero code on fa
 
 ## TODO
 
-- `GetFileCounts` (used only for the lazy "skipped files in excluded directories" count)
-  still walks each skipped directory once per extension; it could share the single-pass walk.
 - ...

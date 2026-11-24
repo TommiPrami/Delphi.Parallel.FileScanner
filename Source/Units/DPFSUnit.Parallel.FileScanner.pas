@@ -19,12 +19,12 @@ type
   TExclusionKind = (ekPathPrefixes, ekPathSuffixes, ekPatterns);
 
   // What a scan leaves out. The three kinds combine - anything any of them matches is excluded - and all compare
-  // case-insensitively; blank entries are ignored.
+  // case-insensitively; blank entries are ignored, and '/' is read as '\' in all of them.
   // - PathPrefixes: folders, as paths. A prefix excludes that folder and everything under it - whole folder names
   //   only, so 'C:\Code\Lib' does not exclude 'C:\Code\Library'.
   // - PathSuffixes: files whose full path ends with one of them, e.g. '_Generated.pas'.
   // - Patterns: Delphi.WildCardMatcher wildcards matched against full paths, '*' crossing folder boundaries, e.g.
-  //   '*\__history\*' or 'C:\MyCode\*["3rdParty"|"ThirdParty"]\*'. A pattern ending in '*' that matches a folder
+  //   '*\__history\*' or 'C:\MyCode\*<"3rdParty"|"ThirdParty">\*'. A pattern ending in '*' that matches a folder
   //   (its path plus '\') prunes that whole folder from the walk; every pattern is also matched against each file's
   //   full path. A pattern ending in '\' names folders, as in .gitignore: '*\__history\' means '*\__history\*'. A
   //   malformed pattern raises EInOutArgumentException when the scan starts.
@@ -90,13 +90,24 @@ type
   //
   // The extensions given at Create are include patterns matched against file NAMES (not paths): a plain '*.ext' is a
   // fast allocation-free suffix test, anything else is a Delphi.WildCardMatcher wildcard, e.g. 'Unit?.pas' or
-  // '*["Form"|"Frame"]*.pas'. Patterns with a path delimiter, empty ones and malformed ones raise
+  // '*<"Form"|"Frame">*.pas'. Patterns with a path delimiter, empty ones and malformed ones raise
   // EInOutArgumentException when the scan starts.
+  //
+  // One scan at a time per scanner: a scan started on a scanner that is already scanning - from another thread, or
+  // from one of its own ScanFiles callbacks - raises EInvalidOpException. Use a scanner of its own for each.
+  //
+  // Directory links - junctions, directory symbolic links, volume mount points - inside the scanned tree are not
+  // followed unless FollowDirectoryLinks is set: they lead to folders found elsewhere anyway, or back up the tree. A
+  // root that is itself a link is scanned.
   TParallelFileScannerCustom = class(TObject)
   strict private
     FSkippedDirectories: TStringList;
     FCachedSkippedDirectoriesFileCount: Integer;
     FConvertRelativePathsToAbsolute: Boolean;
+    FFollowDirectoryLinks: Boolean;
+    FScanActive: Integer;              // 1 while a walk runs: one scan at a time per scanner
+    FScanRoots: TArray<string>;        // the last walk's roots, after PrepareRootDirectories
+    FSkippedDirectoriesCounted: Boolean;
     FExcludedPrefixes: TArray<string>; // FExclusions.PathPrefixes with trailing delimiters: whole folders (per scan)
     FExcludedSuffixes: TArray<string>; // FExclusions.PathSuffixes (per scan)
     FExcludeMatcher: TWildCard;        // every exclusion pattern, against full file paths (per scan)
@@ -109,6 +120,7 @@ type
     FWorkers: TFileScanWorkers;        // owned; nil = one worker per core
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     function GetSkippedFilesCount: Integer;
+    function IsScanRoot(const APath: string): Boolean;
     procedure AddSkippedDirectories(const APath: string);
   strict protected
     FDiskScanTimeForFiles: Double;
@@ -148,9 +160,13 @@ type
     // worker's file callback; it fires on worker threads, so a shared sink must be thread-safe. AFinishWorker
     // (optional) is called on each worker thread once the whole walk is done, with the same index, so per-worker
     // results can be post-processed in parallel. The workers run at GetWorkerPriority.
+    // Raises EInvalidOpException when this scanner is already scanning.
     procedure RunParallelWalk(const ADirectories: TArray<string>; const AExclusions: TFileScanExclusions;
       const AWorkerCount: Integer; const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>;
       const AFinishWorker: TProc<Integer>);
+    // RunParallelWalk's workers, on the prepared roots.
+    procedure RunWalkWorkers(const ARoots: TArray<string>; const AWorkerCount: Integer;
+      const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>);
     // Enumerates one directory (non-recursively) in a single pass: matching files go to AFileFound,
     // non-excluded subdirectories are appended to ASubDirectories. APath and the subdirectories it adds
     // end in a path delimiter.
@@ -186,6 +202,10 @@ type
     property SkippedFilesCount: Integer read GetSkippedFilesCount;
     property SortResultList: Boolean read FSortResultList write FSortResultList;
     property ConvertRelativePathsToAbsolute: Boolean read FConvertRelativePathsToAbsolute write FConvertRelativePathsToAbsolute;
+    // Walk into directory links (junctions, directory symbolic links, volume mount points) too. Off by default: a
+    // link leads to a folder found elsewhere anyway - its files would then come twice - or back up the tree, which
+    // repeats it until the paths get too long.
+    property FollowDirectoryLinks: Boolean read FFollowDirectoryLinks write FFollowDirectoryLinks;
     // The AWorkers given to Create (nil when none was); its settings may be changed between scans.
     property Workers: TFileScanWorkers read FWorkers;
   end;
@@ -229,6 +249,24 @@ end;
 function IsDotDirectory(const AName: PChar): Boolean; inline;
 begin
   Result := (AName[0] = '.') and ((AName[1] = #0) or ((AName[1] = '.') and (AName[2] = #0)));
+end;
+
+// True for a directory entry the walk does not enter: '.', '..' and - unless AFollowLinks - a directory link. A link
+// is a name-surrogate reparse point (junction, directory symbolic link, volume mount point), whose tag the find data
+// holds in dwReserved0; other reparse points, such as cloud-file placeholders (OneDrive), are ordinary folders.
+function SkipDirectoryEntry(const AFindData: TWin32FindData; const AFollowLinks: Boolean): Boolean; inline;
+const
+  REPARSE_TAG_NAME_SURROGATE = $20000000; // IsReparseTagNameSurrogate in winnt.h
+begin
+  Result := IsDotDirectory(@AFindData.cFileName[0])
+    or (not AFollowLinks and (AFindData.dwFileAttributes and FILE_ATTRIBUTE_REPARSE_POINT <> 0)
+      and (AFindData.dwReserved0 and REPARSE_TAG_NAME_SURROGATE <> 0));
+end;
+
+// Paths, prefixes and patterns are compared with the '\' paths the walk builds, so a '/' in them must become '\'.
+function NormalizeDelimiters(const APath: string): string; inline;
+begin
+  Result := APath.Replace('/', '\');
 end;
 
 // Ordinal, case-insensitive comparison of ALength characters - the way Windows compares file names. The RTL's
@@ -543,21 +581,25 @@ end;
 { TParallelFileScannerCustom }
 
 // APath ends in a path delimiter, as do the folders already listed, so a folder is only ever found inside a whole
-// listed folder, never inside a sibling whose name merely starts the same.
+// listed folder, never inside a sibling whose name merely starts the same. The list stays free of nesting whatever
+// order the workers add folders in - a folder inside another is counted with it - so no file is counted twice.
 procedure TParallelFileScannerCustom.AddSkippedDirectories(const APath: string);
 begin
   // Called from ScanDirectory, which runs on multiple worker threads, so
   // access to the shared FSkippedDirectories list must be serialized.
   FLock.Enter(FSkippedDirectories);
   try
+    // Already listed, or inside a listed folder.
     for var LIndex := 0 to FSkippedDirectories.Count - 1 do
-    begin
       if StartsTextOrdinal(FSkippedDirectories[LIndex], APath) then
         Exit;
-    end;
 
-    if FSkippedDirectories.IndexOf(APath) = -1 then
-      FSkippedDirectories.Add(APath);
+    // Listed folders inside this one: possible when a root inside an excluded folder was walked first.
+    for var LIndex := FSkippedDirectories.Count - 1 downto 0 do
+      if StartsTextOrdinal(APath, FSkippedDirectories[LIndex]) then
+        FSkippedDirectories.Delete(LIndex);
+
+    FSkippedDirectories.Add(APath);
   finally
     FLock.Exit(FSkippedDirectories);
   end;
@@ -590,8 +632,10 @@ var
 begin
   LRoots := TList<string>.Create;
   try
-    for var LRootPath in ADirectories do
+    for var LRoot in ADirectories do
     begin
+      var LRootPath := NormalizeDelimiters(LRoot);
+
       if not TDirectory.Exists(LRootPath) then
         Continue;
 
@@ -619,13 +663,14 @@ end;
 
 procedure TParallelFileScannerCustom.PrepareExclusions;
 
+  // The entries that are not blank, with '/' read as '\'.
   function NonBlank(const AValues: TArray<string>): TArray<string>;
   begin
     Result := [];
 
     for var LIndex := 0 to High(AValues) do
       if Trim(AValues[LIndex]) <> '' then
-        Result := Result + [AValues[LIndex]];
+        Result := Result + [NormalizeDelimiters(AValues[LIndex])];
   end;
 
 var
@@ -634,8 +679,9 @@ var
   LPrunePatterns: TArray<string>;
 begin
   // Normalized once per scan, so the per-directory checks neither allocate nor re-normalize. Blank entries are
-  // dropped: an empty prefix or suffix would otherwise match - and exclude - everything. Prefixes get a trailing
-  // delimiter, so they match whole folder names only, like the folder paths they are compared with.
+  // dropped: an empty prefix or suffix would otherwise match - and exclude - everything. '/' becomes '\', or the entry
+  // could never match the walk's paths. Prefixes get a trailing delimiter, so they match whole folder names only,
+  // like the folder paths they are compared with.
   FExcludedPrefixes := NonBlank(FExclusions.PathPrefixes);
 
   for var LIndex := 0 to High(FExcludedPrefixes) do
@@ -650,7 +696,7 @@ begin
   begin
     // A pattern ending in a path delimiter names folders, as in .gitignore: 'C:\Code\3rdParty\' is read as
     // 'C:\Code\3rdParty\*'. Taken literally it could never match a file path, and would exclude nothing.
-    if LPatterns[LIndex].EndsWith('\') or LPatterns[LIndex].EndsWith('/') then
+    if LPatterns[LIndex].EndsWith('\') then
       LPatterns[LIndex] := LPatterns[LIndex] + '*';
 
     // A malformed pattern would silently match nothing - and so exclude nothing.
@@ -696,7 +742,7 @@ begin
       begin
         var LExtension := LPattern.Substring(1); // ".ext" from "*.ext"
 
-        if (Length(LExtension) > 1) and (LExtension.IndexOfAny(['*', '?', '#', '[']) < 0) then
+        if (Length(LExtension) > 1) and not TWildCard.IsWildCard(LExtension) then
           LFast.Add(LExtension)
         else
           LComplex.Add(LPattern);
@@ -744,6 +790,8 @@ begin
   FSkippedFilesCount := 0;
   FSkippedDirectories.Clear;
   FCachedSkippedDirectoriesFileCount := 0;
+  FSkippedDirectoriesCounted := False;
+  FScanRoots := [];
 end;
 
 // Called once per subdirectory from every worker thread, on the path the walk builds anyway (ending in a path
@@ -795,19 +843,60 @@ begin
   Result := False;
 end;
 
-// Counts the files the search patterns match in the skipped folders - each file once, by the scan's own matching.
+// True when APath (ending in a path delimiter) is one of the last walk's roots.
+function TParallelFileScannerCustom.IsScanRoot(const APath: string): Boolean;
+begin
+  for var LIndex := 0 to High(FScanRoots) do
+    if (Length(FScanRoots[LIndex]) = Length(APath)) and StartsTextOrdinal(FScanRoots[LIndex], APath) then
+      Exit(True);
+
+  Result := False;
+end;
+
+// Counts the files the search patterns match in the skipped folders - each file once, by the scan's own matching,
+// in one pass over each folder and with the walk's rules for links. The files directly in a root that lies inside a
+// skipped folder are not counted: the walk has already returned them, or counted them as excluded.
 function TParallelFileScannerCustom.GetFileCounts(const ASkippedDirectories: TStringList): Integer;
+var
+  LDirectories: TList<string>;
+  LFindData: TWin32FindData;
+  LFindHandle: THandle;
+  LName: PChar;
 begin
   Result := 0;
 
-  for var LDirectoryIndex := 0 to ASkippedDirectories.Count - 1 do
-    for var LFile in TDirectory.GetFiles(ASkippedDirectories[LDirectoryIndex], '*', TSearchOption.soAllDirectories) do
-    begin
-      var LName := ExtractFileName(LFile);
+  LDirectories := TList<string>.Create;
+  try
+    LDirectories.AddRange(ASkippedDirectories.ToStringArray);
 
-      if MatchesAnyExtension(PChar(LName), Length(LName)) then
-        Inc(Result);
+    while LDirectories.Count > 0 do
+    begin
+      var LDirectory := LDirectories.Last;
+      LDirectories.Delete(LDirectories.Count - 1);
+
+      var LCountFiles := not IsScanRoot(LDirectory);
+
+      LFindHandle := OpenDirectoryEnumeration(LDirectory, LFindData);
+      if LFindHandle <> INVALID_HANDLE_VALUE then
+      try
+        repeat
+          LName := @LFindData.cFileName[0];
+
+          if LFindData.dwFileAttributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
+          begin
+            if not SkipDirectoryEntry(LFindData, FFollowDirectoryLinks) then
+              LDirectories.Add(JoinPath(LDirectory, LName, StrLen(LName), True));
+          end
+          else if LCountFiles and MatchesAnyExtension(LName, StrLen(LName)) then
+            Inc(Result);
+        until not FindNextFile(LFindHandle, LFindData);
+      finally
+        Winapi.Windows.FindClose(LFindHandle);
+      end;
     end;
+  finally
+    LDirectories.Free;
+  end;
 end;
 
 function ComparePathsCI(AList: TStringList; AIndex1, AIndex2: Integer): Integer;
@@ -1085,8 +1174,12 @@ end;
 
 function TParallelFileScannerCustom.GetSkippedFilesCount: Integer;
 begin
-  if (FSkippedDirectories.Count > 0) and (FCachedSkippedDirectoriesFileCount = 0) then
+  // Counted once per scan - a flag of its own, as a count of 0 is a result too.
+  if not FSkippedDirectoriesCounted then
+  begin
     FCachedSkippedDirectoriesFileCount := GetFileCounts(FSkippedDirectories);
+    FSkippedDirectoriesCounted := True;
+  end;
 
   Result := FSkippedFilesCount + FCachedSkippedDirectoriesFileCount;
 end;
@@ -1110,7 +1203,7 @@ begin
 
       if LFindData.dwFileAttributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
       begin
-        if IsDotDirectory(LName) then
+        if SkipDirectoryEntry(LFindData, FFollowDirectoryLinks) then
           Continue;
 
         var LSubDirectory := JoinPath(APath, LName, LNameLength, True);
@@ -1141,21 +1234,38 @@ procedure TParallelFileScannerCustom.RunParallelWalk(const ADirectories: TArray<
   const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>);
 var
   LRoots: TArray<string>;
+begin
+  // The walk's state - exclusions, matchers, counters - lives in the scanner, so a second walk would replace it under
+  // the running one's workers. Refused before anything is touched.
+  if AtomicCmpExchange(FScanActive, 1, 0) <> 0 then
+    raise EInvalidOpException.Create('This scanner is already scanning: use a scanner of its own for each scan that '
+      + 'runs at the same time, also for one started from a ScanFiles callback');
+  try
+    FExclusions := AExclusions;
+
+    ResetCounters;
+    PrepareExclusions;
+    PrepareExtensions;
+
+    LRoots := PrepareRootDirectories(ADirectories);
+    FScanRoots := LRoots;
+
+    if Length(LRoots) = 0 then
+      Exit;
+
+    RunWalkWorkers(LRoots, AWorkerCount, AAcquireFileSink, AFinishWorker);
+  finally
+    AtomicExchange(FScanActive, 0);
+  end;
+end;
+
+procedure TParallelFileScannerCustom.RunWalkWorkers(const ARoots: TArray<string>; const AWorkerCount: Integer;
+  const AAcquireFileSink: TFunc<Integer, TDirectoryWalkProc>; const AFinishWorker: TProc<Integer>);
+var
   LWorker: TProc<Integer>;
   LWorkPool: TDirectoryWorkPool;
 begin
-  FExclusions := AExclusions;
-
-  ResetCounters;
-  PrepareExclusions;
-  PrepareExtensions;
-
-  LRoots := PrepareRootDirectories(ADirectories);
-
-  if Length(LRoots) = 0 then
-    Exit;
-
-  LWorkPool := TDirectoryWorkPool.Create(LRoots);
+  LWorkPool := TDirectoryWorkPool.Create(ARoots);
   try
     // One worker; AWorkerIndex (0..AWorkerCount-1) doubles as its slot for a private file sink.
     LWorker :=

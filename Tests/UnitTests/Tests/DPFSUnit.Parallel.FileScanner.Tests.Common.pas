@@ -57,11 +57,14 @@ type
 // Asserts that ARawFiles - a scanner's result as returned - holds every file of AExpected exactly once, and nothing
 // else.
 procedure AssertSameFiles(const AExpected: TFileSet; const ARawFiles: TArray<string>; const AWhat: string);
+// Creates the directory junction ALink pointing at the folder ATarget (mklink /J: needs no elevation). Remove it with
+// RemoveDirectory, which removes the junction itself and never touches its target.
+procedure CreateDirectoryJunction(const ALink, ATarget: string);
 
 implementation
 
 uses
-  System.IOUtils, DUnitX.TestFramework;
+  Winapi.Windows, System.IOUtils, DUnitX.TestFramework;
 
 const
   EXTENSION_PATTERNS: array[0..4] of string = ('*.pas', '*.inc', '*.dfm', '*.dpr', '*.dproj');
@@ -246,6 +249,36 @@ begin
   finally
     LActual.Free;
   end;
+end;
+
+procedure CreateDirectoryJunction(const ALink, ATarget: string);
+var
+  LCommandLine: string;
+  LExitCode: Cardinal;
+  LProcessInfo: TProcessInformation;
+  LStartupInfo: TStartupInfo;
+begin
+  LCommandLine := Format('cmd.exe /c mklink /J "%s" "%s"', [ALink, ATarget]);
+  UniqueString(LCommandLine); // CreateProcess may write to the command line
+  LStartupInfo := Default(TStartupInfo);
+  LStartupInfo.cb := SizeOf(LStartupInfo);
+
+  if not CreateProcess(nil, PChar(LCommandLine), nil, nil, False, CREATE_NO_WINDOW, nil, nil, LStartupInfo,
+    LProcessInfo) then
+    RaiseLastOSError;
+
+  try
+    WaitForSingleObject(LProcessInfo.hProcess, INFINITE);
+
+    if not GetExitCodeProcess(LProcessInfo.hProcess, LExitCode) then
+      RaiseLastOSError;
+  finally
+    CloseHandle(LProcessInfo.hThread);
+    CloseHandle(LProcessInfo.hProcess);
+  end;
+
+  if (LExitCode <> 0) or not TDirectory.Exists(ALink) then
+    raise Exception.CreateFmt('mklink /J "%s" "%s" failed with exit code %d', [ALink, ATarget, LExitCode]);
 end;
 
 end.
