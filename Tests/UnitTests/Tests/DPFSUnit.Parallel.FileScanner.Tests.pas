@@ -79,6 +79,10 @@ type
     [Test] procedure NonAsciiNamesCompareCaseInsensitively;
     [Test] procedure DominantSubtreeIsWalkedCompletely;
     [Test] procedure TreeWithoutMatchesFindsNothing;
+    [Test] procedure RelativeExclusionsFollowConvertSetting;
+    [Test] procedure PathsLongerThanMaxPathAreWalked;
+    [Test] procedure SkippedFilesCountUsesTheScansCurrentDirectory;
+    [Test] procedure RootInsideExcludedFolderIsScannedWhole;
 
     [Test] procedure WorkersCountLimitsWorkerThreads;
     [Test] procedure MoreWorkersThanCoresScanCorrectly;
@@ -282,7 +286,7 @@ begin
 end;
 
 // A root nested under an excluded prefix of another root is not reached by that root's walk, so it must stay a root
-// of its own: its own files are scanned (its subdirectories fall under the prefix too).
+// of its own - and, as it was asked for, the prefix it lies under does not apply inside it: all of it is scanned.
 procedure TParallelFileScannerTestsCustom.NestedRootUnderExcludedPrefixIsScanned;
 var
   LExcludedPrefix: string;
@@ -294,16 +298,13 @@ begin
   LExcludedPrefix := TPath.GetFullPath(TPath.Combine(FScanRoots[0], '3rdPartyLibraries'));
   LNestedRoot := TPath.Combine(LExcludedPrefix, 'FastMM5');
 
-  // Everything outside the excluded prefix, plus the nested root's own files.
+  // Everything outside the excluded prefix, plus everything in the nested root.
   LExpected := TFileSet.Create;
   try
     for var LIndex := 0 to FBaseline.Count - 1 do
-      if not FBaseline.Files[LIndex].StartsWith(LExcludedPrefix.ToLower) then
+      if not FBaseline.Files[LIndex].StartsWith(LExcludedPrefix.ToLower)
+        or FBaseline.Files[LIndex].StartsWith(IncludeTrailingPathDelimiter(LNestedRoot).ToLower) then
         LExpected.Add(FBaseline.Files[LIndex]);
-
-    for var LFile in TDirectory.GetFiles(LNestedRoot, '*', TSearchOption.soTopDirectoryOnly) do
-      if TScanTree.MatchesAnyExtension(TPath.GetFileName(LFile)) then
-        LExpected.Add(LFile);
 
     LScanner := CreateScanner;
     try
@@ -954,7 +955,7 @@ begin
   end;
 end;
 
-// Roots Source and Source\3rdPartyLibraries\FastMM5 with 3rdPartyLibraries excluded: the nested root's own files are
+// Roots Source and Source\3rdPartyLibraries\FastMM5 with 3rdPartyLibraries excluded: the nested root's files are all
 // returned, so SkippedFilesCount counts every other file under 3rdPartyLibraries exactly once - whatever order the
 // workers met the folders in, so the scan is repeated.
 procedure TParallelFileScannerTestsCustom.SkippedFilesCountCountsNestedRootFilesOnce;
@@ -973,7 +974,7 @@ begin
 
   for var LIndex := 0 to FBaseline.Count - 1 do
     if FBaseline.Files[LIndex].StartsWith(LExcludedPrefix.ToLower)
-      and (ExtractFilePath(FBaseline.Files[LIndex]) <> LNestedRoot.ToLower) then
+      and not FBaseline.Files[LIndex].StartsWith(LNestedRoot.ToLower) then
       Inc(LExpectedCount);
 
   Assert.IsTrue(LExpectedCount > 0, 'The tree must hold files under 3rdPartyLibraries');
@@ -1551,6 +1552,222 @@ begin
     finally
       LScanner.Free;
     end;
+  finally
+    LTree.Free;
+  end;
+end;
+
+// Relative prefixes and patterns, from the tree's root as the current directory. With ConvertRelativePathsToAbsolute
+// they are resolved like the root - '..' included - so they exclude what they name. Without it they are compared as
+// written, so only the ones written like the root ('A\...') match.
+procedure TParallelFileScannerTestsCustom.RelativeExclusionsFollowConvertSetting;
+var
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LSavedDirectory: string;
+  LScanner: TParallelFileScannerCustom;
+  LTree: TTempTree;
+begin
+  LTree := TTempTree.Create(['A\keep.pas', 'A\Skip\s.pas', 'A\Pat\p.pas', 'A\Pat\Sub\q.pas', 'A\Up\u.pas',
+    'A\Wild\w.pas', 'A\Files\f.pas', 'A\Files\g.pas']);
+  try
+    LSavedDirectory := GetCurrentDir;
+    LScanner := CreateScanner;
+    try
+      Assert.IsTrue(SetCurrentDir(LTree.Root), 'SetCurrentDir');
+      LExclusions.PathPrefixes := ['A\Skip'];
+      LExclusions.Patterns := ['A\Pat\*', '..\' + ExtractFileName(LTree.Root) + '\A\Up\', 'A\W*\*', 'A\Files\f.pas'];
+
+      LExpected := LTree.FileSet(['A\keep.pas', 'A\Files\g.pas']);
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, ['A'], LExclusions),
+          'GetFileList, relative exclusions, ConvertRelativePathsToAbsolute');
+        Assert.AreEqual(6, LScanner.SkippedFilesCount, 'SkippedFilesCount, ConvertRelativePathsToAbsolute');
+      finally
+        LExpected.Free;
+      end;
+
+      LScanner.ConvertRelativePathsToAbsolute := False;
+      LExpected := LTree.FileSet(['A\keep.pas', 'A\Up\u.pas', 'A\Files\g.pas']);
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, ['A'], LExclusions), 'GetFileList, everything as written');
+        Assert.AreEqual(5, LScanner.SkippedFilesCount, 'SkippedFilesCount, everything as written');
+      finally
+        LExpected.Free;
+      end;
+    finally
+      SetCurrentDir(LSavedDirectory);
+      LScanner.Free;
+    end;
+  finally
+    LTree.Free;
+  end;
+end;
+
+// Folders deeper than MAX_PATH characters: walked, counted when pruned, and usable as a root - absolute or relative.
+procedure TParallelFileScannerTestsCustom.PathsLongerThanMaxPathAreWalked;
+const
+  LEVEL_COUNT = 8;
+var
+  LDeep: string;
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LMiddle: string;
+  LNoExclusions: TFileScanExclusions;
+  LSavedDirectory: string;
+  LScanner: TParallelFileScannerCustom;
+  LTree: TTempTree;
+begin
+  LDeep := '';
+  for var LLevel := 1 to LEVEL_COUNT do
+  begin
+    LDeep := LDeep + Format('Level%d_%s\', [LLevel, StringOfChar('x', 40)]);
+
+    if LLevel = 3 then
+      LMiddle := LDeep;
+  end;
+
+  LTree := TTempTree.Create([LMiddle + 'middle.pas', LDeep + 'deep.pas', LDeep + 'Pruned\a.pas', LDeep + 'Pruned\b.pas']);
+  try
+    Assert.IsTrue(Length(LTree.Path(LDeep)) > MAX_PATH, 'The deep folder must be longer than MAX_PATH');
+    LSavedDirectory := GetCurrentDir;
+    LScanner := CreateScanner;
+    try
+      LExclusions.PathPrefixes := [LTree.Path(LDeep + 'Pruned')];
+      LExpected := LTree.FileSet([LMiddle + 'middle.pas', LDeep + 'deep.pas']);
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, [LTree.Root], LExclusions), 'GetFileList, long paths');
+        Assert.AreEqual(2, LScanner.SkippedFilesCount, 'SkippedFilesCount of a long pruned folder');
+      finally
+        LExpected.Free;
+      end;
+
+      LExpected := LTree.FileSet([LDeep + 'deep.pas', LDeep + 'Pruned\a.pas', LDeep + 'Pruned\b.pas']);
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, [LTree.Path(LDeep)], LNoExclusions),
+          'GetFileList, a root longer than MAX_PATH');
+      finally
+        LExpected.Free;
+      end;
+
+      Assert.IsTrue(SetCurrentDir(LTree.Root), 'SetCurrentDir');
+      LScanner.ConvertRelativePathsToAbsolute := False;
+      LExpected := LTree.FileSet([LMiddle + 'middle.pas', LDeep + 'deep.pas', LDeep + 'Pruned\a.pas',
+        LDeep + 'Pruned\b.pas']);
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, ['.'], LNoExclusions),
+          'GetFileList, relative root, long paths');
+      finally
+        LExpected.Free;
+      end;
+    finally
+      SetCurrentDir(LSavedDirectory);
+      LScanner.Free;
+    end;
+  finally
+    LTree.Free;
+  end;
+end;
+
+// The files in pruned folders are counted when SkippedFilesCount is read: a relative root still means the folder it
+// meant during the scan, also after the current directory changed - here to a folder holding a look-alike tree.
+procedure TParallelFileScannerTestsCustom.SkippedFilesCountUsesTheScansCurrentDirectory;
+var
+  LExclusions: TFileScanExclusions;
+  LSavedDirectory: string;
+  LScanner: TParallelFileScannerCustom;
+  LTree: TTempTree;
+begin
+  LTree := TTempTree.Create(['A\keep.pas', 'A\Skip\s1.pas', 'A\Skip\Sub\s2.pas', 'Other\A\Skip\o1.pas',
+    'Other\A\Skip\o2.pas', 'Other\A\Skip\o3.pas']);
+  try
+    LSavedDirectory := GetCurrentDir;
+    LScanner := CreateScanner;
+    try
+      LScanner.ConvertRelativePathsToAbsolute := False;
+      LExclusions.PathPrefixes := ['A\Skip'];
+      Assert.IsTrue(SetCurrentDir(LTree.Root), 'SetCurrentDir');
+
+      Assert.AreEqual(1, Integer(Length(ScanToStringList(LScanner, ['A'], LExclusions))), 'Files found');
+
+      Assert.IsTrue(SetCurrentDir(LTree.Path('Other')), 'SetCurrentDir to the look-alike');
+      Assert.AreEqual(2, LScanner.SkippedFilesCount, 'SkippedFilesCount after the current directory changed');
+    finally
+      SetCurrentDir(LSavedDirectory);
+      LScanner.Free;
+    end;
+  finally
+    LTree.Free;
+  end;
+end;
+
+// A root inside an excluded folder was asked for, so the exclusions that cover it do not exclude it - whether 3rdParty
+// is excluded by prefix or by pattern. The other exclusions still apply inside it, and a covering pattern still
+// applies below it: '*\3rdParty\*' excludes OurFork\Lib\3rdParty, while the prefix, one fixed folder, does not.
+// SkippedFilesCount counts each skipped file once, and nested roots produce no file twice.
+procedure TParallelFileScannerTestsCustom.RootInsideExcludedFolderIsScannedWhole;
+const
+  FORK = 'App\3rdParty\OurFork\';
+var
+  LTree: TTempTree;
+
+  procedure AssertScan(const ARoots, APrefixes, APatterns, AExpected: array of string; const AExpectedSkipped: Integer;
+    const AWhat: string);
+  var
+    LExclusions: TFileScanExclusions;
+    LExpected: TFileSet;
+    LRoots: TArray<string>;
+    LScanner: TParallelFileScannerCustom;
+  begin
+    LRoots := [];
+    for var LRoot in ARoots do
+      LRoots := LRoots + [LTree.Path(LRoot)];
+
+    LExclusions.PathPrefixes := [];
+    for var LPrefix in APrefixes do
+      LExclusions.PathPrefixes := LExclusions.PathPrefixes + [LTree.Path(LPrefix)];
+
+    LExclusions.Patterns := [];
+    for var LPattern in APatterns do
+      LExclusions.Patterns := LExclusions.Patterns + [LPattern];
+
+    LExpected := LTree.FileSet(AExpected);
+    try
+      LScanner := CreateScanner;
+      try
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, LRoots, LExclusions), AWhat);
+        Assert.AreEqual(AExpectedSkipped, LScanner.SkippedFilesCount, AWhat + ': SkippedFilesCount');
+      finally
+        LScanner.Free;
+      end;
+    finally
+      LExpected.Free;
+    end;
+  end;
+
+begin
+  LTree := TTempTree.Create(['App\Main.pas', 'App\3rdParty\Other\Other.pas', FORK + 'Fork.pas',
+    FORK + 'Source\ForkCore.pas', FORK + 'Demos\Demo1.pas', FORK + 'Lib\3rdParty\X.pas']);
+  try
+    AssertScan(['App', FORK], [], ['*\Demos\*', '*\3rdParty\*'],
+      ['App\Main.pas', FORK + 'Fork.pas', FORK + 'Source\ForkCore.pas'], 3, 'Pattern');
+    AssertScan(['App', FORK], ['App\3rdParty'], ['*\Demos\*'],
+      ['App\Main.pas', FORK + 'Fork.pas', FORK + 'Source\ForkCore.pas', FORK + 'Lib\3rdParty\X.pas'], 2, 'Prefix');
+    AssertScan(['App', FORK], ['App\3rdParty'], ['*\Demos\*', '*\3rdParty\*'],
+      ['App\Main.pas', FORK + 'Fork.pas', FORK + 'Source\ForkCore.pas'], 3, 'Prefix and pattern');
+
+    // The fork alone: the same, without App.
+    AssertScan([FORK], [], ['*\Demos\*', '*\3rdParty\*'], [FORK + 'Fork.pas', FORK + 'Source\ForkCore.pas'], 2,
+      'Pattern, the fork alone');
+    AssertScan([FORK], ['App\3rdParty'], ['*\Demos\*'],
+      [FORK + 'Fork.pas', FORK + 'Source\ForkCore.pas', FORK + 'Lib\3rdParty\X.pas'], 1, 'Prefix, the fork alone');
+
+    // A root inside the fork that the fork's walk reaches anyway is dropped; one it skips is scanned whole.
+    AssertScan(['App', FORK, FORK + 'Source'], [], ['*\Demos\*', '*\3rdParty\*'],
+      ['App\Main.pas', FORK + 'Fork.pas', FORK + 'Source\ForkCore.pas'], 3, 'Pattern, a root the fork reaches');
+    AssertScan(['App', FORK, FORK + 'Lib\3rdParty'], [], ['*\Demos\*', '*\3rdParty\*'],
+      ['App\Main.pas', FORK + 'Fork.pas', FORK + 'Source\ForkCore.pas', FORK + 'Lib\3rdParty\X.pas'], 2,
+      'Pattern, a root the fork skips');
   finally
     LTree.Free;
   end;

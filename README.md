@@ -43,23 +43,47 @@ unit on the search path; it is pure RTL.
     only: `C:\Code\Lib` does not exclude `C:\Code\Library`.
   - `PathSuffixes` exclude files whose full path ends with one of them.
   - Blank entries are ignored, and `/` is read as `\` (in roots too).
+  - With `ConvertRelativePathsToAbsolute`, relative roots are resolved against the current
+    directory, and so are relative `PathPrefixes` and patterns that start with a relative path
+    (`Source\Lib\*`, `..\Shared\Generated\`): they are compared with absolute paths. Without
+    it, roots, prefixes and patterns are used as written, so write them alike.
 - Roots are walked once each: a root that is the same as, or inside, another root is
   dropped before the walk (case-insensitively), so overlapping roots do not produce
-  duplicate results. A nested root inside an excluded folder is still scanned, since it
-  was asked for explicitly.
+  duplicate results.
+- A root inside an excluded folder is scanned whole, since it was asked for explicitly: the
+  exclusions that cover it &mdash; a prefix it lies under, a pattern that matches the root
+  folder itself &mdash; do not exclude it. Every other exclusion still applies inside it, and
+  a covering pattern still applies below it. With roots `C:\Code\App` and
+  `C:\Code\App\3rdParty\OurFork`:
+
+  | File | `*\3rdParty\*` | prefix `C:\Code\App\3rdParty` |
+  | --- | --- | --- |
+  | `App\Main.pas` | found | found |
+  | `App\3rdParty\Other\Other.pas` | skipped | skipped |
+  | `OurFork\Fork.pas`, `OurFork\Source\Core.pas` | found | found |
+  | `OurFork\Demos\Demo1.pas`, with `*\Demos\*` too | skipped | skipped |
+  | `OurFork\Lib\3rdParty\X.pas` | skipped | found |
+
+  The last row differs because a prefix names one fixed folder, while the pattern means any
+  `3rdParty` folder &mdash; also one inside the fork.
 - Directory links inside the tree &mdash; junctions, directory symbolic links, volume mount
   points &mdash; are not followed: they lead to folders found elsewhere anyway, or back up the
   tree. Set `FollowDirectoryLinks` to walk into them (a link back up the tree then repeats it
   until the paths get too long, so prune such links with an exclusion). A root that is
   itself a link is scanned. Other reparse points, such as OneDrive's cloud-file folders, are
   ordinary folders.
+- Paths longer than `MAX_PATH` (260 characters) are walked too, without the application opting
+  in to long paths: a long folder path is opened with the `\\?\` prefix, while the paths
+  returned stay ordinary ones.
 - Search patterns, path prefixes and filename suffixes are compared ordinally and
   case-insensitively, the way the file system compares names &mdash; not by the current
   locale's rules.
 - The sorted order is `CompareText` order.
 - `SkippedFilesCount` counts the excluded files, each once: those excluded by a pattern or
-  suffix, plus the files the search patterns match inside pruned folders (counted on demand,
-  in one pass over each pruned folder).
+  suffix, plus the files the search patterns match inside pruned folders. Those are counted
+  when `SkippedFilesCount` is first read after a scan, in one pass over each pruned folder
+  (a scan never reads them otherwise), so they are the files there at that moment; relative
+  folders still mean what they meant during the scan, even if the current directory changed.
 - One scan at a time per scanner: starting a scan on a scanner that is already scanning
   &mdash; from another thread, or from its own `ScanFiles` callback &mdash; raises
   `EInvalidOpException`. Give each concurrent scan a scanner of its own.
@@ -151,8 +175,10 @@ reaches the caller, a scan from inside a callback works (and one on the busy sca
 is refused), directory links are not followed unless asked for, `SkippedFilesCount` counts
 each file once, `/` works like `\`, and back-to-back scans pile up no handles or memory.
 Throw-away trees under `%TEMP%` cover what the `Source` tree does not hold: odd and non-ASCII
-file names, case-insensitive matching, a dominant subtree walked by 1, 3 and 8 workers, and
-trees without a single match. The result APIs are also checked unsorted, appended to non-empty
+file names, case-insensitive matching, a dominant subtree walked by 1, 3 and 8 workers,
+trees without a single match, paths longer than `MAX_PATH`, relative exclusions with and
+without `ConvertRelativePathsToAbsolute`, and roots inside excluded folders (the table above,
+by prefix and by pattern, with exact `SkippedFilesCount`s). The result APIs are also checked unsorted, appended to non-empty
 and `Sorted` lists, with missing, file and relative roots, and with invalid search patterns. Then the OTL value queue, the priority conversion, the Spring4D
 `IList<string>` and `TFileScanWorkers` itself (defaults, limits, the `Initialize` helpers,
 the scanner owning it) are tested.

@@ -28,6 +28,9 @@ type
   //   (its path plus '\') prunes that whole folder from the walk; every pattern is also matched against each file's
   //   full path. A pattern ending in '\' names folders, as in .gitignore: '*\__history\' means '*\__history\*'. A
   //   malformed pattern raises EInOutArgumentException when the scan starts.
+  // A root inside an excluded folder is scanned whole, as it was asked for: a prefix it lies under does not apply
+  // inside it, and a pattern that matches the root folder itself only applies to the part of a path below the root -
+  // so '*\3rdParty\*' still excludes a 3rdParty folder inside it.
   TFileScanExclusions = record
   strict private
     FPathPrefixes: TArray<string>;
@@ -99,7 +102,42 @@ type
   // Directory links - junctions, directory symbolic links, volume mount points - inside the scanned tree are not
   // followed unless FollowDirectoryLinks is set: they lead to folders found elsewhere anyway, or back up the tree. A
   // root that is itself a link is scanned.
+  //
+  // Paths longer than MAX_PATH are walked too, without the process opting in to long paths: a long folder path is
+  // opened with the \\?\ prefix, while the paths returned stay as the walk builds them.
   TParallelFileScannerCustom = class(TObject)
+  strict private type
+    // What the walk excludes: the scan's exclusions as given, or those for inside one root that lies in an excluded
+    // folder. Such a root was asked for explicitly, so the exclusions that cover it - a prefix it lies under, a
+    // pattern that matches the root folder itself - do not exclude it: a covering prefix is dropped, and a covering
+    // pattern is matched only against the part of a path below the root, so '*\3rdParty\*' still excludes a 3rdParty
+    // folder inside it. Read concurrently by the workers; never changed after Create.
+    TExclusionRules = class(TObject)
+    strict private
+      FBelowExcludeMatcher: TWildCard; // covering patterns, against the part of a file path below the root
+      FBelowPruneMatcher: TWildCard;   // covering patterns ending in '*', against the part of a folder path below it
+      FExcludeMatcher: TWildCard;      // the other patterns, against full file paths
+      FHasBelowExclude: Boolean;
+      FHasBelowPrune: Boolean;
+      FHasExclude: Boolean;
+      FHasPrune: Boolean;
+      FLiftsAny: Boolean;
+      FPrefixes: TArray<string>;       // with trailing delimiters: whole folders
+      FPruneMatcher: TWildCard;        // the other patterns ending in '*', against folder paths + '\'
+      FRoot: string;
+      FSuffixes: TArray<string>;
+      function BelowRoot(const APath: string): string;
+    public
+      // ARoot (ending in a path delimiter) is the root the rules are for; '' gives every exclusion as it is.
+      constructor Create(const ARoot: string; const APrefixes, ASuffixes, APatterns: TArray<string>);
+      // True when the folder APath (ending in a path delimiter, inside Root) is excluded.
+      function ExcludesDirectory(const APath: string): Boolean;
+      // True when the file AFileName (a full path, inside Root) is excluded.
+      function ExcludesFile(const AFileName: string): Boolean;
+      // True when an exclusion covers Root, i.e. these rules differ from the scan's own.
+      property LiftsAny: Boolean read FLiftsAny;
+      property Root: string read FRoot;
+    end;
   strict private
     FSkippedDirectories: TStringList;
     FCachedSkippedDirectoriesFileCount: Integer;
@@ -107,13 +145,13 @@ type
     FFollowDirectoryLinks: Boolean;
     FScanActive: Integer;              // 1 while a walk runs: one scan at a time per scanner
     FScanRoots: TArray<string>;        // the last walk's roots, after PrepareRootDirectories
+    FScanCurrentDirectory: string;     // the current directory when the last walk started: what relative roots meant
     FSkippedDirectoriesCounted: Boolean;
     FExcludedPrefixes: TArray<string>; // FExclusions.PathPrefixes with trailing delimiters: whole folders (per scan)
     FExcludedSuffixes: TArray<string>; // FExclusions.PathSuffixes (per scan)
-    FExcludeMatcher: TWildCard;        // every exclusion pattern, against full file paths (per scan)
-    FHasExcludePatterns: Boolean;
-    FHasPrunePatterns: Boolean;
-    FPruneMatcher: TWildCard;          // exclusion patterns ending in '*', against folder paths + '\' (per scan)
+    FExcludedPatterns: TArray<string>; // FExclusions.Patterns, validated and ready to match (per scan)
+    FScanRules: TExclusionRules;       // the exclusions as given (per scan)
+    FRootRules: TArray<TExclusionRules>; // for the roots that lie in an excluded folder (per scan); usually empty
     FFastExtensions: TArray<string>;   // extensions (with dot, e.g. '.pas') for simple "*.ext" patterns
     FComplexPatterns: TArray<string>;  // include patterns WildCardMatcher matches against the file name
     FComplexMatcher: TWildCard;        // FComplexPatterns, compiled (per scan)
@@ -121,7 +159,11 @@ type
     function GetFileCounts(const ASkippedDirectories: TStringList): Integer;
     function GetSkippedFilesCount: Integer;
     function IsScanRoot(const APath: string): Boolean;
+    // The rules for APath: those of the innermost root with rules of its own that APath lies strictly inside, or the
+    // scan's.
+    function RulesFor(const APath: string): TExclusionRules;
     procedure AddSkippedDirectories(const APath: string);
+    procedure FreeRules;
   strict protected
     FDiskScanTimeForFiles: Double;
     FExclusions: TFileScanExclusions;
@@ -199,8 +241,13 @@ type
       const AFileFoundCallback: TFileFoundCallback; var AFileCount: Integer): Boolean; overload;
 
     property DiskScanTimeForFiles: Double read FDiskScanTimeForFiles; // in milliseconds
+    // The files the last scan excluded. Those inside pruned folders are counted when this is first read - one pass
+    // over each pruned folder, which a scan never reads otherwise - so they are the files there at that moment.
     property SkippedFilesCount: Integer read GetSkippedFilesCount;
     property SortResultList: Boolean read FSortResultList write FSortResultList;
+    // Resolve relative roots against the current directory, so the results are absolute paths. Relative path prefixes,
+    // and patterns that start with a relative path, are then resolved the same way. Off: roots, prefixes and patterns
+    // are used as written, so write them alike.
     property ConvertRelativePathsToAbsolute: Boolean read FConvertRelativePathsToAbsolute write FConvertRelativePathsToAbsolute;
     // Walk into directory links (junctions, directory symbolic links, volume mount points) too. Off by default: a
     // link leads to a folder found elsewhere anyway - its files would then come twice - or back up the tree, which
@@ -229,20 +276,88 @@ uses
 const
   // Not declared in Winapi.Windows: hint FindFirstFileEx to use a larger buffer (fewer kernel round-trips).
   FIND_FIRST_EX_LARGE_FETCH = $00000002;
+  // Win32 file calls refuse a path of MAX_PATH characters or more (a folder: MAX_PATH - 12) unless it has the \\?\
+  // prefix, or the process opted in to long paths - its manifest and the computer's registry both. A folder path this
+  // long or longer gets the prefix.
+  LONG_PATH_LENGTH = MAX_PATH - 12;
   // TThreadPriority as SetThreadPriority values - the same mapping TThread.Priority uses.
   THREAD_PRIORITIES: array[TThreadPriority] of Integer = (THREAD_PRIORITY_IDLE, THREAD_PRIORITY_LOWEST,
     THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_NORMAL, THREAD_PRIORITY_ABOVE_NORMAL, THREAD_PRIORITY_HIGHEST,
     THREAD_PRIORITY_TIME_CRITICAL);
 
+// True for a path Windows does not resolve against a current directory: 'C:\...', or '\\...' (UNC, \\?\, \\.\).
+function IsFullyQualifiedPath(const APath: string): Boolean;
+begin
+  Result := ((Length(APath) >= 3) and (APath[2] = ':') and (APath[3] = '\'))
+    or ((Length(APath) >= 2) and (APath[1] = '\') and (APath[2] = '\'));
+end;
+
+// GetFullPathName: APath resolved against the current directory, with '.' and '..' resolved - of any length, unlike
+// TPath.GetFullPath before Windows 10 1607, and without raising. APath itself if it fails.
+function FullPathName(const APath: string): string;
+var
+  LFilePart: PChar;
+  LLength: Cardinal;
+begin
+  SetLength(Result, MAX_PATH);
+  LLength := GetFullPathName(PChar(APath), Length(Result), PChar(Result), LFilePart);
+
+  if LLength > Cardinal(Length(Result)) then
+  begin
+    SetLength(Result, LLength);
+    LLength := GetFullPathName(PChar(APath), LLength, PChar(Result), LFilePart);
+  end;
+
+  if (LLength = 0) or (LLength > Cardinal(Length(Result))) then
+    Exit(APath);
+
+  SetLength(Result, LLength);
+end;
+
+// APath as the Win32 file calls take it, whatever its length: a relative path resolved against the current directory
+// and, when long, with the \\?\ prefix. The prefix also turns off Windows' own path processing, so '.' and '..' are
+// resolved here first. A short absolute path is returned as it is, without allocating.
+function Win32Path(const APath: string): string;
+begin
+  if IsFullyQualifiedPath(APath) then
+    Result := APath
+  else
+    Result := FullPathName(APath);
+
+  if (Length(Result) < LONG_PATH_LENGTH) or Result.StartsWith('\\?\') or Result.StartsWith('\\.\') then
+    Exit;
+
+  if (Pos('\.\', Result) > 0) or (Pos('\..\', Result) > 0) then
+    Result := FullPathName(Result);
+
+  if Result.StartsWith('\\') then
+    Result := '\\?\UNC\' + Result.Substring(2)
+  else
+    Result := '\\?\' + Result;
+end;
+
+// True when APath is an existing folder (or a link to one), whatever its length.
+function DirectoryExistsAnyLength(const APath: string): Boolean;
+var
+  LAttributes: Cardinal;
+begin
+  if Trim(APath) = '' then
+    Exit(False);
+
+  LAttributes := GetFileAttributes(PChar(Win32Path(IncludeTrailingPathDelimiter(APath))));
+  Result := (LAttributes <> INVALID_FILE_ATTRIBUTES) and (LAttributes and FILE_ATTRIBUTE_DIRECTORY <> 0);
+end;
+
 // Opens ADirectory (which ends in a path delimiter) for enumeration via FindFirstFileEx. FindExInfoBasic
 // skips 8.3 short-name retrieval and FIND_FIRST_EX_LARGE_FETCH fetches in larger batches - both markedly
 // faster than System.SysUtils.FindFirst (which wraps FindFirstFile with short-name generation and small
-// buffers) on directory-heavy scans. Returns INVALID_HANDLE_VALUE if the directory cannot be opened
-// (AFindData is then undefined); otherwise iterate with FindNextFile and close with Winapi.Windows.FindClose.
+// buffers) on directory-heavy scans. Paths of any length (Win32Path). Returns INVALID_HANDLE_VALUE if the directory
+// cannot be opened (AFindData is then undefined); otherwise iterate with FindNextFile and close with
+// Winapi.Windows.FindClose.
 function OpenDirectoryEnumeration(const ADirectory: string; var AFindData: TWin32FindData): THandle;
 begin
-  Result := FindFirstFileEx(PChar(ADirectory + '*'), FindExInfoBasic, @AFindData, FindExSearchNameMatch, nil,
-    FIND_FIRST_EX_LARGE_FETCH);
+  Result := FindFirstFileEx(PChar(Win32Path(ADirectory) + '*'), FindExInfoBasic, @AFindData, FindExSearchNameMatch,
+    nil, FIND_FIRST_EX_LARGE_FETCH);
 end;
 
 // True for the '.' and '..' entries every directory enumeration returns.
@@ -578,56 +693,166 @@ begin
   SetCount(FCount);
 end;
 
+{ TParallelFileScannerCustom.TExclusionRules }
+
+constructor TParallelFileScannerCustom.TExclusionRules.Create(const ARoot: string; const APrefixes, ASuffixes,
+  APatterns: TArray<string>);
+var
+  LBelow: TArray<string>;
+  LBelowPrune: TArray<string>;
+  LOther: TArray<string>;
+  LOtherPrune: TArray<string>;
+begin
+  inherited Create;
+
+  FRoot := ARoot;
+  FSuffixes := ASuffixes;
+  FPrefixes := [];
+
+  // A prefix the root lies under names a folder above the root (or the root itself): nothing below the root can be
+  // told apart by it, so inside the root it is simply dropped.
+  for var LIndex := 0 to High(APrefixes) do
+    if (ARoot <> '') and StartsTextOrdinal(APrefixes[LIndex], ARoot) then
+      FLiftsAny := True
+    else
+      FPrefixes := FPrefixes + [APrefixes[LIndex]];
+
+  LBelow := [];
+  LBelowPrune := [];
+  LOther := [];
+  LOtherPrune := [];
+
+  // A pattern ending in '*' that matches "Folder\" matches every path under it as well, so it may prune the walk at
+  // that folder. Any other pattern only says something about files. A pattern covers the root when it matches the
+  // root folder itself.
+
+  for var LIndex := 0 to High(APatterns) do
+  begin
+    var LPattern := APatterns[LIndex];
+
+    if (ARoot <> '') and TWildCard.Create(LPattern).Match(ARoot) then
+    begin
+      FLiftsAny := True;
+      LBelow := LBelow + [LPattern];
+
+      if LPattern.EndsWith('*') then
+        LBelowPrune := LBelowPrune + [LPattern];
+    end
+    else
+    begin
+      LOther := LOther + [LPattern];
+
+      if LPattern.EndsWith('*') then
+        LOtherPrune := LOtherPrune + [LPattern];
+    end;
+  end;
+
+  FExcludeMatcher := TWildCard.Create(LOther);
+  FHasExclude := Length(LOther) > 0;
+  FPruneMatcher := TWildCard.Create(LOtherPrune);
+  FHasPrune := Length(LOtherPrune) > 0;
+  FBelowExcludeMatcher := TWildCard.Create(LBelow);
+  FHasBelowExclude := Length(LBelow) > 0;
+  FBelowPruneMatcher := TWildCard.Create(LBelowPrune);
+  FHasBelowPrune := Length(LBelowPrune) > 0;
+end;
+
+// The part of APath below Root, with the delimiter it starts with: 'C:\Fork\Lib\3rdParty\' in root 'C:\Fork\' is
+// '\Lib\3rdParty\', which '*\3rdParty\*' matches.
+function TParallelFileScannerCustom.TExclusionRules.BelowRoot(const APath: string): string;
+begin
+  Result := APath.Substring(Length(FRoot) - 1);
+end;
+
+// Called once per subdirectory from every worker thread, on the path the walk builds anyway (ending in a path
+// delimiter) - no allocation, except below a root with rules of its own. The prefix array is indexed rather than walked
+// with for..in, which would copy each shared string and bump its reference count from all threads at once.
+function TParallelFileScannerCustom.TExclusionRules.ExcludesDirectory(const APath: string): Boolean;
+begin
+  for var LIndex := 0 to High(FPrefixes) do
+    if StartsTextOrdinal(FPrefixes[LIndex], APath) then
+      Exit(True);
+
+  if FHasPrune and FPruneMatcher.Match(APath) then
+    Exit(True);
+
+  Result := FHasBelowPrune and FBelowPruneMatcher.Match(BelowRoot(APath));
+end;
+
+// Called for every file that passed the search patterns, on its full path, which is built for it anyway.
+function TParallelFileScannerCustom.TExclusionRules.ExcludesFile(const AFileName: string): Boolean;
+begin
+  for var LIndex := 0 to High(FSuffixes) do
+    if EndsTextOrdinal(FSuffixes[LIndex], AFileName) then
+      Exit(True);
+
+  if FHasExclude and FExcludeMatcher.Match(AFileName) then
+    Exit(True);
+
+  Result := FHasBelowExclude and FBelowExcludeMatcher.Match(BelowRoot(AFileName));
+end;
+
 { TParallelFileScannerCustom }
 
-// APath ends in a path delimiter, as do the folders already listed, so a folder is only ever found inside a whole
-// listed folder, never inside a sibling whose name merely starts the same. The list stays free of nesting whatever
-// order the workers add folders in - a folder inside another is counted with it - so no file is counted twice.
+// Every walk skips its own folders - no root's walk enters another's, and none enters a folder it skipped - so no
+// folder is listed twice, and none inside another from the same walk. One walk's skipped folder can hold another root,
+// though, with skipped folders of its own: GetFileCounts leaves every root to its own walk's entries.
 procedure TParallelFileScannerCustom.AddSkippedDirectories(const APath: string);
 begin
   // Called from ScanDirectory, which runs on multiple worker threads, so
   // access to the shared FSkippedDirectories list must be serialized.
   FLock.Enter(FSkippedDirectories);
   try
-    // Already listed, or inside a listed folder.
-    for var LIndex := 0 to FSkippedDirectories.Count - 1 do
-      if StartsTextOrdinal(FSkippedDirectories[LIndex], APath) then
-        Exit;
-
-    // Listed folders inside this one: possible when a root inside an excluded folder was walked first.
-    for var LIndex := FSkippedDirectories.Count - 1 downto 0 do
-      if StartsTextOrdinal(APath, FSkippedDirectories[LIndex]) then
-        FSkippedDirectories.Delete(LIndex);
-
     FSkippedDirectories.Add(APath);
   finally
     FLock.Exit(FSkippedDirectories);
   end;
 end;
 
+procedure TParallelFileScannerCustom.FreeRules;
+begin
+  for var LRules in FRootRules do
+    LRules.Free;
+
+  FRootRules := [];
+  FreeAndNil(FScanRules);
+end;
+
+function TParallelFileScannerCustom.RulesFor(const APath: string): TExclusionRules;
+var
+  LLength: Integer;
+begin
+  Result := FScanRules;
+  LLength := 0;
+
+  // Strictly inside: a root folder itself is judged by the walk around it, which must skip it - or that walk would
+  // enter the root too, and its files would come twice.
+  for var LIndex := 0 to High(FRootRules) do
+    if (Length(FRootRules[LIndex].Root) > LLength) and (Length(FRootRules[LIndex].Root) < Length(APath))
+      and StartsTextOrdinal(FRootRules[LIndex].Root, APath) then
+    begin
+      Result := FRootRules[LIndex];
+      LLength := Length(Result.Root);
+    end;
+end;
+
+// Also builds the rules of the roots that lie in an excluded folder (FRootRules), which the walk then uses inside them.
 function TParallelFileScannerCustom.PrepareRootDirectories(const ADirectories: TArray<string>): TArray<string>;
 
-  // True when another root already covers root AIndex: the same directory given again (the first spelling
-  // is kept), or an ancestor whose walk reaches it - i.e. unless it lies in an excluded folder, in which
-  // case the ancestor's walk skips it and it stays a root of its own, as before.
-  function IsCoveredRoot(const ARoots: TList<string>; const AIndex: Integer): Boolean;
+  // The innermost kept root that holds ARoot (or is the same folder): '' when none does.
+  function KeptAncestor(const ARoots: TList<string>; const AKept: TArray<Boolean>; const ARoot: string): string;
   begin
-    for var LOtherIndex := 0 to ARoots.Count - 1 do
-      if (LOtherIndex <> AIndex) and StartsTextOrdinal(ARoots[LOtherIndex], ARoots[AIndex]) then
-      begin
-        if Length(ARoots[LOtherIndex]) = Length(ARoots[AIndex]) then
-        begin
-          if LOtherIndex < AIndex then
-            Exit(True);
-        end
-        else if not ExcludedDirectory(ARoots[AIndex]) then
-          Exit(True);
-      end;
+    Result := '';
 
-    Result := False;
+    for var LIndex := 0 to ARoots.Count - 1 do
+      if AKept[LIndex] and (Length(ARoots[LIndex]) > Length(Result))
+        and StartsTextOrdinal(ARoots[LIndex], ARoot) then
+        Result := ARoots[LIndex];
   end;
 
 var
+  LKept: TArray<Boolean>;
+  LOrder: TArray<Integer>;
   LRoots: TList<string>;
 begin
   LRoots := TList<string>.Create;
@@ -636,7 +861,7 @@ begin
     begin
       var LRootPath := NormalizeDelimiters(LRoot);
 
-      if not TDirectory.Exists(LRootPath) then
+      if not DirectoryExistsAnyLength(LRootPath) then
         Continue;
 
       // Resolve the root to an absolute path once, so every file produced from it is already
@@ -648,13 +873,56 @@ begin
         LRoots.Add(IncludeTrailingPathDelimiter(LRootPath));
     end;
 
-    // Drop every root another root already covers, so no file is produced twice and the results need no
-    // de-duplication pass. Decided against the full list, so the outcome does not depend on the order in
-    // which covered roots are dropped, and the roots keep the caller's order.
+    // Drop every root another root's walk reaches anyway, so no file is produced twice and the results need no
+    // de-duplication pass: the same folder given again (the first spelling is kept), or one inside a kept root that
+    // its walk does not skip. One inside an excluded folder stays a root of its own - it was asked for - and gets
+    // rules of its own. Decided outermost first, so each root is judged by the walk that would actually reach it: the
+    // innermost kept root around it, with the rules that walk uses there. Checking the root alone is enough - a
+    // folder on the way excluded means the root is excluded too, as prefixes and pruning patterns take in everything
+    // under what they match. The roots keep the caller's order.
+    SetLength(LOrder, LRoots.Count);
+    SetLength(LKept, LRoots.Count);
+
+    for var LIndex := 0 to High(LOrder) do
+      LOrder[LIndex] := LIndex;
+
+    TArray.Sort<Integer>(LOrder, TComparer<Integer>.Construct(
+      function(const ALeft, ARight: Integer): Integer
+      begin
+        Result := Length(LRoots[ALeft]) - Length(LRoots[ARight]);
+
+        if Result = 0 then
+          Result := ALeft - ARight;
+      end));
+
+    for var LIndex in LOrder do
+    begin
+      var LRoot := LRoots[LIndex];
+      var LAncestor := KeptAncestor(LRoots, LKept, LRoot);
+
+      if LAncestor <> '' then
+      begin
+        if Length(LAncestor) = Length(LRoot) then
+          Continue;
+
+        if not RulesFor(LRoot).ExcludesDirectory(LRoot) then
+          Continue;
+      end;
+
+      LKept[LIndex] := True;
+
+      var LRules := TExclusionRules.Create(LRoot, FExcludedPrefixes, FExcludedSuffixes, FExcludedPatterns);
+
+      if LRules.LiftsAny then
+        FRootRules := FRootRules + [LRules]
+      else
+        LRules.Free;
+    end;
+
     SetLength(Result, 0);
 
     for var LIndex := 0 to LRoots.Count - 1 do
-      if not IsCoveredRoot(LRoots, LIndex) then
+      if LKept[LIndex] then
         Result := Result + [LRoots[LIndex]];
   finally
     LRoots.Free;
@@ -673,10 +941,47 @@ procedure TParallelFileScannerCustom.PrepareExclusions;
         Result := Result + [NormalizeDelimiters(AValues[LIndex])];
   end;
 
+  // With ConvertRelativePathsToAbsolute the roots - and so every path the walk builds - are absolute, so a relative
+  // prefix is made absolute the same way, or it could never match. Without it, it is compared as written.
+  function AbsolutePrefix(const APrefix: string): string;
+  begin
+    if FConvertRelativePathsToAbsolute and not IsFullyQualifiedPath(APrefix) then
+      Result := FullPathName(APrefix)
+    else
+      Result := APrefix;
+  end;
+
+  // The same for a pattern that starts with a relative path: its folder part - up to the last delimiter before the
+  // first wildcard - is made absolute. A pattern that starts with a wildcard ('*\.git\*') matches anywhere anyway.
+  // The current directory holds no wildcard characters: Windows forbids them all in names.
+  function AbsolutePattern(const APattern: string): string;
+  var
+    LDelimiter: Integer;
+    LWildcard: Integer;
+  begin
+    if not FConvertRelativePathsToAbsolute or IsFullyQualifiedPath(APattern) then
+      Exit(APattern);
+
+    LWildcard := APattern.IndexOfAny(['*', '?', '<']);
+
+    if LWildcard = 0 then
+      Exit(APattern);
+
+    if LWildcard < 0 then
+      Exit(FullPathName(APattern));
+
+    LDelimiter := APattern.LastIndexOf('\', LWildcard - 1);
+
+    if LDelimiter < 0 then
+      Result := IncludeTrailingPathDelimiter(GetCurrentDir) + APattern
+    else
+      Result := IncludeTrailingPathDelimiter(FullPathName(APattern.Substring(0, LDelimiter + 1)))
+        + APattern.Substring(LDelimiter + 1);
+  end;
+
 var
   LErrorMessage: string;
   LPatterns: TArray<string>;
-  LPrunePatterns: TArray<string>;
 begin
   // Normalized once per scan, so the per-directory checks neither allocate nor re-normalize. Blank entries are
   // dropped: an empty prefix or suffix would otherwise match - and exclude - everything. '/' becomes '\', or the entry
@@ -685,12 +990,11 @@ begin
   FExcludedPrefixes := NonBlank(FExclusions.PathPrefixes);
 
   for var LIndex := 0 to High(FExcludedPrefixes) do
-    FExcludedPrefixes[LIndex] := IncludeTrailingPathDelimiter(FExcludedPrefixes[LIndex]);
+    FExcludedPrefixes[LIndex] := IncludeTrailingPathDelimiter(AbsolutePrefix(FExcludedPrefixes[LIndex]));
 
   FExcludedSuffixes := NonBlank(FExclusions.PathSuffixes);
 
   LPatterns := NonBlank(FExclusions.Patterns);
-  LPrunePatterns := [];
 
   for var LIndex := 0 to High(LPatterns) do
   begin
@@ -703,16 +1007,11 @@ begin
     if not TWildCard.ValidatePattern(LPatterns[LIndex], LErrorMessage) then
       raise EInOutArgumentException.CreateFmt('Exclusion pattern ''%s'': %s', [LPatterns[LIndex], LErrorMessage]);
 
-    // A pattern ending in '*' that matches "Folder\" matches every path under it as well, so it may prune the walk
-    // at that folder. Any other pattern only says something about files.
-    if LPatterns[LIndex].EndsWith('*') then
-      LPrunePatterns := LPrunePatterns + [LPatterns[LIndex]];
+    LPatterns[LIndex] := AbsolutePattern(LPatterns[LIndex]);
   end;
 
-  FExcludeMatcher := TWildCard.Create(LPatterns);
-  FHasExcludePatterns := Length(LPatterns) > 0;
-  FPruneMatcher := TWildCard.Create(LPrunePatterns);
-  FHasPrunePatterns := Length(LPrunePatterns) > 0;
+  FExcludedPatterns := LPatterns;
+  FScanRules := TExclusionRules.Create('', FExcludedPrefixes, FExcludedSuffixes, FExcludedPatterns);
 end;
 
 procedure TParallelFileScannerCustom.PrepareExtensions;
@@ -778,6 +1077,7 @@ end;
 
 destructor TParallelFileScannerCustom.Destroy;
 begin
+  FreeRules;
   FSkippedDirectories.Free;
   FExtensions.Free;
   FWorkers.Free;
@@ -794,26 +1094,16 @@ begin
   FScanRoots := [];
 end;
 
-// Called once per subdirectory from every worker thread, on the path the walk builds anyway (ending in a path
-// delimiter) - no allocation. The prefix arrays are indexed rather than walked with for..in, which would copy each
-// shared string and bump its reference count from all threads at once.
+// Called once per subdirectory from every worker thread, on the path the walk builds anyway.
 function TParallelFileScannerCustom.ExcludedDirectory(const APath: string): Boolean;
 begin
-  for var LIndex := 0 to High(FExcludedPrefixes) do
-    if StartsTextOrdinal(FExcludedPrefixes[LIndex], APath) then
-      Exit(True);
-
-  Result := FHasPrunePatterns and FPruneMatcher.Match(APath);
+  Result := RulesFor(APath).ExcludesDirectory(APath);
 end;
 
 // Called for every file that passed the search patterns, on its full path, which is built for it anyway.
 function TParallelFileScannerCustom.ExcludedFile(const AFileName: string): Boolean;
 begin
-  for var LIndex := 0 to High(FExcludedSuffixes) do
-    if EndsTextOrdinal(FExcludedSuffixes[LIndex], AFileName) then
-      Exit(True);
-
-  Result := FHasExcludePatterns and FExcludeMatcher.Match(AFileName);
+  Result := RulesFor(AFileName).ExcludesFile(AFileName);
 end;
 
 // Called for every file entry of every directory, on the raw name in the find-data buffer (no string yet).
@@ -854,9 +1144,24 @@ begin
 end;
 
 // Counts the files the search patterns match in the skipped folders - each file once, by the scan's own matching,
-// in one pass over each folder and with the walk's rules for links. The files directly in a root that lies inside a
-// skipped folder are not counted: the walk has already returned them, or counted them as excluded.
+// in one pass over each folder and with the walk's rules for links. A root that lies inside a skipped folder is left
+// out, all of it: its own walk has returned its files, counted the excluded ones and listed its own skipped folders.
+// Runs when
+// SkippedFilesCount is first read, so a relative folder is resolved against the current directory the scan had, not
+// today's.
 function TParallelFileScannerCustom.GetFileCounts(const ASkippedDirectories: TStringList): Integer;
+
+  // ADirectory as the scan meant it. Only a path relative to the current directory is resolved: one relative to a
+  // drive's root ('\Code\') or to a drive's own current directory ('D:Code\') is left as it is.
+  function ScanTimePath(const ADirectory: string): string;
+  begin
+    if (FScanCurrentDirectory = '') or IsFullyQualifiedPath(ADirectory) or ADirectory.StartsWith('\')
+      or ((Length(ADirectory) >= 2) and (ADirectory[2] = ':')) then
+      Result := ADirectory
+    else
+      Result := IncludeTrailingPathDelimiter(FScanCurrentDirectory) + ADirectory;
+  end;
+
 var
   LDirectories: TList<string>;
   LFindData: TWin32FindData;
@@ -874,9 +1179,10 @@ begin
       var LDirectory := LDirectories.Last;
       LDirectories.Delete(LDirectories.Count - 1);
 
-      var LCountFiles := not IsScanRoot(LDirectory);
+      if IsScanRoot(LDirectory) then
+        Continue;
 
-      LFindHandle := OpenDirectoryEnumeration(LDirectory, LFindData);
+      LFindHandle := OpenDirectoryEnumeration(ScanTimePath(LDirectory), LFindData);
       if LFindHandle <> INVALID_HANDLE_VALUE then
       try
         repeat
@@ -887,7 +1193,7 @@ begin
             if not SkipDirectoryEntry(LFindData, FFollowDirectoryLinks) then
               LDirectories.Add(JoinPath(LDirectory, LName, StrLen(LName), True));
           end
-          else if LCountFiles and MatchesAnyExtension(LName, StrLen(LName)) then
+          else if MatchesAnyExtension(LName, StrLen(LName)) then
             Inc(Result);
         until not FindNextFile(LFindHandle, LFindData);
       finally
@@ -1244,6 +1550,8 @@ begin
     FExclusions := AExclusions;
 
     ResetCounters;
+    FScanCurrentDirectory := GetCurrentDir;
+    FreeRules;
     PrepareExclusions;
     PrepareExtensions;
 

@@ -255,6 +255,88 @@ end;
 
 { TTempTree }
 
+// The tree is built and deleted with the Win32 calls on \\?\ paths, so it may hold paths longer than MAX_PATH, which
+// TDirectory and TFile refuse unless the process opted in to long paths.
+
+// AAbsolutePath (no trailing delimiter) with the \\?\ prefix.
+function ExtendedPath(const AAbsolutePath: string): string;
+begin
+  Result := '\\?\' + ExcludeTrailingPathDelimiter(AAbsolutePath);
+end;
+
+procedure ForceDirectoriesAnyLength(const AAbsolutePath: string);
+var
+  LPath: string;
+begin
+  LPath := ExcludeTrailingPathDelimiter(AAbsolutePath);
+
+  if GetFileAttributes(PChar(ExtendedPath(LPath))) <> INVALID_FILE_ATTRIBUTES then
+    Exit;
+
+  ForceDirectoriesAnyLength(ExtractFileDir(LPath));
+
+  if not CreateDirectory(PChar(ExtendedPath(LPath)), nil) and (GetLastError <> ERROR_ALREADY_EXISTS) then
+    RaiseLastOSError(GetLastError, ': ' + LPath);
+end;
+
+procedure WriteFileAnyLength(const AAbsolutePath, AContent: string);
+var
+  LBytes: TBytes;
+  LHandle: THandle;
+  LWritten: Cardinal;
+begin
+  LHandle := CreateFile(PChar(ExtendedPath(AAbsolutePath)), GENERIC_WRITE, 0, nil, CREATE_ALWAYS,
+    FILE_ATTRIBUTE_NORMAL, 0);
+
+  if LHandle = INVALID_HANDLE_VALUE then
+    RaiseLastOSError(GetLastError, ': ' + AAbsolutePath);
+
+  try
+    LBytes := TEncoding.UTF8.GetBytes(AContent);
+
+    if (Length(LBytes) > 0) and not WriteFile(LHandle, LBytes[0], Length(LBytes), LWritten, nil) then
+      RaiseLastOSError(GetLastError, ': ' + AAbsolutePath);
+  finally
+    CloseHandle(LHandle);
+  end;
+end;
+
+// Deletes the folder AAbsolutePath and everything in it. A directory link inside is removed itself, never entered.
+procedure DeleteTreeAnyLength(const AAbsolutePath: string);
+var
+  LFindData: TWin32FindData;
+  LFindHandle: THandle;
+  LName: string;
+  LPath: string;
+begin
+  LPath := ExcludeTrailingPathDelimiter(AAbsolutePath);
+  LFindHandle := FindFirstFile(PChar(ExtendedPath(LPath) + '\*'), LFindData);
+
+  if LFindHandle <> INVALID_HANDLE_VALUE then
+  try
+    repeat
+      LName := LFindData.cFileName;
+
+      if (LName = '.') or (LName = '..') then
+        Continue;
+
+      if LFindData.dwFileAttributes and FILE_ATTRIBUTE_DIRECTORY = 0 then
+      begin
+        SetFileAttributes(PChar(ExtendedPath(LPath + '\' + LName)), FILE_ATTRIBUTE_NORMAL);
+        DeleteFile(PChar(ExtendedPath(LPath + '\' + LName)));
+      end
+      else if LFindData.dwFileAttributes and FILE_ATTRIBUTE_REPARSE_POINT <> 0 then
+        RemoveDirectory(PChar(ExtendedPath(LPath + '\' + LName)))
+      else
+        DeleteTreeAnyLength(LPath + '\' + LName);
+    until not FindNextFile(LFindHandle, LFindData);
+  finally
+    Winapi.Windows.FindClose(LFindHandle);
+  end;
+
+  RemoveDirectory(PChar(ExtendedPath(LPath)));
+end;
+
 constructor TTempTree.Create(const AEntries: array of string);
 begin
   inherited Create;
@@ -269,7 +351,7 @@ end;
 destructor TTempTree.Destroy;
 begin
   if (FRoot <> '') and TDirectory.Exists(FRoot) then
-    TDirectory.Delete(FRoot, True);
+    DeleteTreeAnyLength(FRoot);
 
   inherited Destroy;
 end;
@@ -277,11 +359,11 @@ end;
 procedure TTempTree.Add(const AEntry: string);
 begin
   if AEntry.EndsWith('\') then
-    TDirectory.CreateDirectory(Path(AEntry))
+    ForceDirectoriesAnyLength(Path(AEntry))
   else
   begin
-    TDirectory.CreateDirectory(ExtractFileDir(Path(AEntry)));
-    TFile.WriteAllText(Path(AEntry), AEntry);
+    ForceDirectoriesAnyLength(ExtractFileDir(Path(AEntry)));
+    WriteFileAnyLength(Path(AEntry), AEntry);
   end;
 end;
 
