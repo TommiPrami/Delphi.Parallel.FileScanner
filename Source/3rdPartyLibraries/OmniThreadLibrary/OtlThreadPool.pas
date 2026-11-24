@@ -35,10 +35,48 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, Sean B. Durkin
 ///   Creation date     : 2008-06-12
-///   Last modification : 2026-09-16
-///   Version           : 2.21b
+///   Last modification : 2026-11-23
+///   Version           : 2.25
 /// </para><para>
 ///   History:
+///     2.25: 2026-11-23
+///       - Thread pools that are still alive when OTL units are finalized are stopped. A pool is
+///         referenced from its tasks, so it was not destroyed if the program exited while
+///         a task was running; the task then used finalized units and destroyed objects.
+///         (Not done in a DLL; waiting for threads in DllMain could hang.)
+///       - Task, scheduled into a pool that is being stopped, is cancelled.
+///       - Cancel, CancelAll etc don't wait forever if the thread pool manager is not running.
+///     2.24: 2026-11-23
+///       - Breaking change: If a task does not stop in time, Cancel(taskID) detaches its
+///         worker thread instead of killing it with TerminateThread. The same holds for
+///         a worker that does not stop when it is removed from the pool.
+///       - A detached task keeps its task controller alive.
+///     2.23: 2026-11-23
+///       - Cancel(taskID) also cancels a task that is waiting in the thread pool queue and
+///         a task that was already sent to a worker thread but not yet picked up by it.
+///         Previously, Cancel returned True and the task was executed anyway.
+///       - Fixed: Cancel(taskID) did not decrement the number of executing tasks;
+///         CountExecuting was too high and IsIdle returned False from then on.
+///       - Cancel(taskID) returns as soon as the task is completed. Previously, it always
+///         waited for the full timeout.
+///       - A work item is assigned to the worker thread before it is sent to it.
+///       - Fixed: CancelAll could make CountQueued negative.
+///       - Fixed: Access violation in the thread pool manager if a task was cancelled while
+///         it was completing.
+///     2.22: 2026-11-23
+///       - CancelAll no longer waits for a task that did not stop in
+///         WaitOnTerminate_sec. Its worker thread is detached: it is not killed and will
+///         be destroyed when the task exits. (Cancel still terminates the thread.)
+///     2.21d: 2026-11-23
+///       - Fixed: If a task did not stop in WaitOnTerminate_sec, CancelAll destroyed its
+///         worker thread without unregistering worker's communication channel. Thread
+///         pool manager was then spinning on a closed handle and could not be stopped
+///         (thread pool destruction never finished).
+///     2.21c: 2026-11-23
+///       - Fixed race in CancelAll: a task that was already sent
+///         to a worker thread, but not yet picked up by it, was not cancelled. The task
+///         started executing after the cancellation and the pool waited for it forever
+///         (if the task depended on the cancellation token or termination to exit).
 ///     2.21b: 2026-09-16
 ///       - Fixed: TOTPWorkerScheduler.CreateInitialClusters used a processor
 ///         group number as a positional index into IOmniProcessorGroups
@@ -311,6 +349,10 @@ function CreateThreadPool(const threadPoolName: string): IOmniThreadPool;
 
 function GlobalOmniThreadPool: IOmniThreadPool;
 
+/// <summary>Stops all thread pools that are still alive. Called when OTL units are being finalized;
+///   for internal use.</summary>
+procedure StopAllThreadPools;
+
 implementation
 
 uses
@@ -412,6 +454,9 @@ type
     procedure Execute; override;
     function  GetWorkItemInfo(var scheduledAt, startedAt: TDateTime;
       var description: string): boolean;
+    procedure AssignWorkItem(workItem: TOTPWorkItem);
+    function  HasStoppedWorkItem: boolean;
+    function  HasWorkItem: boolean;
     function  IsExecuting(taskID: int64): boolean;
     procedure Start;
     function  WorkItemDescription: string;
@@ -496,6 +541,8 @@ type
     function  ActiveWorkItemDescriptions: string;
     procedure Asy_ForwardUnhandledWorkerException(thread: TThread; E: Exception);
     function  CreateWorker: TOTPWorkerThread;
+    function  CancelQueued(taskID: int64; signalCancellationToken: boolean): boolean;
+    procedure DetachWorker(worker: TOTPWorkerThread);
     procedure ForwardThreadCreated(threadID: TThreadID);
     procedure ForwardThreadDestroying(threadID: TThreadID;
       threadPoolOperation: TThreadPoolOperation; worker: TOTPWorkerThread = nil);
@@ -562,6 +609,7 @@ type
     otpAffinity                      : IOmniIntegerSet;
     otpAsy_OnUnhandledWorkerException: TOTPUnhandledWorkerException;
     otpPoolName                      : string;
+    otpStopped                       : boolean;
     otpThreadDataFactory             : TOTPThreadDataFactory;
     otpUniqueID                      : int64;
     otpWorker                        : IOmniWorker;
@@ -585,6 +633,8 @@ type
     function  GetUniqueID: int64;
     function  GetWaitOnTerminate_sec: integer;
     procedure Log(const msg: string; const params: array of const);
+    function  TryAddRef: boolean;
+    procedure WaitForManager(const res: TOmniWaitableValue);
     procedure NotifyAffinityChanged(const value: IOmniIntegerSet);
     procedure SetAsy_OnUnhandledWorkerException(const value: TOTPUnhandledWorkerException);
     procedure SetIdleWorkerThreadTimeout_sec(value: integer);
@@ -607,6 +657,7 @@ type
   public
     constructor Create(const name: string);
     destructor  Destroy; override;
+    procedure Stop;
     function  Cancel(taskID: int64; timeout_ms: int64 = -1 {use WaitOnTerminate_sec}): boolean; overload;
     function  Cancel(taskID: int64; signalCancellationToken: boolean; timeout_ms: int64 = -1 {use WaitOnTerminate_sec}): boolean; overload;
     procedure CancelAll; overload;
@@ -641,13 +692,17 @@ type
       SetProcessorGroups;
     property NUMANodes: IOmniIntegerSet read GetNUMANodes write SetNUMANodes;
   {$ENDIF OTL_NUMASupport}
+    property Stopped: boolean read otpStopped;
   end; { TOmniThreadPool}
 
 const
   CGlobalOmniThreadPoolName = 'GlobalOmniThreadPool';
 
 var
-  GOmniThreadPool: IOmniThreadPool = nil;
+  GOmniThreadPool     : IOmniThreadPool = nil;
+  GThreadPools        : TList; // all TOmniThreadPool objects, not reference counted
+  GThreadPoolsLock    : TCriticalSection;
+  GThreadPoolsStopping: boolean;
 
 { exports }
 
@@ -664,6 +719,38 @@ begin
   end;
   Result := GOmniThreadPool;
 end; { GlobalOmniThreadPool }
+
+procedure StopAllThreadPools;
+// A pool is referenced from the tasks that are running in it, so it may be still alive when
+// nobody else uses it. If it is not stopped, its threads would use finalized units.
+var
+  iPool  : integer;
+  pool   : IOmniThreadPool;
+  poolObj: TOmniThreadPool;
+begin
+  if not assigned(GThreadPools) then
+    Exit; // already finalized
+  if IsLibrary then // Finalization is called from DllMain. Threads can't exit while the loader
+    Exit;           // lock is owned (or are already dead), so waiting for them could hang forever.
+  GThreadPoolsStopping := true;
+  repeat
+    pool := nil;
+    poolObj := nil;
+    GThreadPoolsLock.Acquire;
+    try
+      for iPool := 0 to GThreadPools.Count - 1 do begin
+        poolObj := TOmniThreadPool(GThreadPools[iPool]);
+        if (not poolObj.Stopped) and poolObj.TryAddRef then begin
+          pool := poolObj;
+          poolObj._Release; // balances TryAddRef; pool holds its own reference
+          break; //for
+        end;
+      end;
+    finally GThreadPoolsLock.Release; end;
+    if assigned(pool) then
+      poolObj.Stop;
+  until not assigned(pool);
+end; { StopAllThreadPools }
 
 function CreateThreadPool(const threadPoolName: string): IOmniThreadPool;
 begin
@@ -780,7 +867,10 @@ begin
         task := WorkItem_ref.task;
         if assigned(task) then begin
           if signalCancellationToken then
-            task.CancellationToken.Signal;
+            (task as IOmniTaskExecutor).SignalCancellationToken;
+          // If the task was not started yet, Terminate would execute it here, in the thread
+          // pool manager (tcoForceExecution is enabled by default).
+          task.Enforced(false);
           task.Terminate;
         end;
       end;
@@ -804,6 +894,7 @@ begin
       if assigned(workItem) and assigned(workItem.task) and
         (not workItem.task.Stopped) then
       begin
+        (workItem.task as IOmniTaskExecutor).PinTaskControl; // task will be detached
         workItem.TerminateTask(EXIT_THREADPOOL_CANCELLED, 'Cancelled');
         Result := true;
       end
@@ -878,12 +969,20 @@ var
   stopUserTime   : int64;
 {$ENDIF LogThreadPool}
 var
-  task: IOmniTask;
+  affinity: TOmniGroupAffinity;
+  task    : IOmniTask;
+  taskID  : int64;
 begin
-  WorkItem_ref := workItem;
-  task := WorkItem_ref.task;
+  if assigned(owtWorkItemLock) then owtWorkItemLock.Acquire;
   try
-    Environment.Thread.GroupAffinity := workItem.GroupAffinity;
+    if WorkItem_ref <> workItem then
+      Exit; // already taken away in Asy_TerminateWorkItem; workItem may not exist anymore
+    task := workItem.task;
+    taskID := workItem.UniqueID;
+    affinity := workItem.GroupAffinity;
+  finally if assigned(owtWorkItemLock) then owtWorkItemLock.Release; end;
+  try
+    Environment.Thread.GroupAffinity := affinity;
     {$IFDEF LogThreadPool}Log('Thread %s starting execution of %s', [Description, WorkItem_ref.Description]);
     DSiGetThreadTimes(creationTime, startUserTime, startKernelTime); {$ENDIF LogThreadPool}
     if assigned(task) then
@@ -901,7 +1000,10 @@ begin
   if assigned(owtWorkItemLock) then owtWorkItemLock.Acquire;
   try
     workItem := WorkItem_ref;
-    WorkItem_ref := nil;
+    if assigned(workItem) and (workItem.UniqueID <> taskID) then
+      workItem := nil // canceled and the worker was already assigned another work item
+    else
+      WorkItem_ref := nil;
     if assigned(workItem) then begin // not already canceled
       {$IFDEF LogThreadPool}Log(
         'Thread %s sending notification of completed work item %s',
@@ -941,6 +1043,37 @@ begin
     end;
   finally owtWorkItemLock.Release; end;
 end; { TOTPWorkerThread.GetWorkItemInfo }
+
+/// <summary>Called in the thread pool manager, before the work item is sent to the worker.
+///   From here on the work item can be cancelled, even if the worker did not pick it up yet.</summary>
+/// <since>2026-11-23</since>
+procedure TOTPWorkerThread.AssignWorkItem(workItem: TOTPWorkItem);
+begin
+  owtWorkItemLock.Acquire;
+  try
+    Assert(not assigned(WorkItem_ref), 'TOTPWorkerThread.AssignWorkItem: Worker is busy');
+    WorkItem_ref := workItem;
+  finally owtWorkItemLock.Release; end;
+end; { TOTPWorkerThread.AssignWorkItem }
+
+/// <summary>True if the task is stopped but the worker did not report that yet.</summary>
+/// <since>2026-11-23</since>
+function TOTPWorkerThread.HasStoppedWorkItem: boolean;
+begin
+  owtWorkItemLock.Acquire;
+  try
+    Result := assigned(WorkItem_ref) and
+      ((not assigned(WorkItem_ref.task)) or WorkItem_ref.task.Stopped);
+  finally owtWorkItemLock.Release; end;
+end; { TOTPWorkerThread.HasStoppedWorkItem }
+
+function TOTPWorkerThread.HasWorkItem: boolean;
+begin
+  owtWorkItemLock.Acquire;
+  try
+    Result := assigned(WorkItem_ref);
+  finally owtWorkItemLock.Release; end;
+end; { TOTPWorkerThread.HasWorkItem }
 
 function TOTPWorkerThread.IsExecuting(taskID: int64): boolean;
 begin
@@ -1039,44 +1172,83 @@ begin
     waitForTask_ms := int64(WaitOnTerminate_sec.Value) * 1000;
   wasTerminated := true;
   iWorker := 0;
-  while iWorker < owRunningWorkers.Count do begin
-    worker := TOTPWorkerThread(owRunningWorkers[iWorker]);
-    if worker.IsExecuting(taskID) then begin
-      {$IFDEF LogThreadPool}Log('Cancel request %d on thread %p:%d', [taskID, pointer(worker), worker.threadID]); {$ENDIF LogThreadPool}
-      owRunningWorkers.Delete(iWorker);
-      worker.Asy_Stop(signalToken);
-      endWait_ms := DSiTimeGetTime64 + waitForTask_ms;
-      while ( DSiTimeGetTime64 < endWait_ms) and (not worker.Stopped) do begin
-        ProcessMessages;
-        Sleep(10);
+  if not CancelQueued(taskID, signalToken) then
+    while iWorker < owRunningWorkers.Count do begin
+      worker := TOTPWorkerThread(owRunningWorkers[iWorker]);
+      if worker.IsExecuting(taskID) then begin
+        {$IFDEF LogThreadPool}Log('Cancel request %d on thread %p:%d', [taskID, pointer(worker), worker.threadID]); {$ENDIF LogThreadPool}
+        owRunningWorkers.Delete(iWorker);
+        CountRunning.Decrement; // must match owRunningWorkers; ProcessMessages below may execute CancelAll
+        worker.Asy_Stop(signalToken);
+        endWait_ms := DSiTimeGetTime64 + waitForTask_ms;
+        // Exit when the task has finished. worker.Stopped flips only when the WHOLE worker
+        // thread exits, not when one task is cancelled.
+        while (DSiTimeGetTime64 < endWait_ms) and (not worker.Stopped) and worker.HasWorkItem do begin
+          ProcessMessages;
+          Sleep(10);
+        end;
+        workItem := nil;
+          if worker.HasStoppedWorkItem then begin
+          // Worker will send MSG_COMPLETED. It must not receive another work item before that;
+          // it may still have MSG_RUN for this work item in its message queue.
+          owRunningWorkers.Add(worker);
+          CountRunning.Increment;
+        end
+        else if worker.Asy_TerminateWorkItem(workItem) then begin
+          {$IFDEF LogThreadPool}Log(
+            'Detaching unstoppable thread %s, num idle = %d, num running = %d[%d]',
+            [worker.Description, owIdleWorkers.Count, owRunningWorkers.Count,
+            MaxExecuting.Value]); {$ENDIF LogThreadPool}
+          // TerminateThread could stop the thread while it owns a lock (memory manager,
+          // RTL ...) and that would block the whole program.
+          workItem.Thread := nil;
+          DetachWorker(worker);
+          ProcessCompletedWorkItem(workItem);
+          wasTerminated := false;
+        end
+        else begin
+          worker.StartIdle_ms := DSiTimeGetTime64;
+          owIdleWorkers.Add(worker);
+          {$IFDEF LogThreadPool}Log(
+            'Thread %s moved to the idle list, num idle = %d, num running = %d[%d]',
+            [worker.Description, owIdleWorkers.Count, owRunningWorkers.Count,
+            MaxExecuting.Value]); {$ENDIF LogThreadPool}
+          if assigned(workItem) then // task is stopped but the worker did not report that yet
+            ProcessCompletedWorkItem(workItem)
+          else
+            CheckIdleQueue;
+        end;
+        break; // for
       end;
-      SuspendThread(worker.Handle);
-      if worker.Asy_TerminateWorkItem(workItem) then begin
-        ProcessCompletedWorkItem(workItem);
-        {$IFDEF LogThreadPool}Log(
-          'Terminating unstoppable thread %s, num idle = %d, num running = %d[%d]',
-          [worker.Description, owIdleWorkers.Count, owRunningWorkers.Count,
-          MaxExecuting.Value]); {$ENDIF LogThreadPool}
-        TerminateThread(worker.Handle, cardinal(-1));
-        ForwardThreadDestroying(worker.threadID, tpoKillThread, worker);
-        FreeAndNil(worker);
-        wasTerminated := false;
-      end
-      else begin
-        ResumeThread(worker.Handle);
-        owIdleWorkers.Add(worker);
-        {$IFDEF LogThreadPool}Log(
-          'Thread %s moved to the idle list, num idle = %d, num running = %d[%d]',
-          [worker.Description, owIdleWorkers.Count, owRunningWorkers.Count,
-          MaxExecuting.Value]); {$ENDIF LogThreadPool}
-      end;
-      break; // for 
-    end;
-    Inc(iWorker);
-  end; // for iWorker
+      Inc(iWorker);
+    end; // for iWorker
   waitParam := params[3];
   (waitParam.AsObject as TOmniWaitableValue).Signal(wasTerminated);
 end; { TOTPWorker.Cancel }
+
+/// <summary>Cancel a task that is waiting in the queue.</summary>
+/// <returns>True if the task was found in the queue.</returns>
+/// <since>2026-11-23</since>
+function TOTPWorker.CancelQueued(taskID: int64; signalCancellationToken: boolean): boolean;
+var
+  iWorkItem: integer;
+  workItem : TOTPWorkItem;
+begin
+  Result := false;
+  for iWorkItem := 0 to owWorkItemQueue.Count - 1 do begin
+    workItem := TOTPWorkItem(owWorkItemQueue[iWorkItem]);
+    if workItem.UniqueID = taskID then begin
+      owWorkItemQueue.Delete(iWorkItem);
+      CountQueued.Decrement;
+      if signalCancellationToken and assigned(workItem.task) then
+        (workItem.task as IOmniTaskExecutor).SignalCancellationToken;
+      workItem.TerminateTask(EXIT_THREADPOOL_CANCELLED, 'Cancelled');
+      RequestCompleted(workItem, nil);
+      Result := true;
+      break; //for iWorkItem
+    end;
+  end; //for iWorkItem
+end; { TOTPWorker.CancelQueued }
 
 procedure TOTPWorker.CancelAll(const params: TOmniValue);
 var
@@ -1098,6 +1270,17 @@ begin
   FreeAndNil(owWorkItemQueue);
   FreeAndNil(owScheduler);
 end; { TOTPWorker.Cleanup }
+
+/// <summary>Stop managing an unstoppable worker. The thread destroys itself when the task
+///    exits.</summary>
+/// <remarks>The worker can outlive the pool, so it must not call back into it.</remarks>
+/// <since>2026-11-23</since>
+procedure TOTPWorker.DetachWorker(worker: TOTPWorkerThread);
+begin
+  worker.Asy_OnUnhandledException := nil;
+  ForwardThreadDestroying(worker.threadID, tpoKillThread, worker);
+  worker.FreeOnTerminate := true; // last, as the worker can be destroyed at any time from here on
+end; { TOTPWorker.DetachWorker }
 
 procedure TOTPWorker.ForwardThreadCreated(threadID: TThreadID);
 begin
@@ -1154,8 +1337,8 @@ begin
     for iWorkItem := 0 to owWorkItemQueue.Count - 1 do
       queuedItems.Add(owWorkItemQueue[iWorkItem]);
     owWorkItemQueue.Clear;
-    CountQueued.Value := 0;
     for iWorkItem := 0 to queuedItems.Count - 1 do begin
+      CountQueued.Decrement; // don't set to 0; tasks in not yet processed Schedule messages are also counted
       workItem := TOTPWorkItem(queuedItems[iWorkItem]);
       workItem.TerminateTask(EXIT_THREADPOOL_CANCELLED, 'Cancelled');
       RequestCompleted(workItem, nil);
@@ -1178,8 +1361,17 @@ begin
   end;
   for iWorker := 0 to owStoppingWorkers.Count - 1 do begin
     worker := TOTPWorkerThread(owStoppingWorkers[iWorker]);
-    worker.Asy_TerminateWorkItem(workItem);
-    FreeAndNil(worker);
+    workItem := nil;
+    if worker.Asy_TerminateWorkItem(workItem) then begin
+      FreeAndNil(workItem);
+      DetachWorker(worker); // task did not stop in WaitOnTerminate_sec
+    end
+    else begin
+      if not worker.Stopped then // unregister worker's comm channel before it is destroyed
+        ForwardThreadDestroying(worker.threadID, tpoDestroyThread, worker);
+      FreeAndNil(worker);
+      FreeAndNil(workItem);
+    end;
   end;
   owStoppingWorkers.Clear;
 end; { TOTPWorker.InternalStop }
@@ -1217,6 +1409,7 @@ procedure TOTPWorker.MainteinanceTimer;
 var
   iWorker: integer;
   worker : TOTPWorkerThread;
+  workItem: TOTPWorkItem;
 begin
   PruneWorkingQueue;
   if IdleWorkerThreadTimeout_sec > 0 then begin
@@ -1247,19 +1440,20 @@ begin
                          DSiTimeGetTime64 ) then
     begin
       if not worker.Stopped then begin
-        SuspendThread(worker.Handle);
-        if worker.Stopped then begin
-          ResumeThread(worker.Handle);
-          break; // while
-        end;
-        TerminateThread(worker.Handle, cardinal(-1));
-        ForwardThreadDestroying(worker.threadID, tpoKillThread, worker);
+        owStoppingWorkers.Delete(iWorker);
+        workItem := nil;
+        worker.Asy_TerminateWorkItem(workItem);
+        if assigned(workItem) then
+          workItem.Thread := nil;
+        DetachWorker(worker);
+        if assigned(workItem) then
+          ProcessCompletedWorkItem(workItem);
       end
       else begin
         {$IFDEF LogThreadPool}Log('Removing stopped thread %s', [worker.Description]);{$ENDIF LogThreadPool}
+        owStoppingWorkers.Delete(iWorker);
+        FreeAndNil(worker);
       end;
-      owStoppingWorkers.Delete(iWorker);
-      FreeAndNil(worker);
     end
     else
       Inc(iWorker);
@@ -1354,6 +1548,8 @@ begin
       (TOmniThreadPoolMonitorInfo.Create(owUniqueID, workItem.UniqueID)));
   FreeAndNil(workItem);
   if owRunningWorkers.IndexOf(worker) < 0 then
+    worker := nil
+  else if worker.HasWorkItem then // late notification; worker is already busy with another work item
     worker := nil;
   if assigned(worker) then begin // move it back to the idle queue 
     owRunningWorkers.Extract(worker);
@@ -1444,6 +1640,11 @@ begin
   CountQueuedLock.Acquire;
   try
     CountQueued.Decrement;
+    if owDestroying then begin // must not start a new worker
+      workItem.TerminateTask(EXIT_THREADPOOL_CANCELLED, 'Cancelled');
+      FreeAndNil(workItem);
+      Exit;
+    end;
     ScheduleNext(workItem);
   finally CountQueuedLock.Release; end;
   PruneWorkingQueue;
@@ -1480,6 +1681,7 @@ begin
     workItem.StartedAt := Now;
     workItem.Thread := worker;
     workItem.GroupAffinity := owScheduler.Next;
+    worker.AssignWorkItem(workItem);
     worker.OwnerCommEndpoint.Send(MSG_RUN, workItem);
   end
   else begin
@@ -1617,14 +1819,27 @@ begin
   otpProcessorGroups := TOmniIntegerSet.Create;
   otpProcessorGroups.OnChange := NotifyProcessorGroupsChanged;
   {$ENDIF OTL_NUMASupport}
+  if assigned(GThreadPools) then begin
+    GThreadPoolsLock.Acquire;
+    try
+      GThreadPools.Add(Self);
+    finally GThreadPoolsLock.Release; end;
+  end;
+  if GThreadPoolsStopping then
+    Stop; // program is exiting
 end; { TOmniThreadPool.Create }
 
 destructor TOmniThreadPool.Destroy;
 begin
   {$IFDEF LogThreadPool}Log('Destroying thread pool %p', [pointer(Self), otpPoolName]);{$ENDIF LogThreadPool}
   SendPoolNotifications(pntDestroy, Self);
-  if assigned(otpWorkerTask) then
-    otpWorkerTask.Terminate;
+  Stop;
+  if assigned(GThreadPools) then begin
+    GThreadPoolsLock.Acquire;
+    try
+      GThreadPools.Remove(Self);
+    finally GThreadPoolsLock.Release; end;
+  end;
   inherited;
 end; { TOmniThreadPool.Destroy }
 
@@ -1646,8 +1861,11 @@ begin
   res := TOmniWaitableValue.Create;
   try
     otpWorkerTask.Invoke(@TOTPWorker.Cancel, [taskID, signalCancellationToken, timeout_ms, res]);
-    res.WaitFor(INFINITE);
-    Result := res.Value;
+    WaitForManager(res);
+    if res.WaitFor(0) then
+      Result := res.Value
+    else
+      Result := true; // thread pool is stopped and the task is not running anymore
   finally FreeAndNil(res); end;
 end; { TOmniThreadPool.Cancel }
 {$WARN NO_RETVAL ON}
@@ -1664,7 +1882,7 @@ begin
   res := TOmniWaitableValue.Create;
   try
     otpWorkerTask.Invoke(@TOTPWorker.CancelAll, [signalCancellationToken, res]);
-    res.WaitFor(INFINITE);
+    WaitForManager(res);
   finally FreeAndNil(res); end;
 end; { TOmniThreadPool.CancelAll }
 
@@ -1791,7 +2009,7 @@ begin
     copySet := TOmniIntegerSet.Create;
     copySet.Assign(value);
     otpWorkerTask.Invoke(@TOTPWorker.SetAffinity, [copySet, res]);
-    res.WaitFor(INFINITE);
+    WaitForManager(res);
   finally FreeAndNil(res); end;
 end; { TOmniThreadPool.NotifyAffinityChanged }
 
@@ -1806,7 +2024,7 @@ begin
     copySet := TOmniIntegerSet.Create;
     copySet.Assign(value);
     otpWorkerTask.Invoke(@TOTPWorker.SetNUMANodes, [copySet, res]);
-    res.WaitFor(INFINITE);
+    WaitForManager(res);
   finally FreeAndNil(res); end;
 end; { TOmniThreadPool.NotifyNUMANodesChanged }
 
@@ -1820,7 +2038,7 @@ begin
     copySet := TOmniIntegerSet.Create;
     copySet.Assign(value);
     otpWorkerTask.Invoke(@TOTPWorker.SetProcessorGroups, [copySet, res]);
-    res.WaitFor(INFINITE);
+    WaitForManager(res);
   finally FreeAndNil(res); end;
 end; { TOmniThreadPool.NotifyProcessorGroupsChanged }
 {$ENDIF OTL_NUMASupport}
@@ -1832,7 +2050,16 @@ begin
 end; { TOmniThreadPool.RemoveMonitor }
 
 procedure TOmniThreadPool.Schedule(const task: IOmniTask);
+var
+  workItem: TOTPWorkItem;
 begin
+  if Stopped then begin
+    workItem := TOTPWorkItem.Create(task);
+    try
+      workItem.TerminateTask(EXIT_THREADPOOL_CANCELLED, 'Cancelled');
+    finally FreeAndNil(workItem); end;
+    Exit;
+  end;
   WorkerObj.CountQueued.Increment;
   otpWorkerTask.Invoke(@TOTPWorker.Schedule, TOTPWorkItem.Create(task));
 end; { TOmniThreadPool.Schedule }
@@ -1879,7 +2106,7 @@ begin
   res := TOmniWaitableValue.Create;
   try
     otpWorkerTask.Invoke(@TOTPWorker.SetMonitor, [hWindow, res]);
-    res.WaitFor(INFINITE);
+    WaitForManager(res);
   finally FreeAndNil(res); end;
   Result := Self;
 end; { TOmniThreadPool.SetMonitor }
@@ -1926,6 +2153,45 @@ procedure TOmniThreadPool.SetWaitOnTerminate_sec(value: integer);
 begin
   WorkerObj.WaitOnTerminate_sec.Value := value;
 end; { TOmniThreadPool.SetWaitOnTerminate_sec }
+
+/// <summary>Stops the thread pool manager and all worker threads.</summary>
+/// <since>2026-11-23</since>
+procedure TOmniThreadPool.Stop;
+begin
+  if Stopped then
+    Exit;
+  otpStopped := true;
+  if assigned(otpWorkerTask) then
+    otpWorkerTask.Terminate;
+end; { TOmniThreadPool.Stop }
+
+/// <summary>Adds a reference unless the pool is already being destroyed.</summary>
+/// <since>2026-11-23</since>
+function TOmniThreadPool.TryAddRef: boolean;
+var
+  count: integer;
+begin
+  repeat
+    count := FRefCount;
+    if count <= 0 then begin // negative when objDestroyingFlag is set (newer RTL)
+      Result := false;
+      Exit;
+    end;
+  until InterlockedCompareExchange(FRefCount, count + 1, count) = count;
+  Result := true;
+end; { TOmniThreadPool.TryAddRef }
+
+/// <summary>Waits for an answer from the thread pool manager. Returns without it if the manager
+///   is not running anymore.</summary>
+/// <since>2026-11-23</since>
+procedure TOmniThreadPool.WaitForManager(const res: TOmniWaitableValue);
+const
+  CPoll_ms = 1000;
+begin
+  while not otpWorkerTask.WaitFor(0) do
+    if res.WaitFor(CPoll_ms) then
+      Exit;
+end; { TOmniThreadPool.WaitForManager }
 
 function TOmniThreadPool.WorkerObj: TOTPWorker;
 begin
@@ -2112,6 +2378,11 @@ begin
 end; { TOTPWorkerScheduler.Update }
 
 initialization
+  GThreadPoolsLock := TCriticalSection.Create;
+  GThreadPools := TList.Create;
 finalization
+  StopAllThreadPools;
   GOmniThreadPool := nil;
+  FreeAndNil(GThreadPools);
+  FreeAndNil(GThreadPoolsLock);
 end.

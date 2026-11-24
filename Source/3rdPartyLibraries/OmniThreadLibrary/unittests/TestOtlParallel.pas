@@ -34,6 +34,13 @@ type
     procedure TestTerminationPartialStuck;
     procedure TestTerminationAllTerminated;
   end;
+
+  TestThreadPoolCancel = class(TTestCase)
+  published
+    procedure TestCancelAllAfterSchedule;
+    procedure TestCancelAllStuckTask;
+    procedure TestCancelNotStartedTask;
+  end;
 {$ENDIF}
 
 implementation
@@ -42,6 +49,9 @@ implementation
 uses
   Math,
   OtlParallel,
+  OtlTask,
+  OtlTaskControl,
+  OtlThreadPool,
   OtlCommon;
 
 { TestParallelFor }
@@ -249,7 +259,8 @@ var
   end;
 
 begin
-  // Tests IOmniParallelJoin.Terminate when all tasks are stuck and don't terminate.
+  // Tests IOmniParallelJoin.Terminate when all tasks are stuck and don't terminate. Such tasks
+  // are detached (since 3.10; before that, they were killed).
 
   FillChar(started[0], Length(started), false);
   FillChar(stopped[0], Length(stopped), false);
@@ -260,10 +271,14 @@ begin
   time := DSiTimeGetTime64 - time;
   CheckTrue(time < 1900, 'Elapsed time');
 
-  Sleep(2000); // in case tasks are not really dead
   for i := 0 to 1 do begin
     CheckTrue(started[i], 'started ' + IntToStr(i));
     CheckFalse(stopped[i], 'stopped ' + IntToStr(i));
+  end;
+  Sleep(2500); // stuck tasks are detached, not killed
+  for i := 0 to 1 do begin
+    CheckTrue(started[i], 'started ' + IntToStr(i));
+    CheckTrue(stopped[i], 'stopped ' + IntToStr(i));
   end;
 end;
 
@@ -345,11 +360,186 @@ begin
   end;
 end;
 
+{ TestThreadPoolCancel }
+
+procedure TestThreadPoolCancel.TestCancelAllAfterSchedule;
+// CancelAll must also cancel tasks that were already sent to a worker thread but were not
+// yet picked up by it. Otherwise, such task starts after the cancellation and CancelAll
+// waits for it.
+const
+  CGiveUp_ms = 3000; // must be shorter than the default WaitOnTerminate_sec
+  CRounds    = 100;
+  CTaskCount = 8;
+var
+  iRound: integer;
+  iTask : integer;
+  missed: integer;
+  pool  : IOmniThreadPool;
+begin
+  missed := 0;
+  for iRound := 1 to CRounds do begin
+    pool := CreateThreadPool('TestCancelAllAfterSchedule');
+    pool.MaxExecuting := 4;
+    for iTask := 1 to CTaskCount do
+      CreateTask(
+        procedure (const task: IOmniTask)
+        var
+          start: int64;
+        begin
+          start := DSiTimeGetTime64;
+          while not task.CancellationToken.IsSignalled do begin
+            if DSiElapsedTime64(start) > CGiveUp_ms then begin // don't hang the test
+              InterlockedIncrement(missed);
+              break; //while
+            end;
+            Sleep(1);
+          end;
+        end)
+      .Unobserved
+      .Schedule(pool);
+    pool.CancelAll(true);
+    pool := nil;
+    CheckEquals(0, missed, Format('Tasks not cancelled in round %d', [iRound]));
+  end;
+end;
+
+procedure TestThreadPoolCancel.TestCancelAllStuckTask;
+// CancelAll must not wait for a task that ignores cancellation longer than
+// WaitOnTerminate_sec and the pool must stay functional.
+const
+  CStuck_ms = 10000;
+var
+  finished: integer;
+  pool    : IOmniThreadPool;
+  release : integer;
+  started : integer;
+  time    : int64;
+  worked  : integer;
+begin
+  finished := 0;
+  release := 0;
+  started := 0;
+  worked := 0;
+  pool := CreateThreadPool('TestCancelAllStuckTask');
+  pool.WaitOnTerminate_sec := 1;
+  try
+    CreateTask(
+      procedure (const task: IOmniTask)
+      var
+        start: int64;
+      begin
+        InterlockedIncrement(started);
+        start := DSiTimeGetTime64;
+        while (release = 0) and (DSiElapsedTime64(start) < CStuck_ms) do
+          Sleep(10);
+        InterlockedIncrement(finished);
+      end)
+    .Unobserved
+    .Schedule(pool);
+    time := DSiTimeGetTime64;
+    while (started = 0) and (DSiElapsedTime64(time) < 5000) do
+      Sleep(1);
+    CheckEquals(1, started, 'started');
+    time := DSiTimeGetTime64;
+    pool.CancelAll(true);
+    time := DSiElapsedTime64(time);
+    CheckTrue(time < (CStuck_ms div 2), Format('CancelAll returned after %d ms', [time]));
+    CreateTask(
+      procedure (const task: IOmniTask)
+      begin
+        InterlockedIncrement(worked);
+      end)
+    .Unobserved
+    .Schedule(pool);
+    time := DSiTimeGetTime64;
+    while (worked = 0) and (DSiElapsedTime64(time) < 5000) do
+      Sleep(1);
+    CheckEquals(1, worked, 'worked');
+  finally
+    InterlockedIncrement(release); // don't leave a running thread behind
+    time := DSiTimeGetTime64;
+    while (finished = 0) and (DSiElapsedTime64(time) < 5000) do
+      Sleep(1);
+  end;
+end;
+
+procedure TestThreadPoolCancel.TestCancelNotStartedTask;
+// Cancel(taskID) must cancel a task that was sent to a worker thread but not yet picked up
+// by it and a task that is waiting in the queue. Such task must never start executing, or
+// at least it must see the cancellation.
+const
+  CGiveUp_ms = 1000;
+  CRounds    = 50;
+var
+  blocked: integer;
+  iRound : integer;
+  missed : integer;
+  pool   : IOmniThreadPool;
+  release: integer;
+  time   : int64;
+  victim : IOmniTaskControl;
+begin
+  missed := 0;
+  for iRound := 1 to CRounds do begin
+    blocked := 0;
+    release := 0;
+    pool := CreateThreadPool('TestCancelNotStartedTask');
+    pool.MaxExecuting := 1;
+    if Odd(iRound) then begin // victim will be queued
+      CreateTask(
+        procedure (const task: IOmniTask)
+        var
+          start: int64;
+        begin
+          InterlockedIncrement(blocked);
+          start := DSiTimeGetTime64;
+          while (release = 0) and (DSiElapsedTime64(start) < 5000) do
+            Sleep(1);
+        end)
+      .Unobserved
+      .Schedule(pool);
+      time := DSiTimeGetTime64;
+      while (blocked = 0) and (DSiElapsedTime64(time) < 5000) do
+        Sleep(1);
+      CheckEquals(1, blocked, 'blocked');
+    end;
+    victim := CreateTask(
+      procedure (const task: IOmniTask)
+      var
+        start: int64;
+      begin
+        start := DSiTimeGetTime64;
+        while not task.CancellationToken.IsSignalled do begin
+          if DSiElapsedTime64(start) > CGiveUp_ms then begin // don't hang the test
+            InterlockedIncrement(missed);
+            break; //while
+          end;
+          Sleep(1);
+        end;
+      end)
+    .Schedule(pool);
+    time := DSiTimeGetTime64;
+    CheckTrue(pool.Cancel(victim.UniqueID, true, 5000), 'Cancel');
+    CheckTrue(DSiElapsedTime64(time) < 4000, 'Cancel waited for the full timeout');
+    InterlockedIncrement(release);
+    CheckTrue(victim.WaitFor(5000), 'Cancelled task is not terminated');
+    CheckEquals(0, missed, Format('Task not cancelled in round %d', [iRound]));
+    time := DSiTimeGetTime64;
+    while (not pool.IsIdle) and (DSiElapsedTime64(time) < 5000) do
+      Sleep(1);
+    CheckTrue(pool.IsIdle, Format('Pool is not idle; executing: %d, queued: %d',
+      [pool.CountExecuting, pool.CountQueued]));
+    victim := nil;
+    pool := nil;
+  end;
+end;
+
 {$ENDIF}
 
 initialization
 {$IFDEF Unicode}
   RegisterTest(TestParallelFor.Suite);
   RegisterTest(TestJoin.Suite);
+  RegisterTest(TestThreadPoolCancel.Suite);
 {$ENDIF}
 end.

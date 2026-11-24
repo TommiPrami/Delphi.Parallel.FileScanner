@@ -35,10 +35,27 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, Sean B. Durkin, HHasenack
 ///   Creation date     : 2008-06-12
-///   Last modification : 2026-10-08
-///   Version           : 1.43f
+///   Last modification : 2026-11-23
+///   Version           : 1.45
 ///</para><para>
 ///   History:
+///     1.45: 2026-11-23
+///       - All thread pools are stopped before the unit is finalized.
+///     1.44: 2026-11-23
+///       - Breaking change: If a task does not stop in maxWait_ms, Terminate detaches its
+///         thread instead of killing it with TerminateThread. Terminate returns False and
+///         the task continues to run.
+///       - A detached task keeps its task controller alive until it exits
+///         (IOmniTaskExecutor.PinTaskControl).
+///     1.43h: 2026-11-23
+///       - Fixed: If wait handles were rebuilt inside a nested ProcessMessages call and a
+///         message handler, executed immediately after that, called ProcessMessages again,
+///         that call could use an obsolete (closed) handle and loop forever. (Found when
+///         thread pool's Cancel and CancelAll were called from multiple threads.)
+///     1.43g: 2026-11-23
+///       - Added IOmniTaskExecutor.SignalCancellationToken, which can be safely called from
+///         another thread while the task is completing. Accessing IOmniTask.CancellationToken
+///         at that moment caused an access violation in the thread pool manager.
 ///     1.43f: 2026-10-08
 ///       - Fixed: Tasks created with an internal monitor (Unobserved, OnMessage/OnTerminated
 ///         handlers; everything Parallel.* creates) from a thread that does not process
@@ -550,7 +567,7 @@ type
     {$ENDIF OTL_Anonymous}
     function  SetUserData(const idxData: TOmniValue; const value: TOmniValue): IOmniTaskControl;
     procedure Stop;
-    function  Terminate(maxWait_ms: cardinal = INFINITE): boolean; //will kill thread after timeout
+    function  Terminate(maxWait_ms: cardinal = INFINITE): boolean; //will detach thread after timeout
     function  TerminateWhen(event: TOmniTransitionEvent): IOmniTaskControl; overload;
     function  TerminateWhen(token: IOmniCancellationToken): IOmniTaskControl; overload;
     function  Unobserved: IOmniTaskControl;
@@ -901,6 +918,7 @@ type
     procedure MainMessageLoop(const task: IOmniTask; var msgInfo: TOmniMessageInfo); virtual;
     procedure MessageLoopPayload; virtual;
     procedure ProcessMessages(task: IOmniTask); virtual;
+    procedure RebuildAllWaitHandles(const task: IOmniTask; var msgInfo: TOmniMessageInfo);
     procedure RebuildWaitHandles(const task: IOmniTask; var msgInfo: TOmniMessageInfo); virtual;
     function  TimeUntilNextTimer_ms: cardinal; virtual;
     function  WaitForEvent(const msgInfo: TOmniMessageInfo; timeout_ms: cardinal
@@ -940,6 +958,7 @@ type
     property Priority: TOTLThreadPriority read otePriority write otePriority;
     property TaskException: Exception read oteException write oteException;
     property Terminating: boolean read oteTerminating write oteTerminating;
+    property Owner_ref: TOmniTaskControl read oteOwner_ref;
     property WakeMask: DWORD read oteWakeMask write oteWakeMask;
     property WorkerInitialized: TOmniTransitionEvent read oteWorkerInitialized;
     property WorkerInitOK: boolean read oteWorkerInitOK;
@@ -953,6 +972,7 @@ type
     otExecutor_ref            : TOmniTaskExecutor;
     otParameters_ref          : TOmniValueContainer;
     otSharedInfo_ref          : TOmniSharedTaskInfo;
+    otPinnedControl           : IOmniTaskControl; // set when the task is detached
     otTerminateWillCallExecute: boolean;
     otThreadData              : IInterface;
     otThreadID                : TThreadID;
@@ -971,6 +991,8 @@ type
     procedure InternalExecute(calledFromTerminate: boolean);
     procedure SetOptions(const value: TOmniTaskControlOptions);
     procedure SetThreadData(const value: IInterface); inline;
+    procedure PinTaskControl;
+    procedure SignalCancellationToken;
     procedure Terminate;
   public
     constructor Create(executor: TOmniTaskExecutor; parameters: TOmniValueContainer;
@@ -1118,6 +1140,8 @@ type
     constructor Create(worker: TOmniTaskMethod; const taskName: string); overload;
     constructor Create(worker: TOmniTaskProcedure; const taskName: string); overload;
     destructor  Destroy; override;
+    function  HasInternalMonitor: boolean;
+    function  TryAddRef: boolean;
     function  Alertable: IOmniTaskControl;
     function  CancelWith(const token: IOmniCancellationToken): IOmniTaskControl;
     function  ChainTo(const task: IOmniTaskControl; ignoreErrors: boolean = false): IOmniTaskControl;
@@ -1176,7 +1200,7 @@ type
     {$ENDIF OTL_Anonymous}
     function  SetUserData(const idxData: TOmniValue; const value: TOmniValue): IOmniTaskControl;
     procedure Stop;
-    function  Terminate(maxWait_ms: cardinal = INFINITE): boolean; //will kill thread after timeout
+    function  Terminate(maxWait_ms: cardinal = INFINITE): boolean; //will detach thread after timeout
     function  TerminateWhen(event: TOmniTransitionEvent): IOmniTaskControl; overload;
     function  TerminateWhen(token: IOmniCancellationToken): IOmniTaskControl; overload;
     function  Unobserved: IOmniTaskControl;
@@ -1524,16 +1548,48 @@ end; { TOmniTask.ClearTimer }
 
 procedure TOmniTask.Enforced(forceExecution: boolean = true);
 begin
-  if forceExecution then
-    otExecutor_ref.Options := otExecutor_ref.Options + [tcoForceExecution]
-  else
-    otExecutor_ref.Options := otExecutor_ref.Options - [tcoForceExecution];
+  otCleanupLock.EnterReadLock; // may be called from the thread pool while the task is completing
+  try
+    if not assigned(otExecutor_ref) then
+      Exit;
+    if forceExecution then
+      otExecutor_ref.Options := otExecutor_ref.Options + [tcoForceExecution]
+    else
+      otExecutor_ref.Options := otExecutor_ref.Options - [tcoForceExecution];
+  finally otCleanupLock.ExitReadLock; end;
 end; { TOmniTask.Enforced }
 
 procedure TOmniTask.Execute;
 begin
   InternalExecute(false);
 end; { TOmniTask.Execute }
+
+/// <summary>Keeps the task controller (and with it everything that is accessible through
+///   IOmniTask) alive until the task exits. Called when the task did not stop in time and is
+///   being detached. Does nothing if the task has already completed.</summary>
+/// <since>2026-11-23</since>
+procedure TOmniTask.PinTaskControl;
+begin
+  otCleanupLock.EnterWriteLock; // InternalExecute releases the pin inside this lock
+  try
+    if assigned(otSharedInfo_ref) and (not assigned(otPinnedControl)) then
+      if otExecutor_ref.Owner_ref.TryAddRef then begin
+        otPinnedControl := otExecutor_ref.Owner_ref;
+        otExecutor_ref.Owner_ref._Release; // balances TryAddRef; otPinnedControl holds its own reference
+      end;
+  finally otCleanupLock.ExitWriteLock; end;
+end; { TOmniTask.PinTaskControl }
+
+/// <summary>Signals the cancellation token. Does nothing if the task has already completed.</summary>
+/// <since>2026-11-23</since>
+procedure TOmniTask.SignalCancellationToken;
+begin
+  otCleanupLock.EnterWriteLock; // InternalExecute clears otSharedInfo_ref inside this lock
+  try
+    if assigned(otSharedInfo_ref) then
+      otSharedInfo_ref.CancellationToken.Signal;
+  finally otCleanupLock.ExitWriteLock; end;
+end; { TOmniTask.SignalCancellationToken }
 
 function TOmniTask.GetCancellationToken: IOmniCancellationToken;
 begin
@@ -1597,6 +1653,7 @@ procedure TOmniTask.InternalExecute(calledFromTerminate: boolean);
 var
   chainTo       : IOmniTaskControl;
   eventTerminate: TOmniTransitionEvent;
+  pinnedControl : IOmniTaskControl;
   sync          : TSynchroObject;
   taskException : Exception;
 begin
@@ -1641,6 +1698,14 @@ begin
         otSharedInfo_ref.MonitorLock.Acquire;
         try
           sync := otSharedInfo_ref.MonitorLock.SyncObj;
+          pinnedControl := otPinnedControl;
+          otPinnedControl := nil;
+          // Internal monitor holds its own reference. Let the monitor's thread destroy the
+          // controller as it must also destroy the monitor.
+          if assigned(pinnedControl) and assigned(otSharedInfo_ref.Monitor)
+             and otExecutor_ref.Owner_ref.HasInternalMonitor
+          then
+            pinnedControl := nil;
           if assigned(otSharedInfo_ref.Monitor) then
            {$IFDEF CPUX64}
             otSharedInfo_ref.Monitor.Send(COmniTaskMsg_Terminated, WPARAM(UniqueID), 0);
@@ -1670,6 +1735,7 @@ begin
     if assigned(chainTo) then
       chainTo.Run; // TODO 1 -oPrimoz Gabrijelcic : Should InternalExecute the chained task in the same thread (should work when run in a pool)
   finally otCleanupLock.ExitWriteLock; end;
+  pinnedControl := nil; // controller of a detached task can be destroyed here
 end; { TOmniTask.InternalExecute }
 
 {$IFDEF OTL_Anonymous}
@@ -1711,7 +1777,11 @@ end; { TOmniTask.SetException }
 
 procedure TOmniTask.SetExitStatus(exitCode: integer; const exitMessage: string);
 begin
-  otExecutor_ref.Asy_SetExitStatus(exitCode, exitMessage);
+  otCleanupLock.EnterReadLock; // may be called from the thread pool while the task is completing
+  try
+    if assigned(otExecutor_ref) then
+      otExecutor_ref.Asy_SetExitStatus(exitCode, exitMessage);
+  finally otCleanupLock.ExitReadLock; end;
 end; { TOmniTask.SetExitStatus }
 
 procedure TOmniTask.SetNUMANode(numaNodeNumber: integer);
@@ -2249,7 +2319,7 @@ begin
 
   ProcessThreadMessages;
   if rebuildHandles then begin
-    RebuildWaitHandles(task, msgInfo);
+    RebuildAllWaitHandles(task, msgInfo);
     EmptyMessageQueues(task);
   end
   else
@@ -2687,6 +2757,7 @@ begin
       if waitHandlesGen <> oteWaitHandlesGen then begin
         RebuildWaitHandles(task, oteMsgInfo);
         RemoveTerminationEvents(oteMsgInfo, msgInfo);
+        waitHandlesGen := oteWaitHandlesGen;
         EmptyMessageQueues(task);
       end;
     until false;
@@ -2711,6 +2782,19 @@ begin
                             '(Self, const TOmniValue), (Self, var TObject)',
                             [WorkerIntf.Implementor.ClassName, methodName]);
 end; { TOmniTaskExecutor.RaiseInvalidSignature }
+
+/// <summary>Rebuilds wait handles in msgInfo and in oteMsgInfo.</summary>
+/// <remarks>When called from a nested ProcessMessages, msgInfo is a local copy. oteMsgInfo must
+///   be rebuilt at the same time (before any message is dispatched), because the next nested
+///   ProcessMessages will start with a copy of oteMsgInfo.</remarks>
+/// <since>2026-11-23</since>
+procedure TOmniTaskExecutor.RebuildAllWaitHandles(const task: IOmniTask; var msgInfo:
+  TOmniMessageInfo);
+begin
+  RebuildWaitHandles(task, oteMsgInfo);
+  if @msgInfo <> @oteMsgInfo then
+    RemoveTerminationEvents(oteMsgInfo, msgInfo);
+end; { TOmniTaskExecutor.RebuildAllWaitHandles }
 
 procedure TOmniTaskExecutor.RebuildWaitHandles(const task: IOmniTask; var msgInfo:
   TOmniMessageInfo);
@@ -2909,7 +2993,7 @@ begin
   Result := false;
   if WaitForSingleObject(oteCommRebuildHandles, 0) = WAIT_OBJECT_0 then begin
     //could get set inside timer or message handler
-    RebuildWaitHandles(task, msgInfo);
+    RebuildAllWaitHandles(task, msgInfo);
     EmptyMessageQueues(task);
     Result := true;
   end;
@@ -3061,6 +3145,27 @@ begin
   FreeAndNil(otcOnTerminatedExec);
   inherited Destroy;
 end; { TOmniTaskControl.Destroy }
+
+function TOmniTaskControl.HasInternalMonitor: boolean;
+begin
+  Result := otcEventMonitorInternal;
+end; { TOmniTaskControl.HasInternalMonitor }
+
+/// <summary>Adds a reference unless the final _Release is already in progress.</summary>
+/// <since>2026-11-23</since>
+function TOmniTaskControl.TryAddRef: boolean;
+var
+  count: integer;
+begin
+  repeat
+    count := FRefCount;
+    if count <= 0 then begin // negative when objDestroyingFlag is set (newer RTL)
+      Result := false;
+      Exit;
+    end;
+  until InterlockedCompareExchange(FRefCount, count + 1, count) = count;
+  Result := true;
+end; { TOmniTaskControl.TryAddRef }
 
 procedure TOmniTaskControl.EnsureCommChannel; //inline
 begin
@@ -3770,8 +3875,11 @@ begin
   end;
   if not Result then begin
     if assigned(otcThread) then begin
-      TerminateThread(otcThread.Handle, cardinal(-1));
-      FreeAndNil(otcThread);
+      // Detach the thread. TerminateThread could stop it while it owns a lock (memory
+      // manager, RTL ...) and that would block the whole program.
+      (otcThread.Task as IOmniTaskExecutor).PinTaskControl;
+      otcThread.FreeOnTerminate := true;
+      otcThread := nil;
     end
     else if assigned(otcOwningPool) then begin
       otcOwningPool.Cancel(UniqueID, 0);
@@ -4317,6 +4425,7 @@ end; { TOmniMessageExec.SetOnTerminated }
 initialization
   GTaskControlEventMonitorPool := TOmniTaskControlEventMonitorPool.Create;
 finalization
+  StopAllThreadPools; // tasks must not be running when their controllers are released
   FreeAndNil(GTaskControlEventMonitorPool);
 end.
 

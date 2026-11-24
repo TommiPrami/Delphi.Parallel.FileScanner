@@ -1,5 +1,22 @@
 3.10: unreleased
 
+- Breaking changes:
+  - Threads are not killed anymore. TerminateThread can leave the memory manager
+    or the RTL locked and block the whole program. A task that does not stop in
+    time is detached: it CONTINUES TO RUN and its thread is destroyed when the
+    task exits. Such task can access objects that the caller destroys after the
+    call. OTL objects that the task uses (task controller, parameters, Comm,
+    Parallel.Join ...) stay alive until the task exits. This affects:
+    - IOmniTaskControl.Terminate(timeout) (previously: thread was killed),
+      and with it Parallel.Join, ParallelTask and TimedTask.Terminate,
+    - IOmniThreadPool.Cancel (previously: thread was killed),
+    - IOmniThreadPool.CancelAll (previously: waited until the task finished),
+    - worker threads that do not stop when they are removed from the pool.
+    A detached task is not counted in MaxExecuting/CountExecuting anymore.
+    OnPoolThreadKilled event is also called for a detached thread.
+  - After Parallel.Join.Terminate has timed out, a detached worker does not start
+    other Join tasks.
+
 - Bug fixes:
   - TOmniBaseBoundedQueue (and so TOmniMessageQueue/task Comm channels): ring
     buffer pointers were compared as signed values, which broke queues whose
@@ -14,6 +31,38 @@
   - TOmniBlockingCollection.ToArray<T>: same problem as in TOmniValue.CastTo<T>.
     In addition, ToArray<int64> raised EOmniValueConv for all values when
     compiled with some older compilers (confirmed with Delphi XE7).
+  - Thread pool: CancelAll did not cancel a task that was
+    already sent to a worker thread but not yet picked up by it. Such task
+    started executing after the cancellation and CancelAll could wait for it
+    forever.
+  - Thread pool: if a task did not stop in WaitOnTerminate_sec, CancelAll left the
+    thread pool manager spinning on a closed handle (high CPU usage, thread pool
+    destruction never finished).
+  - Thread pool: Cancel(taskID) also cancels a task that is waiting in the queue
+    and a task that was already sent to a worker thread but not yet picked up by
+    it. Previously, it returned True and the task was executed anyway.
+  - Thread pool: Cancel(taskID) left CountExecuting too high; IsIdle then never
+    returned True. CancelAll could make CountQueued negative.
+  - Thread pool: Fixed access violation in the thread pool manager (which then
+    stopped working) if Cancel or CancelAll was called at the moment when the
+    task was completing.
+  - Thread pool: Cancel(taskID) returns as soon as the task stops. Previously, it
+    always waited for the full timeout.
+  - TOmniWorker.ProcessMessages could loop forever, waiting on a closed handle, if
+    it was called from a message handler that was executed immediately after a
+    nested ProcessMessages call rebuilt its wait handles. (Happened in the thread
+    pool manager when Cancel and CancelAll were called from multiple threads.)
+  - A worker thread that was detached by CancelAll used destroyed objects if the
+    task controller or Parallel.Join was released before the task exited. They now
+    stay alive until the task exits.
+  - Program crashed or hung at exit if a thread pool task was still running. (The
+    pool was referenced from the task and was not stopped when OTL units were
+    finalized; task controllers were
+    destroyed while tasks were running.) All thread pools are now stopped first; exit can take up to
+    WaitOnTerminate_sec if a task ignores cancellation.
+    DLLs are not changed as waiting for threads in DllMain could hang.
+  - Thread pool: Task, scheduled while the pool is being stopped, is cancelled.
+    Cancel, CancelAll etc don't wait forever if the pool manager is not running.
 
 3.09: 2026-10-13 
 

@@ -17,6 +17,7 @@ program TestRunner;
 {$I OtlOptions.Inc}
 
 uses
+  ExitPoolCheck in 'ExitPoolCheck.pas', // must be the first unit
   Forms,
   TestFramework,
   GUITestRunner,
@@ -34,6 +35,8 @@ uses
   OtlCommon in '..\OtlCommon.pas',
   TestOmniValue in 'TestOmniValue.pas',
   TestValue in 'TestValue.pas',
+  TestDetach1 in 'TestDetach1.pas',
+  TestExitPool1 in 'TestExitPool1.pas',
   TestOtlParallel in 'TestOtlParallel.pas';
 
 {$R *.RES}
