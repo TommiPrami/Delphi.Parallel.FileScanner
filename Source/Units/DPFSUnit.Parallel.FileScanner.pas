@@ -100,7 +100,7 @@ type
   // from one of its own ScanFiles callbacks - raises EInvalidOpException. Use a scanner of its own for each.
   //
   // Directory links - junctions, directory symbolic links, volume mount points - inside the scanned tree are not
-  // followed unless FollowDirectoryLinks is set: they lead to folders found elsewhere anyway, or back up the tree. A
+  // followed unless FollowDirectoryLinks is set: they lead to folders found elsewhere anyway, or backup the tree. A
   // root that is itself a link is scanned.
   //
   // Paths longer than MAX_PATH are walked too, without the process opting in to long paths: a long folder path is
@@ -250,7 +250,7 @@ type
     // are used as written, so write them alike.
     property ConvertRelativePathsToAbsolute: Boolean read FConvertRelativePathsToAbsolute write FConvertRelativePathsToAbsolute;
     // Walk into directory links (junctions, directory symbolic links, volume mount points) too. Off by default: a
-    // link leads to a folder found elsewhere anyway - its files would then come twice - or back up the tree, which
+    // link leads to a folder found elsewhere anyway - its files would then come twice - or backup the tree, which
     // repeats it until the paths get too long.
     property FollowDirectoryLinks: Boolean read FFollowDirectoryLinks write FFollowDirectoryLinks;
     // The AWorkers given to Create (nil when none was); its settings may be changed between scans.
