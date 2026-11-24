@@ -64,6 +64,22 @@ type
     [Test] procedure SkippedFilesCountCountsNestedRootFilesOnce;
     [Test] procedure ForwardSlashesAreReadAsBackslashes;
 
+    [Test] procedure UnsortedResultHoldsEveryFile;
+    [Test] procedure AppendingKeepsEarlierItemsAndSortsAll;
+    [Test] procedure SortedStringListKeepsItsOwnOrder;
+    [Test] procedure StringListRootsOverloadMatchesBaseline;
+    [Test] procedure PathSuffixesExcludeFilesCaseInsensitively;
+    [Test] procedure MissingAndFileRootsAreIgnored;
+    [Test] procedure NoRootsFindNothing;
+    [Test] procedure InvalidSearchPatternsRaise;
+    [Test] procedure RelativeRootsFollowConvertSetting;
+    [Test] procedure CountersAreResetBetweenScans;
+    [Test] procedure ExtensionPatternMatchesWholeExtensionOnly;
+    [Test] procedure WildcardSearchPatternsAreCaseInsensitive;
+    [Test] procedure NonAsciiNamesCompareCaseInsensitively;
+    [Test] procedure DominantSubtreeIsWalkedCompletely;
+    [Test] procedure TreeWithoutMatchesFindsNothing;
+
     [Test] procedure WorkersCountLimitsWorkerThreads;
     [Test] procedure MoreWorkersThanCoresScanCorrectly;
   end;
@@ -72,6 +88,15 @@ type
   TParallelFileScannerTests = class(TParallelFileScannerTestsCustom)
   strict protected
     function ScannerClass: TParallelFileScannerClass; override;
+  end;
+
+  // TFileScanExclusions' helpers - no scanning.
+  [TestFixture]
+  TFileScanExclusionsTests = class(TObject)
+  public
+    [Test] procedure InitArrayFromStringsFillsOnlyThatKind;
+    [Test] procedure InitArrayDataFromStringsReplacesTheContent;
+    [Test] procedure StringPropertiesJoinWithSemicolons;
   end;
 
 implementation
@@ -1078,11 +1103,534 @@ begin
   end;
 end;
 
+// SortResultList False: the workers' lists are concatenated instead of merged - the same files, each once.
+procedure TParallelFileScannerTestsCustom.UnsortedResultHoldsEveryFile;
+var
+  LExclusions: TFileScanExclusions;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LScanner := CreateScanner(False);
+  try
+    AssertSameFiles(FBaseline, ScanToStringList(LScanner, FScanRoots, LExclusions), 'GetFileList, SortResultList False');
+  finally
+    LScanner.Free;
+  end;
+end;
+
+// Items already in the list stay, and with SortResultList the whole list - theirs and the scan's - ends up in
+// CompareText order (the full-sort path, not the merge).
+procedure TParallelFileScannerTestsCustom.AppendingKeepsEarlierItemsAndSortsAll;
+var
+  LExclusions: TFileScanExclusions;
+  LFiles: TStringList;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LScanner := CreateScanner;
+  LFiles := TStringList.Create;
+  try
+    LFiles.Add('ZZZ earlier item');
+    LFiles.Add('AAA earlier item');
+
+    Assert.IsTrue(LScanner.GetFileList(FScanRoots, LExclusions, LFiles), 'GetFileList found nothing');
+
+    Assert.AreEqual(FBaseline.Count + 2, LFiles.Count, 'Earlier items plus the files');
+    Assert.AreEqual('AAA earlier item', LFiles[0], 'First item');
+    Assert.AreEqual('ZZZ earlier item', LFiles[LFiles.Count - 1], 'Last item');
+
+    for var LIndex := 1 to LFiles.Count - 1 do
+      Assert.IsTrue(CompareText(LFiles[LIndex - 1], LFiles[LIndex]) <= 0,
+        Format('Items %d and %d out of CompareText order', [LIndex - 1, LIndex]));
+
+    LFiles.Delete(LFiles.Count - 1);
+    LFiles.Delete(0);
+    AssertSameFiles(FBaseline, LFiles.ToStringArray, 'GetFileList into a non-empty list');
+  finally
+    LFiles.Free;
+    LScanner.Free;
+  end;
+end;
+
+// A Sorted TStringList keeps its own order (AnsiCompareText); the scanner must neither sort it again nor break it.
+procedure TParallelFileScannerTestsCustom.SortedStringListKeepsItsOwnOrder;
+var
+  LExclusions: TFileScanExclusions;
+  LFiles: TStringList;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LScanner := CreateScanner;
+  LFiles := TStringList.Create;
+  try
+    LFiles.Sorted := True;
+
+    Assert.IsTrue(LScanner.GetFileList(FScanRoots, LExclusions, LFiles), 'GetFileList found nothing');
+
+    for var LIndex := 1 to LFiles.Count - 1 do
+      Assert.IsTrue(AnsiCompareText(LFiles[LIndex - 1], LFiles[LIndex]) <= 0,
+        Format('Items %d and %d out of the sorted list''s order', [LIndex - 1, LIndex]));
+
+    AssertSameFiles(FBaseline, LFiles.ToStringArray, 'GetFileList into a Sorted list');
+  finally
+    LFiles.Free;
+    LScanner.Free;
+  end;
+end;
+
+procedure TParallelFileScannerTestsCustom.StringListRootsOverloadMatchesBaseline;
+var
+  LExclusions: TFileScanExclusions;
+  LFiles: TStringList;
+  LRoots: TStringList;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LScanner := CreateScanner;
+  LRoots := TStringList.Create;
+  LFiles := TStringList.Create;
+  try
+    LRoots.AddStrings(FScanRoots);
+
+    Assert.IsTrue(LScanner.GetFileList(LRoots, LExclusions, LFiles), 'GetFileList found nothing');
+    AssertSameFiles(FBaseline, LFiles.ToStringArray, 'GetFileList with TStringList roots');
+  finally
+    LFiles.Free;
+    LRoots.Free;
+    LScanner.Free;
+  end;
+end;
+
+// Suffixes are compared case-insensitively against the full path, and the files they exclude are counted as skipped.
+procedure TParallelFileScannerTestsCustom.PathSuffixesExcludeFilesCaseInsensitively;
+var
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LExpectedSkipped: Integer;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExclusions.PathSuffixes := ['.INC', 'Scanner.PAS'];
+
+  LExpected := BaselineWhere(
+    function(AFile: string): Boolean
+    begin
+      Result := not (AFile.EndsWith('.inc') or AFile.EndsWith('scanner.pas'));
+    end);
+  try
+    LExpectedSkipped := FBaseline.Count - LExpected.Count;
+    Assert.IsTrue(LExpectedSkipped > 0, 'The tree must hold files the suffixes exclude');
+
+    LScanner := CreateScanner;
+    try
+      AssertSameFiles(LExpected, ScanToStringList(LScanner, FScanRoots, LExclusions), 'GetFileList excluding suffixes');
+      Assert.AreEqual(LExpectedSkipped, LScanner.SkippedFilesCount, 'SkippedFilesCount');
+    finally
+      LScanner.Free;
+    end;
+  finally
+    LExpected.Free;
+  end;
+end;
+
+// A root that does not exist, or that is a file, is skipped; the other roots are scanned as usual.
+procedure TParallelFileScannerTestsCustom.MissingAndFileRootsAreIgnored;
+var
+  LExclusions: TFileScanExclusions;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LScanner := CreateScanner;
+  try
+    AssertSameFiles(FBaseline,
+      ScanToStringList(LScanner, [TPath.Combine(FScanRoots[0], 'NoSuchFolder'),
+        TPath.Combine(FScanRoots[0], 'Units\DPFSUnit.Parallel.FileScanner.pas'), FScanRoots[0]], LExclusions),
+      'GetFileList with a missing and a file root');
+  finally
+    LScanner.Free;
+  end;
+end;
+
+// No usable root: every API says "nothing found" - no exception, no callback, nothing skipped.
+procedure TParallelFileScannerTestsCustom.NoRootsFindNothing;
+var
+  LCallbacks: Integer;
+  LExclusions: TFileScanExclusions;
+  LFileCount: Integer;
+  LFiles: TStringList;
+  LRootSets: TArray<TArray<string>>;
+  LScanner: TParallelFileScannerCustom;
+begin
+  SetLength(LRootSets, 2);
+  LRootSets[0] := [];
+  LRootSets[1] := [TPath.Combine(FScanRoots[0], 'NoSuchFolder')];
+
+  LScanner := CreateScanner;
+  LFiles := TStringList.Create;
+  try
+    for var LRoots in LRootSets do
+    begin
+      LFiles.Clear;
+      Assert.IsFalse(LScanner.GetFileList(LRoots, LExclusions, LFiles), 'GetFileList result');
+      Assert.AreEqual(0, LFiles.Count, 'GetFileList files');
+
+      LCallbacks := 0;
+      LFileCount := -1;
+      Assert.IsFalse(LScanner.ScanFiles(LRoots, LExclusions,
+        procedure(const AFileName: string)
+        begin
+          AtomicIncrement(LCallbacks);
+        end,
+        LFileCount), 'ScanFiles result');
+      Assert.AreEqual(0, LFileCount, 'ScanFiles AFileCount');
+      Assert.AreEqual(0, LCallbacks, 'ScanFiles callbacks');
+      Assert.AreEqual(0, LScanner.SkippedFilesCount, 'SkippedFilesCount');
+    end;
+  finally
+    LFiles.Free;
+    LScanner.Free;
+  end;
+end;
+
+// Empty and malformed search patterns raise when the scan starts - every time: the failed scan must not leave the
+// scanner marked as busy.
+procedure TParallelFileScannerTestsCustom.InvalidSearchPatternsRaise;
+var
+  LExclusions: TFileScanExclusions;
+  LScanner: TParallelFileScannerCustom;
+begin
+  for var LPattern in TArray<string>.Create('', '   ', '*.<pas', 'Unit<"a"|"b') do
+  begin
+    LScanner := ScannerClass.Create(['*.pas', LPattern], nil);
+    try
+      for var LAttempt := 1 to 2 do
+        Assert.WillRaise(
+          procedure
+          begin
+            ScanToStringList(LScanner, FScanRoots, LExclusions);
+          end,
+          EInOutArgumentException, Format('Search pattern ''%s'', attempt %d', [LPattern, LAttempt]));
+    finally
+      LScanner.Free;
+    end;
+  end;
+end;
+
+// A relative root is resolved against the current directory: to absolute paths with ConvertRelativePathsToAbsolute,
+// left relative without it.
+procedure TParallelFileScannerTestsCustom.RelativeRootsFollowConvertSetting;
+var
+  LExclusions: TFileScanExclusions;
+  LFiles: TArray<string>;
+  LSavedDirectory: string;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LSavedDirectory := GetCurrentDir;
+  LScanner := CreateScanner;
+  try
+    Assert.IsTrue(SetCurrentDir(ExtractFileDir(ExcludeTrailingPathDelimiter(FScanRoots[0]))), 'SetCurrentDir');
+
+    LFiles := ScanToStringList(LScanner, ['Source'], LExclusions);
+    for var LFile in LFiles do
+      Assert.IsTrue(TPath.IsPathRooted(LFile) and not LFile.StartsWith('Source\'), 'Not absolute: ' + LFile);
+    AssertSameFiles(FBaseline, LFiles, 'GetFileList, relative root, ConvertRelativePathsToAbsolute');
+
+    LScanner.ConvertRelativePathsToAbsolute := False;
+    LFiles := ScanToStringList(LScanner, ['Source'], LExclusions);
+    for var LFile in LFiles do
+      Assert.IsTrue(LFile.StartsWith('Source\'), 'Not relative: ' + LFile);
+    AssertSameFiles(FBaseline, LFiles, 'GetFileList, relative root as given');
+  finally
+    SetCurrentDir(LSavedDirectory);
+    LScanner.Free;
+  end;
+end;
+
+// Every scan starts from zero: what an earlier scan skipped does not carry over - whether or not it was read.
+procedure TParallelFileScannerTestsCustom.CountersAreResetBetweenScans;
+var
+  LExclusions: TFileScanExclusions;
+  LNoExclusions: TFileScanExclusions;
+  LScanner: TParallelFileScannerCustom;
+begin
+  LExclusions.Patterns := ['*\FastMM5\*'];
+  LExclusions.PathSuffixes := ['.inc'];
+  LScanner := CreateScanner;
+  try
+    ScanToStringList(LScanner, FScanRoots, LExclusions);
+    Assert.IsTrue(LScanner.SkippedFilesCount > 0, 'SkippedFilesCount after a scan with exclusions');
+    Assert.IsTrue(LScanner.DiskScanTimeForFiles > 0, 'DiskScanTimeForFiles');
+
+    ScanToStringList(LScanner, FScanRoots, LNoExclusions);
+    Assert.AreEqual(0, LScanner.SkippedFilesCount, 'SkippedFilesCount after a scan without exclusions');
+
+    // The same, without reading the count in between.
+    ScanToStringList(LScanner, FScanRoots, LExclusions);
+    ScanToStringList(LScanner, FScanRoots, LNoExclusions);
+    Assert.AreEqual(0, LScanner.SkippedFilesCount, 'SkippedFilesCount, not read after the first scan');
+  finally
+    LScanner.Free;
+  end;
+end;
+
+// '*.pas' is the extension '.pas', case-insensitively: not a longer one, not a name merely ending in "pas", and a name
+// that is only the extension counts.
+procedure TParallelFileScannerTestsCustom.ExtensionPatternMatchesWholeExtensionOnly;
+var
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LScanner: TParallelFileScannerCustom;
+  LTree: TTempTree;
+begin
+  LTree := TTempTree.Create(['a.pas', 'B.PAS', 'c.pas.bak', 'd.b.pas', '.pas', 'noext', 'e.pa', 'f.xpas', 'fpas',
+    'Sub\g.Pas', 'Sub.pas\h.txt']);
+  try
+    LExpected := LTree.FileSet(['a.pas', 'B.PAS', 'd.b.pas', '.pas', 'Sub\g.Pas']);
+    try
+      LScanner := ScannerClass.Create(['*.pas'], nil);
+      try
+        LScanner.ConvertRelativePathsToAbsolute := True;
+
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, [LTree.Root], LExclusions), 'GetFileList with *.pas');
+      finally
+        LScanner.Free;
+      end;
+    finally
+      LExpected.Free;
+    end;
+  finally
+    LTree.Free;
+  end;
+end;
+
+// Wildcard search patterns (the matcher, not the '*.ext' fast path) compare case-insensitively too.
+procedure TParallelFileScannerTestsCustom.WildcardSearchPatternsAreCaseInsensitive;
+
+  procedure AssertPatternFinds(const ATree: TTempTree; const APattern: string; const AExpected: array of string);
+  var
+    LExclusions: TFileScanExclusions;
+    LExpected: TFileSet;
+    LScanner: TParallelFileScannerCustom;
+  begin
+    LExpected := ATree.FileSet(AExpected);
+    try
+      LScanner := ScannerClass.Create([APattern], nil);
+      try
+        LScanner.ConvertRelativePathsToAbsolute := True;
+
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, [ATree.Root], LExclusions), 'GetFileList with ' + APattern);
+      finally
+        LScanner.Free;
+      end;
+    finally
+      LExpected.Free;
+    end;
+  end;
+
+var
+  LTree: TTempTree;
+begin
+  LTree := TTempTree.Create(['unit1.pas', 'UNIT2.PAS', 'Unit12.pas', 'unitx.pas', 'xunit1.pas', 'unit1.dfm']);
+  try
+    AssertPatternFinds(LTree, 'UNIT<#>.PAS', ['unit1.pas', 'UNIT2.PAS']);
+    AssertPatternFinds(LTree, 'unit?.pas', ['unit1.pas', 'UNIT2.PAS', 'unitx.pas']);
+    AssertPatternFinds(LTree, 'Unit1.*', ['unit1.pas', 'unit1.dfm']);
+  finally
+    LTree.Free;
+  end;
+end;
+
+// Letters outside ASCII fold case too - the CompareStringOrdinal path - in search patterns and path prefixes.
+procedure TParallelFileScannerTestsCustom.NonAsciiNamesCompareCaseInsensitively;
+var
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LScanner: TParallelFileScannerCustom;
+  LTree: TTempTree;
+begin
+  LTree := TTempTree.Create(['Äiti\Öljy\x.pas', 'Äiti\y.pas', 'Muu\z.PÄS', 'Muu\w.päs', 'Muu\v.pås']);
+  try
+    LExpected := LTree.FileSet(['Äiti\y.pas', 'Muu\z.PÄS', 'Muu\w.päs']);
+    try
+      LScanner := ScannerClass.Create(['*.pas', '*.PäS'], nil);
+      try
+        LScanner.ConvertRelativePathsToAbsolute := True;
+        LExclusions.PathPrefixes := [LTree.Path('äITI\öLJY')];
+
+        AssertSameFiles(LExpected, ScanToStringList(LScanner, [LTree.Root], LExclusions), 'GetFileList');
+        Assert.AreEqual(1, LScanner.SkippedFilesCount, 'SkippedFilesCount');
+      finally
+        LScanner.Free;
+      end;
+    finally
+      LExpected.Free;
+    end;
+  finally
+    LTree.Free;
+  end;
+end;
+
+// One subtree far bigger than the rest, plus a deep chain, walked by 1, 3 and 8 workers - repeatedly, as the hand-offs
+// between workers differ from run to run: every file exactly once.
+procedure TParallelFileScannerTestsCustom.DominantSubtreeIsWalkedCompletely;
+const
+  CHAIN_DEPTH = 30;
+  RUN_COUNT = 3;
+var
+  LChain: string;
+  LExclusions: TFileScanExclusions;
+  LExpected: TFileSet;
+  LFiles: TList<string>;
+  LScanner: TParallelFileScannerCustom;
+  LTree: TTempTree;
+  LWorkers: TFileScanWorkers;
+begin
+  LFiles := TList<string>.Create;
+  try
+    LFiles.Add('Small\s.pas');
+
+    for var LDirectory := 0 to 11 do
+      for var LSubDirectory := 0 to 9 do
+        for var LFile := 0 to 2 do
+          LFiles.Add(Format('Big\D%d\S%d\f%d.pas', [LDirectory, LSubDirectory, LFile]));
+
+    LChain := 'Deep';
+    for var LLevel := 1 to CHAIN_DEPTH do
+    begin
+      LChain := LChain + '\' + LLevel.ToString;
+      LFiles.Add(LChain + '\l.pas');
+    end;
+
+    LTree := TTempTree.Create(LFiles.ToArray);
+    try
+      LTree.Add('Empty\');
+      LTree.Add('Big\D0\NoMatches\readme.txt');
+      LExpected := LTree.FileSet(LFiles.ToArray);
+      try
+        for var LWorkerCount in TArray<Integer>.Create(1, 3, 8) do
+        begin
+          LWorkers := TFileScanWorkers.Create;
+          LWorkers.Initialize(LWorkerCount, LWorkerCount);
+          LScanner := ScannerClass.Create(TScanTree.Extensions, LWorkers);
+          try
+            LScanner.ConvertRelativePathsToAbsolute := True;
+
+            for var LRun := 1 to RUN_COUNT do
+              AssertSameFiles(LExpected, ScanToStringList(LScanner, [LTree.Root], LExclusions),
+                Format('GetFileList, %d worker(s), run %d', [LWorkerCount, LRun]));
+          finally
+            LScanner.Free;
+          end;
+        end;
+      finally
+        LExpected.Free;
+      end;
+    finally
+      LTree.Free;
+    end;
+  finally
+    LFiles.Free;
+  end;
+end;
+
+// Folders, but no file the search patterns match: "nothing found" from every API.
+procedure TParallelFileScannerTestsCustom.TreeWithoutMatchesFindsNothing;
+var
+  LExclusions: TFileScanExclusions;
+  LFileCount: Integer;
+  LScanner: TParallelFileScannerCustom;
+  LTree: TTempTree;
+begin
+  LTree := TTempTree.Create(['a.txt', 'Sub\', 'Sub\Deeper\', 'Sub\b.pas.txt', 'Sub\Deeper\pas']);
+  try
+    LScanner := CreateScanner;
+    try
+      Assert.AreEqual(0, Integer(Length(ScanToStringList(LScanner, [LTree.Root], LExclusions))), 'GetFileList files');
+
+      LFileCount := -1;
+      Assert.IsFalse(LScanner.ScanFiles([LTree.Root], LExclusions,
+        procedure(const AFileName: string)
+        begin
+        end,
+        LFileCount), 'ScanFiles result');
+      Assert.AreEqual(0, LFileCount, 'ScanFiles AFileCount');
+    finally
+      LScanner.Free;
+    end;
+  finally
+    LTree.Free;
+  end;
+end;
+
 { TParallelFileScannerTests }
 
 function TParallelFileScannerTests.ScannerClass: TParallelFileScannerClass;
 begin
   Result := TParallelFileScanner;
+end;
+
+{ TFileScanExclusionsTests }
+
+procedure TFileScanExclusionsTests.InitArrayFromStringsFillsOnlyThatKind;
+var
+  LExclusions: TFileScanExclusions;
+  LStrings: TStringList;
+begin
+  LStrings := TStringList.Create;
+  try
+    LExclusions.PathSuffixes := ['.old'];
+    LStrings.AddStrings(['C:\A', 'C:\B']);
+
+    LExclusions.InitArrayFromStrings(ekPathPrefixes, LStrings);
+
+    Assert.AreEqual('C:\A;C:\B', LExclusions.PathPrefixesString, 'PathPrefixes');
+    Assert.AreEqual('.old', LExclusions.PathSuffixesString, 'PathSuffixes, untouched');
+    Assert.AreEqual(0, Integer(Length(LExclusions.Patterns)), 'Patterns, untouched');
+
+    LStrings.Clear;
+    LStrings.Add('*\__history\*');
+    LExclusions.InitArrayFromStrings(ekPatterns, LStrings);
+    LExclusions.InitArrayFromStrings(ekPathSuffixes, LStrings);
+
+    Assert.AreEqual('*\__history\*', LExclusions.PatternsString, 'Patterns');
+    Assert.AreEqual('*\__history\*', LExclusions.PathSuffixesString, 'PathSuffixes');
+    Assert.AreEqual('C:\A;C:\B', LExclusions.PathPrefixesString, 'PathPrefixes, untouched');
+  finally
+    LStrings.Free;
+  end;
+end;
+
+procedure TFileScanExclusionsTests.InitArrayDataFromStringsReplacesTheContent;
+var
+  LArray: TArray<string>;
+  LStrings: TStringList;
+begin
+  LStrings := TStringList.Create;
+  try
+    LArray := ['x', 'y', 'z'];
+    LStrings.Add('q');
+
+    InitArrayDataFromStrings(LArray, LStrings);
+    Assert.AreEqual(1, Integer(Length(LArray)), 'Length');
+    Assert.AreEqual('q', LArray[0], 'Item');
+
+    LStrings.Clear;
+    InitArrayDataFromStrings(LArray, LStrings);
+    Assert.AreEqual(0, Integer(Length(LArray)), 'Length from an empty list');
+  finally
+    LStrings.Free;
+  end;
+end;
+
+procedure TFileScanExclusionsTests.StringPropertiesJoinWithSemicolons;
+var
+  LExclusions: TFileScanExclusions;
+begin
+  Assert.AreEqual('', LExclusions.PathPrefixesString, 'Empty PathPrefixes');
+  Assert.AreEqual('', LExclusions.PathSuffixesString, 'Empty PathSuffixes');
+  Assert.AreEqual('', LExclusions.PatternsString, 'Empty Patterns');
+
+  LExclusions.PathPrefixes := ['a'];
+  LExclusions.PathSuffixes := ['b', 'c'];
+  LExclusions.Patterns := ['d', 'e', 'f'];
+
+  Assert.AreEqual('a', LExclusions.PathPrefixesString, 'PathPrefixes');
+  Assert.AreEqual('b;c', LExclusions.PathSuffixesString, 'PathSuffixes');
+  Assert.AreEqual('d;e;f', LExclusions.PatternsString, 'Patterns');
 end;
 
 end.

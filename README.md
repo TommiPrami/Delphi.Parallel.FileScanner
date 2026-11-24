@@ -149,7 +149,11 @@ give no duplicates, sorted results are in `CompareText` order, the workers run a
 `Workers.Priority` and never on more threads than the worker count, a worker's exception
 reaches the caller, a scan from inside a callback works (and one on the busy scanner itself
 is refused), directory links are not followed unless asked for, `SkippedFilesCount` counts
-each file once, `/` works like `\`, and back-to-back scans pile up no handles or memory. Then the OTL value queue, the priority conversion, the Spring4D
+each file once, `/` works like `\`, and back-to-back scans pile up no handles or memory.
+Throw-away trees under `%TEMP%` cover what the `Source` tree does not hold: odd and non-ASCII
+file names, case-insensitive matching, a dominant subtree walked by 1, 3 and 8 workers, and
+trees without a single match. The result APIs are also checked unsorted, appended to non-empty
+and `Sorted` lists, with missing, file and relative roots, and with invalid search patterns. Then the OTL value queue, the priority conversion, the Spring4D
 `IList<string>` and `TFileScanWorkers` itself (defaults, limits, the `Initialize` helpers,
 the scanner owning it) are tested.
 

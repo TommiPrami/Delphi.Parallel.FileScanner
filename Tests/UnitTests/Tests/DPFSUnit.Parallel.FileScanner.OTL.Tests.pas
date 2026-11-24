@@ -19,6 +19,7 @@ type
     function ScannerClass: TParallelFileScannerClass; override;
   public
     [Test] procedure ValueQueueMatchesBaseline;
+    [Test] procedure ValueQueueWithoutRootsStaysEmpty;
     [Test] procedure ToOTLThreadPriorityMapsEveryLevel;
   end;
 {$IFEND}
@@ -68,6 +69,33 @@ begin
     AssertSameFiles(Baseline, LFiles.ToStringArray, 'GetFileList (OTL value queue)');
   finally
     LFiles.Free;
+    LScanner.Free;
+  end;
+end;
+
+// No usable root: False, AFileCount 0 - also when it held another value before - and nothing queued.
+procedure TParallelFileScannerOTLTests.ValueQueueWithoutRootsStaysEmpty;
+var
+  LExclusions: TFileScanExclusions;
+  LFileCount: Integer;
+  LQueue: TOmniQueue;
+  LScanner: TParallelFileScannerOTL;
+  LValue: TOmniValue;
+begin
+  LScanner := CreateScanner as TParallelFileScannerOTL;
+  try
+    LQueue := TOmniQueue.Create;
+    try
+      LFileCount := 42;
+
+      Assert.IsFalse(LScanner.GetFileList([ScanRoots[0] + '\NoSuchFolder'], LExclusions, LQueue, LFileCount),
+        'GetFileList result');
+      Assert.AreEqual(0, LFileCount, 'AFileCount');
+      Assert.IsFalse(LQueue.TryDequeue(LValue), 'Something was queued');
+    finally
+      LQueue.Free;
+    end;
+  finally
     LScanner.Free;
   end;
 end;

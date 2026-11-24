@@ -54,6 +54,23 @@ type
     class function SourceRoot: string; static;
   end;
 
+  // A throw-away tree under %TEMP%, for cases the Source tree does not hold (odd names, non-ASCII names, a shape that
+  // forces hand-offs between workers). Deleted, with everything in it, by Free.
+  TTempTree = class(TObject)
+  strict private
+    FRoot: string;
+  public
+    // AEntries are paths relative to the root: a file (created with a little content), or a folder when it ends in '\'.
+    constructor Create(const AEntries: array of string);
+    destructor Destroy; override;
+    procedure Add(const AEntry: string);
+    // The absolute path of ARelative.
+    function Path(const ARelative: string): string;
+    // The files ARelative names, as a TFileSet (absolute paths).
+    function FileSet(const ARelative: array of string): TFileSet;
+    property Root: string read FRoot;
+  end;
+
 // Asserts that ARawFiles - a scanner's result as returned - holds every file of AExpected exactly once, and nothing
 // else.
 procedure AssertSameFiles(const AExpected: TFileSet; const ARawFiles: TArray<string>; const AWhat: string);
@@ -234,6 +251,51 @@ begin
 
   raise Exception.Create('Repository root (Source\Units\DPFSUnit.Parallel.FileScanner.pas) not found above '
     + ParamStr(0));
+end;
+
+{ TTempTree }
+
+constructor TTempTree.Create(const AEntries: array of string);
+begin
+  inherited Create;
+
+  FRoot := TPath.Combine(TPath.GetTempPath, 'DPFSTest_' + TGUID.NewGuid.ToString.Trim(['{', '}']));
+  TDirectory.CreateDirectory(FRoot);
+
+  for var LEntry in AEntries do
+    Add(LEntry);
+end;
+
+destructor TTempTree.Destroy;
+begin
+  if (FRoot <> '') and TDirectory.Exists(FRoot) then
+    TDirectory.Delete(FRoot, True);
+
+  inherited Destroy;
+end;
+
+procedure TTempTree.Add(const AEntry: string);
+begin
+  if AEntry.EndsWith('\') then
+    TDirectory.CreateDirectory(Path(AEntry))
+  else
+  begin
+    TDirectory.CreateDirectory(ExtractFileDir(Path(AEntry)));
+    TFile.WriteAllText(Path(AEntry), AEntry);
+  end;
+end;
+
+function TTempTree.FileSet(const ARelative: array of string): TFileSet;
+begin
+  Result := TFileSet.Create;
+
+  for var LRelative in ARelative do
+    Result.Add(Path(LRelative));
+end;
+
+function TTempTree.Path(const ARelative: string): string;
+begin
+  Result := TPath.Combine(FRoot, ARelative);
 end;
 
 procedure AssertSameFiles(const AExpected: TFileSet; const ARawFiles: TArray<string>; const AWhat: string);
